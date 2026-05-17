@@ -1,5 +1,6 @@
-import { activeBall, aimArc, dynamicRects } from './engine';
-import { Ball, GameState, Rect } from './types';
+import { activeBall, activeGolfer, aimArc, dynamicRects } from './engine';
+import { drawMarioBlock } from './terrain';
+import { Ball, GameState, Golfer, Rect } from './types';
 
 export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
   ctx.clearRect(0, 0, width, height);
@@ -32,59 +33,49 @@ function fitScale(state: GameState, width: number, height: number) {
 }
 
 function drawWorld(ctx: CanvasRenderingContext2D, state: GameState) {
-  const sky = ctx.createLinearGradient(0, 0, 0, state.level.height);
-  sky.addColorStop(0, state.level.skyTop);
-  sky.addColorStop(1, state.level.skyBottom);
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, state.level.width, state.level.height + 160);
+  ctx.fillStyle = '#0c0e18';
+  ctx.fillRect(0, 0, state.level.width, state.level.height + 200);
 
-  drawBackdrop(ctx, state);
-  drawHole(ctx, state);
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < state.level.width; x += 80) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, state.level.height + 200);
+    ctx.stroke();
+  }
+  for (let y = 0; y < state.level.height + 200; y += 80) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(state.level.width, y);
+    ctx.stroke();
+  }
+
+  for (const block of state.level.blocks) drawMarioBlock(ctx, block);
+  drawRamps(ctx, state);
+  drawHoleCup(ctx, state);
   drawSwitches(ctx, state);
   for (const rect of dynamicRects(state)) drawRectMechanic(ctx, rect, state.time);
-  drawTerrain(ctx, state);
-  drawPlayersAndBalls(ctx, state);
-}
 
-function drawBackdrop(ctx: CanvasRenderingContext2D, state: GameState) {
-  ctx.globalAlpha = 0.22;
-  for (let i = 0; i < 8; i += 1) {
-    const x = 110 + i * 280;
-    const y = 130 + Math.sin(i * 1.3) * 25;
-    ctx.fillStyle = i % 2 ? '#ffffff' : '#dff6ff';
-    cloud(ctx, x, y, 70 + (i % 3) * 18);
-  }
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = 'rgba(18, 34, 54, 0.18)';
-  for (let x = -40; x < state.level.width; x += 240) {
-    ctx.beginPath();
-    ctx.moveTo(x, state.level.height);
-    ctx.lineTo(x + 135, state.level.height - 210);
-    ctx.lineTo(x + 300, state.level.height);
-    ctx.fill();
+  for (const ball of state.balls) drawBall(ctx, ball);
+  for (const golfer of state.golfers) {
+    const ball = state.balls[golfer.playerId];
+    if (!ball?.sunk) drawGolfer(ctx, golfer, ball, state);
   }
 }
 
-function cloud(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
-  ctx.beginPath();
-  ctx.ellipse(x, y, size, size * 0.32, 0, 0, Math.PI * 2);
-  ctx.ellipse(x - size * 0.42, y + 5, size * 0.48, size * 0.26, 0, 0, Math.PI * 2);
-  ctx.ellipse(x + size * 0.48, y + 2, size * 0.44, size * 0.24, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawTerrain(ctx: CanvasRenderingContext2D, state: GameState) {
+function drawRamps(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
   for (const seg of state.level.segments) {
-    ctx.strokeStyle = seg.kind === 'platform' ? '#7e5d3f' : seg.kind === 'wall' ? '#5a4a55' : '#4c8a43';
-    ctx.lineWidth = seg.kind === 'platform' ? 20 : 28;
+    if (seg.kind !== 'ramp') continue;
+    ctx.strokeStyle = '#5cb838';
+    ctx.lineWidth = 14;
     ctx.beginPath();
     ctx.moveTo(seg.a.x, seg.a.y);
     ctx.lineTo(seg.b.x, seg.b.y);
     ctx.stroke();
-    ctx.strokeStyle = seg.kind === 'platform' ? '#cf965f' : '#83d369';
-    ctx.lineWidth = seg.kind === 'platform' ? 8 : 10;
+    ctx.strokeStyle = '#8b5528';
+    ctx.lineWidth = 6;
     ctx.stroke();
   }
 }
@@ -94,9 +85,9 @@ function drawRectMechanic(ctx: CanvasRenderingContext2D, rect: Rect, time: numbe
   const round = Math.min(12, rect.h / 2);
   if (rect.kind === 'hazard') {
     const colors = { red: '#ff4f6d', blue: '#46b7ff', green: '#6bed77', gold: '#ffe066' };
-    ctx.shadowColor = colors[rect.color ?? 'gold'];
-    ctx.shadowBlur = 18;
     ctx.fillStyle = colors[rect.color ?? 'gold'];
+    ctx.shadowColor = colors[rect.color ?? 'gold'];
+    ctx.shadowBlur = 14;
   } else if (rect.kind === 'sand') ctx.fillStyle = '#e8c779';
   else if (rect.kind === 'spring') ctx.fillStyle = '#ff85e1';
   else if (rect.kind === 'fan') ctx.fillStyle = '#87f2ff';
@@ -106,17 +97,17 @@ function drawRectMechanic(ctx: CanvasRenderingContext2D, rect: Rect, time: numbe
   roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, round);
   ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = 'rgba(255,255,255,.5)';
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,.45)';
+  ctx.lineWidth = 2;
   ctx.stroke();
   if (rect.kind === 'fan') {
     ctx.strokeStyle = '#eaffff';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     for (let i = 0; i < 4; i += 1) {
       const y = rect.y + 18 + i * 24;
       ctx.beginPath();
       ctx.moveTo(rect.x + 12, y + Math.sin(time * 8 + i) * 4);
-      ctx.quadraticCurveTo(rect.x + rect.w / 2, y - 20, rect.x + rect.w - 12, y);
+      ctx.quadraticCurveTo(rect.x + rect.w / 2, y - 18, rect.x + rect.w - 12, y);
       ctx.stroke();
     }
   }
@@ -127,53 +118,64 @@ function drawRectMechanic(ctx: CanvasRenderingContext2D, rect: Rect, time: numbe
 function drawSwitches(ctx: CanvasRenderingContext2D, state: GameState) {
   for (const sw of state.level.switches) {
     ctx.save();
-    ctx.translate(sw.x, sw.y + (sw.pressed ? 6 : 0));
+    ctx.translate(sw.x, sw.y + (sw.pressed ? 5 : 0));
     ctx.fillStyle = sw.pressed ? '#49ef8f' : '#f5e56b';
-    roundedRect(ctx, 0, 0, sw.w, sw.h, 7);
+    roundedRect(ctx, 0, 0, sw.w, sw.h, 6);
     ctx.fill();
     ctx.strokeStyle = '#604b2d';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.stroke();
-    label(ctx, sw.label, sw.w / 2, -7);
+    label(ctx, sw.label, sw.w / 2, -6);
     ctx.restore();
   }
 }
 
-function drawHole(ctx: CanvasRenderingContext2D, state: GameState) {
+function drawHoleCup(ctx: CanvasRenderingContext2D, state: GameState) {
   const { hole } = state.level;
-  ctx.fillStyle = '#161923';
+  const rim = hole.rimY;
+  const depth = hole.depth;
+
+  ctx.fillStyle = '#1a1208';
   ctx.beginPath();
-  ctx.ellipse(hole.x, hole.y + 8, hole.radius * 1.35, hole.radius * 0.48, 0, 0, Math.PI * 2);
+  ctx.ellipse(hole.x, rim + depth * 0.35, hole.radius * 1.1, depth * 0.55, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = '#fff';
+
+  ctx.fillStyle = '#0a0806';
+  ctx.beginPath();
+  ctx.moveTo(hole.x - hole.radius, rim);
+  ctx.lineTo(hole.x - hole.radius * 0.65, rim + depth);
+  ctx.lineTo(hole.x + hole.radius * 0.65, rim + depth);
+  ctx.lineTo(hole.x + hole.radius, rim);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = '#5cb838';
   ctx.lineWidth = 4;
   ctx.beginPath();
-  ctx.moveTo(hole.x + 8, hole.y + 5);
-  ctx.lineTo(hole.x + 8, hole.y - 68);
+  ctx.ellipse(hole.x, rim + 2, hole.radius, 6, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(hole.x + 6, rim);
+  ctx.lineTo(hole.x + 6, rim - 52);
   ctx.stroke();
   ctx.fillStyle = '#ff6868';
   ctx.beginPath();
-  ctx.moveTo(hole.x + 10, hole.y - 68);
-  ctx.quadraticCurveTo(hole.x + 54, hole.y - 61 + Math.sin(state.time * 5) * 4, hole.x + 14, hole.y - 42);
+  ctx.moveTo(hole.x + 8, rim - 52);
+  ctx.quadraticCurveTo(hole.x + 44, rim - 46 + Math.sin(state.time * 5) * 3, hole.x + 10, rim - 32);
   ctx.closePath();
   ctx.fill();
 }
 
-function drawPlayersAndBalls(ctx: CanvasRenderingContext2D, state: GameState) {
-  const active = activeBall(state);
-  for (const ball of state.balls) {
-    if (ball.sunk) continue;
-    drawGolfer(ctx, ball, state.time, active?.playerId === ball.playerId && state.phase === 'aiming');
-  }
-  for (const ball of state.balls) drawBall(ctx, ball);
-}
+function drawGolfer(ctx: CanvasRenderingContext2D, golfer: Golfer, ball: Ball, state: GameState) {
+  const isActive = activeGolfer(state)?.playerId === golfer.playerId && state.phase === 'aiming';
+  const bob = isActive ? Math.sin(state.time * 4) * 1.5 : 0;
+  const x = golfer.pos.x;
+  const y = golfer.pos.y + bob;
 
-function drawGolfer(ctx: CanvasRenderingContext2D, ball: Ball, time: number, isActive: boolean) {
-  const bob = Math.sin(time * 4 + ball.playerId) * 2;
-  const x = ball.pos.x - 22;
-  const y = ball.pos.y - ball.radius - 20 + bob;
   ctx.save();
-  ctx.globalAlpha = ball.sunk ? 0.25 : 1;
   ctx.strokeStyle = ball.color;
   ctx.lineWidth = 5;
   ctx.lineCap = 'round';
@@ -181,32 +183,47 @@ function drawGolfer(ctx: CanvasRenderingContext2D, ball: Ball, time: number, isA
   ctx.arc(x, y - 12, 7, 0, Math.PI * 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 20);
-  ctx.moveTo(x, y + 5); ctx.lineTo(x - 12, y + 14);
-  ctx.moveTo(x, y + 5); ctx.lineTo(x + 11, y + 14);
-  ctx.moveTo(x, y + 20); ctx.lineTo(x - 8, y + 34);
-  ctx.moveTo(x, y + 20); ctx.lineTo(x + 8, y + 34);
+  ctx.moveTo(x, y - 4);
+  ctx.lineTo(x, y + 20);
+  ctx.moveTo(x, y + 5);
+  ctx.lineTo(x - 12, y + 14);
+  ctx.moveTo(x, y + 5);
+  ctx.lineTo(x + 11, y + 14);
+  ctx.moveTo(x, y + 20);
+  ctx.lineTo(x - 8, y + 34);
+  ctx.moveTo(x, y + 20);
+  ctx.lineTo(x + 8, y + 34);
   ctx.stroke();
+
+  const clubX = x + golfer.facing * 28;
   ctx.strokeStyle = '#3b2d27';
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(x + 12, y + 8); ctx.lineTo(x + 28, y + 28);
+  ctx.moveTo(x + golfer.facing * 10, y + 6);
+  ctx.lineTo(clubX, y + 26);
   ctx.stroke();
-  if (isActive) {
-    ctx.strokeStyle = 'rgba(255,255,255,.75)';
+
+  if (isActive && golfer.ready) {
+    ctx.strokeStyle = 'rgba(255,255,255,.6)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y + 8, 26 + Math.sin(time * 8) * 2, 0, Math.PI * 2);
+    ctx.arc(x, y + 8, 22, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (isActive && !golfer.ready) {
+    ctx.fillStyle = 'rgba(255,255,255,.7)';
+    ctx.font = '11px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('…', x, y - 22);
+    ctx.textAlign = 'left';
   }
   ctx.restore();
 }
 
 function drawBall(ctx: CanvasRenderingContext2D, ball: Ball) {
-  if (ball.trail.length > 2) {
+  if (ball.trail.length > 2 && !ball.sunk) {
     for (let i = 0; i < ball.trail.length; i += 1) {
       const p = ball.trail[i];
-      ctx.globalAlpha = (i / ball.trail.length) * 0.35;
+      ctx.globalAlpha = (i / ball.trail.length) * 0.3;
       ctx.fillStyle = ball.color;
       ctx.beginPath();
       ctx.arc(p.x, p.y, ball.radius * (i / ball.trail.length), 0, Math.PI * 2);
@@ -215,6 +232,9 @@ function drawBall(ctx: CanvasRenderingContext2D, ball: Ball) {
     ctx.globalAlpha = 1;
   }
   if (ball.sunk) return;
+  if (ball.sinking) {
+    ctx.globalAlpha = Math.max(0.25, 1 - ball.sinkT * 1.4);
+  }
   const grad = ctx.createRadialGradient(ball.pos.x - 4, ball.pos.y - 5, 2, ball.pos.x, ball.pos.y, ball.radius + 3);
   grad.addColorStop(0, '#ffffff');
   grad.addColorStop(0.35, ball.color);
@@ -226,27 +246,32 @@ function drawBall(ctx: CanvasRenderingContext2D, ball: Ball) {
   ctx.strokeStyle = 'rgba(255,255,255,.8)';
   ctx.lineWidth = 2;
   ctx.stroke();
+  ctx.globalAlpha = 1;
 }
 
 function drawAim(ctx: CanvasRenderingContext2D, state: GameState) {
   if (state.phase !== 'aiming') return;
   const ball = activeBall(state);
-  if (!ball) return;
+  const golfer = activeGolfer(state);
+  if (!ball || !golfer?.ready) return;
   const arc = aimArc(state);
   ctx.fillStyle = 'rgba(255,255,255,.75)';
   for (const [i, p] of arc.entries()) {
     if (p.y > state.level.height + 80) continue;
     ctx.globalAlpha = 1 - i / arc.length;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 3.8, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
   ctx.strokeStyle = ball.color;
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.moveTo(ball.pos.x, ball.pos.y);
-  ctx.lineTo(ball.pos.x + Math.cos(state.angle) * (34 + state.power * 0.65), ball.pos.y + Math.sin(state.angle) * (34 + state.power * 0.65));
+  ctx.lineTo(
+    ball.pos.x + Math.cos(state.angle) * (30 + state.power * 0.6),
+    ball.pos.y + Math.sin(state.angle) * (30 + state.power * 0.6),
+  );
   ctx.stroke();
 }
 
@@ -262,18 +287,23 @@ function drawParticles(ctx: CanvasRenderingContext2D, state: GameState) {
 }
 
 function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
-  if (state.phase === 'start') return;
-  panel(ctx, 18, 16, 390, 136);
+  panel(ctx, 18, 16, 400, 136);
   const active = activeBall(state);
+  const golfer = activeGolfer(state);
   ctx.fillStyle = '#ffffff';
-  ctx.font = '700 23px system-ui';
-  ctx.fillText(`Golf Siege — ${state.level.name}`, 34, 48);
+  ctx.font = '700 22px system-ui';
+  ctx.fillText(`Golf Siege — ${state.level.name}`, 34, 46);
   ctx.font = '14px system-ui';
-  ctx.fillText(state.level.subtitle, 34, 72);
-  ctx.fillText(`Wind: ${state.level.wind > 0 ? '→' : '←'} ${Math.abs(state.level.wind).toFixed(0)}   Camera: ${state.cameraMode}`, 34, 96);
+  ctx.fillText(state.level.subtitle, 34, 70);
+  ctx.fillText(`Wind: ${state.level.wind > 0 ? '→' : '←'} ${Math.abs(state.level.wind).toFixed(0)}   Camera: ${state.cameraMode}`, 34, 94);
   if (active) {
     ctx.fillStyle = active.color;
-    ctx.fillText(`Turn: Player ${active.playerId + 1}    Angle: ${Math.round((-state.angle * 180) / Math.PI)}°    Power: ${Math.round(state.power)}`, 34, 121);
+    const ready = golfer?.ready ? 'at ball' : 'walking…';
+    ctx.fillText(
+      `Turn: P${active.playerId + 1} (${ready})  Angle: ${Math.round((-state.angle * 180) / Math.PI)}°  Power: ${Math.round(state.power)}`,
+      34,
+      121,
+    );
   }
   panel(ctx, width - 320, 16, 300, 34 + state.balls.length * 30);
   ctx.fillStyle = '#ffffff';
@@ -282,30 +312,26 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number,
   ctx.font = '14px system-ui';
   state.balls.forEach((ball, i) => {
     ctx.fillStyle = ball.color;
-    ctx.fillText(`P${i + 1} ${ball.sunk ? '✓ sunk' : ball.safeColor + ' safe'} — ${ball.strokes} strokes`, width - 300, 69 + i * 28);
+    ctx.fillText(`P${i + 1} ${ball.sunk ? '✓ in cup' : ball.safeColor} — ${ball.strokes} strokes`, width - 300, 69 + i * 28);
   });
-  panel(ctx, 18, height - 78, Math.min(900, width - 36), 58);
+  panel(ctx, 18, height - 78, Math.min(920, width - 36), 58);
   ctx.fillStyle = '#ffffff';
   ctx.font = '14px system-ui';
-  ctx.fillText('Controls: A/D or ←/→ aim  •  W/S or ↑/↓ power  •  Space shoot/continue  •  R reset  •  Tab camera', 34, height - 48);
-  ctx.fillStyle = '#d8f3ff';
+  ctx.fillText('A/D aim • W/S power • Space shoot (when at ball) • R reset • Tab camera', 34, height - 48);
+  ctx.fillStyle = '#b8c8e8';
   ctx.fillText(state.level.hint, 34, height - 27);
 }
 
 function drawStart(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
-  const grad = ctx.createLinearGradient(0, 0, width, height);
-  grad.addColorStop(0, '#42b3ff'); grad.addColorStop(0.55, '#7557d8'); grad.addColorStop(1, '#151b32');
-  ctx.fillStyle = grad;
+  ctx.fillStyle = '#0c0e18';
   ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = 'rgba(255,255,255,.08)';
-  for (let i = 0; i < 18; i += 1) ctx.fillRect(i * 120 - 30, height - 130 - (i % 4) * 30, 80, 260);
   panel(ctx, width / 2 - 330, height / 2 - 210, 660, 420);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#fff';
-  ctx.font = '900 68px system-ui';
+  ctx.font = '900 64px system-ui';
   ctx.fillText('Golf Siege', width / 2, height / 2 - 116);
   ctx.font = '20px system-ui';
-  ctx.fillText('A co-op artillery mini-golf prototype with strange terrain and teamwork switches.', width / 2, height / 2 - 70);
+  ctx.fillText('Co-op artillery golf on floating Mario-style platforms.', width / 2, height / 2 - 70);
   ctx.font = '700 24px system-ui';
   ctx.fillText('Choose local players', width / 2, height / 2 - 12);
   for (let i = 1; i <= 4; i += 1) {
@@ -319,9 +345,9 @@ function drawStart(ctx: CanvasRenderingContext2D, state: GameState, width: numbe
     ctx.font = '13px system-ui';
     ctx.fillText(`${i} player${i > 1 ? 's' : ''}`, x + 54, height / 2 + 96);
   }
-  ctx.fillStyle = '#d8f3ff';
+  ctx.fillStyle = '#b8c8e8';
   ctx.font = '16px system-ui';
-  ctx.fillText('Press number keys 1–4 to start. Original canvas art, no external assets.', width / 2, height / 2 + 154);
+  ctx.fillText('Press 1–4 to start. Walk to your ball, then aim and shoot.', width / 2, height / 2 + 154);
   ctx.textAlign = 'left';
 }
 
@@ -338,7 +364,7 @@ function drawLevelComplete(ctx: CanvasRenderingContext2D, state: GameState, widt
     ctx.font = '700 20px system-ui';
     ctx.fillText(`Player ${i + 1}: ${ball.strokes} strokes`, width / 2, height / 2 - 28 + i * 32);
   });
-  ctx.fillStyle = '#d8f3ff';
+  ctx.fillStyle = '#b8c8e8';
   ctx.font = '17px system-ui';
   ctx.fillText('Press Space or Enter to continue', width / 2, height / 2 + 130);
   ctx.textAlign = 'left';
@@ -351,9 +377,9 @@ function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, w
   ctx.font = '800 38px system-ui';
   ctx.fillText('Siege Cleared!', width / 2, height / 2 - 54);
   ctx.font = '18px system-ui';
-  ctx.fillText('All prototype holes are complete. Thanks for playing!', width / 2, height / 2 - 12);
-  ctx.fillStyle = '#d8f3ff';
-  ctx.fillText('Press Space or Enter to restart from Tutorial Hills.', width / 2, height / 2 + 48);
+  ctx.fillText('All courses complete. Thanks for playing!', width / 2, height / 2 - 12);
+  ctx.fillStyle = '#b8c8e8';
+  ctx.fillText('Press Space or Enter to restart.', width / 2, height / 2 + 48);
   ctx.textAlign = 'left';
 }
 

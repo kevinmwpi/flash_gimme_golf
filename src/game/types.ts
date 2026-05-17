@@ -2,10 +2,19 @@ export type Vec = { x: number; y: number };
 export type GamePhase = 'start' | 'aiming' | 'flying' | 'levelComplete' | 'campaignComplete';
 export type HazardColor = 'red' | 'blue' | 'green' | 'gold';
 
+/** Mario-style solid ground block (y = top edge of grass surface). */
+export type GroundBlock = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind?: 'solid' | 'platform';
+};
+
 export type Segment = {
   a: Vec;
   b: Vec;
-  kind?: 'ground' | 'wall' | 'platform' | 'bumper';
+  kind?: 'ramp' | 'bumper';
   bounce?: number;
   color?: string;
   switchId?: string;
@@ -37,7 +46,14 @@ export type PressureSwitch = {
   label: string;
 };
 
-export type Hole = { x: number; y: number; radius: number };
+export type Hole = {
+  x: number;
+  y: number;
+  radius: number;
+  /** Top rim of the cup (ground level at hole). */
+  rimY: number;
+  depth: number;
+};
 
 export type Level = {
   name: string;
@@ -47,12 +63,11 @@ export type Level = {
   starts: Vec[];
   hole: Hole;
   wind: number;
+  blocks: GroundBlock[];
   segments: Segment[];
   rects: Rect[];
   switches: PressureSwitch[];
   hint: string;
-  skyTop: string;
-  skyBottom: string;
 };
 
 export type Player = {
@@ -61,6 +76,13 @@ export type Player = {
   color: string;
   safeColor: HazardColor;
   strokes: number;
+};
+
+export type Golfer = {
+  playerId: number;
+  pos: Vec;
+  facing: number;
+  ready: boolean;
 };
 
 export type Ball = {
@@ -74,6 +96,8 @@ export type Ball = {
   strokes: number;
   sunk: boolean;
   asleep: boolean;
+  sinking: boolean;
+  sinkT: number;
   trail: Vec[];
 };
 
@@ -94,6 +118,7 @@ export type GameState = {
   levelIndex: number;
   level: Level;
   players: Player[];
+  golfers: Golfer[];
   balls: Ball[];
   activePlayerIndex: number;
   angle: number;

@@ -1,11 +1,22 @@
 import { consume, isHeld } from './input';
 import { InputState } from './types';
 import { levels, playerColors, safeColors } from './levels';
-import { burst, clamp, distance, isRectActive, predictArc, stepBall, updateSwitches } from './physics';
-import { Ball, GameState, Player, Vec } from './types';
+import {
+  burst,
+  clamp,
+  distance,
+  isRectActive,
+  predictArc,
+  stepBall,
+  updateGolferApproach,
+  updateSwitches,
+} from './physics';
+import { alignGolferToGround, placeBallOnSurface, placeGolferBesideBall } from './terrain';
+import { Ball, GameState, Golfer, Player } from './types';
 
 const MIN_POWER = 10;
 const MAX_POWER = 100;
+const BALL_RADIUS = 12;
 
 export function createGameState(playerCount = 2, levelIndex = 0): GameState {
   const players: Player[] = Array.from({ length: playerCount }, (_, i) => ({
@@ -16,25 +27,15 @@ export function createGameState(playerCount = 2, levelIndex = 0): GameState {
     strokes: 0,
   }));
   const level = cloneLevel(levels[levelIndex]);
-  const balls: Ball[] = players.map((player) => ({
-    playerId: player.id,
-    pos: { ...level.starts[player.id] },
-    prevPos: { ...level.starts[player.id] },
-    vel: { x: 0, y: 0 },
-    radius: 12,
-    color: player.color,
-    safeColor: player.safeColor,
-    strokes: 0,
-    sunk: false,
-    asleep: true,
-    trail: [],
-  }));
+  const balls = spawnBalls(level, players);
+  const golfers = spawnGolfers(level, balls);
   return {
     phase: 'start',
     playerCount,
     levelIndex,
     level,
     players,
+    golfers,
     balls,
     activePlayerIndex: 0,
     angle: -Math.PI / 4,
@@ -45,6 +46,36 @@ export function createGameState(playerCount = 2, levelIndex = 0): GameState {
     messageTimer: 0,
     time: 0,
   };
+}
+
+function spawnBalls(level: GameState['level'], players: Player[]): Ball[] {
+  return players.map((player) => {
+    const startX = level.starts[player.id]?.x ?? 100 + player.id * 40;
+    const pos = placeBallOnSurface(level, startX, BALL_RADIUS);
+    return {
+      playerId: player.id,
+      pos,
+      prevPos: { ...pos },
+      vel: { x: 0, y: 0 },
+      radius: BALL_RADIUS,
+      color: player.color,
+      safeColor: player.safeColor,
+      strokes: 0,
+      sunk: false,
+      asleep: true,
+      sinking: false,
+      sinkT: 0,
+      trail: [],
+    };
+  });
+}
+
+function spawnGolfers(level: GameState['level'], balls: Ball[]): Golfer[] {
+  return balls.map((ball) => {
+    const beside = placeGolferBesideBall(ball.pos, 1);
+    const pos = alignGolferToGround(level, beside, ball.radius);
+    return { playerId: ball.playerId, pos, facing: 1, ready: true };
+  });
 }
 
 export function startGame(playerCount: number) {
@@ -68,7 +99,7 @@ export function nextLevel(state: GameState) {
   return fresh;
 }
 
-export function updateGame(state: GameState, input: InputState, dt: number, viewport: Vec) {
+export function updateGame(state: GameState, input: InputState, dt: number, viewport: { x: number; y: number }) {
   state.time += dt;
 
   if (state.phase === 'start') {
@@ -97,6 +128,12 @@ export function updateGame(state: GameState, input: InputState, dt: number, view
 }
 
 function handleAiming(state: GameState, input: InputState, dt: number) {
+  const ball = activeBall(state);
+  const golfer = activeGolfer(state);
+  if (!ball || !golfer || ball.sunk) return;
+
+  updateGolferApproach(golfer, ball, state.level, dt);
+
   const turnSpeed = 1.7;
   if (isHeld(input, 'ArrowLeft', 'a')) state.angle -= turnSpeed * dt;
   if (isHeld(input, 'ArrowRight', 'd')) state.angle += turnSpeed * dt;
@@ -105,7 +142,7 @@ function handleAiming(state: GameState, input: InputState, dt: number) {
   if (isHeld(input, 'ArrowDown', 's')) state.power -= 54 * dt;
   state.power = clamp(state.power, MIN_POWER, MAX_POWER);
 
-  if (consume(input, ' ')) shoot(state);
+  if (consume(input, ' ') && golfer.ready) shoot(state);
 }
 
 function shoot(state: GameState) {
@@ -126,7 +163,7 @@ function handleFlight(state: GameState, dt: number) {
   if (!ball) return;
   stepBall(ball, state.level, Math.min(dt, 1 / 30), state.particles);
   updateSwitches(state.level, state.balls);
-  if (ball.sunk || ball.asleep) {
+  if (ball.sunk || (ball.asleep && !ball.sinking)) {
     updateSwitches(state.level, state.balls);
     if (state.balls.every((item) => item.sunk)) {
       state.phase = 'levelComplete';
@@ -146,6 +183,8 @@ function advanceTurn(state: GameState) {
       state.power = clamp(state.power, MIN_POWER, MAX_POWER);
       state.phase = 'aiming';
       state.messageTimer = 1.2;
+      const golfer = state.golfers[next];
+      if (golfer) golfer.ready = false;
       return;
     }
   }
@@ -162,10 +201,8 @@ function updateParticles(state: GameState, dt: number) {
   state.messageTimer = Math.max(0, state.messageTimer - dt);
 }
 
-function updateCamera(state: GameState, viewport: Vec, dt: number) {
-  const viewWorldW = Math.min(state.level.width, viewport.x);
-  const viewWorldH = Math.min(state.level.height, viewport.y);
-  let target = { x: (state.level.width - viewWorldW) / 2, y: (state.level.height - viewWorldH) / 2 };
+function updateCamera(state: GameState, viewport: { x: number; y: number }, dt: number) {
+  let target = { x: (state.level.width - viewport.x) / 2, y: (state.level.height - viewport.y) / 2 };
   if (state.cameraMode === 'follow') {
     const ball = activeBall(state) ?? state.balls[0];
     target = {
@@ -182,6 +219,10 @@ export function activeBall(state: GameState) {
   return state.balls[state.activePlayerIndex];
 }
 
+export function activeGolfer(state: GameState) {
+  return state.golfers[state.activePlayerIndex];
+}
+
 export function aimArc(state: GameState) {
   const ball = activeBall(state);
   return ball ? predictArc(ball.pos, state.angle, state.power, state.level.wind) : [];
@@ -189,16 +230,19 @@ export function aimArc(state: GameState) {
 
 export function dynamicRects(state: GameState) {
   return state.level.rects.filter((rect) => isRectActive(rect, state.level)).map((rect) => {
-    if (!rect.switchId || !rect.vx && !rect.vy) return rect;
+    if (!rect.switchId || (!rect.vx && !rect.vy)) return rect;
     const pressed = state.level.switches.find((sw) => sw.id === rect.switchId)?.pressed ?? false;
     return pressed ? { ...rect, x: rect.x + (rect.vx ?? 0), y: rect.y + (rect.vy ?? 0) } : rect;
   });
 }
 
-export function cloneLevel(level: typeof levels[number]) {
+export function cloneLevel(level: (typeof levels)[number]) {
   return JSON.parse(JSON.stringify(level)) as typeof level;
 }
 
 export function nearestBallToHole(state: GameState) {
-  return state.balls.reduce((best, ball) => distance(ball.pos, state.level.hole) < distance(best.pos, state.level.hole) ? ball : best, state.balls[0]);
+  return state.balls.reduce(
+    (best, ball) => (distance(ball.pos, state.level.hole) < distance(best.pos, state.level.hole) ? ball : best),
+    state.balls[0],
+  );
 }
