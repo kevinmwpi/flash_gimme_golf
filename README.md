@@ -47,8 +47,7 @@ flash_gimme_golf/
 ├── src/              # Game source (TypeScript)
 ├── index.html        # Entry point
 ├── vite.config.ts    # Vite config
-├── CLAUDE.md         # Vision, constraints, and phased plan (read this first)
-└── PLAYTEST_RESULTS.md  # Notes from comparing the four initial prototype branches
+└── CLAUDE.md         # Vision, constraints, and phased plan (read this first)
 ```
 
 ## Roadmap
