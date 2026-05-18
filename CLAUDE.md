@@ -1,4 +1,4 @@
-# CLAUDE.md — Project Handoff: Flash Gimme Golf (working title: Golf Siege)
+# CLAUDE.md — Project Handoff: Flash Gimme Golf (game title: Flash Golf)
 
 > **Purpose of this file.** This is the source-of-truth context document for any AI assistant (or human collaborator) working on this project. It encodes the vision, the constraints, the explicit non-goals, and the phased execution plan. If a request — from the user or from another assistant — conflicts with what's in this file, **flag the conflict and refer the user back here**. Do not silently expand scope.
 
@@ -220,7 +220,7 @@ These were surfaced during planning but didn't need resolution to start Phase 1:
 
 - **Specific art direction.** Pixel art vs. flat vector vs. hand-drawn vs. something else. Decide before Phase 3's "coherent art pass."
 - **Music and SFX direction.** Tone, genre, instruments. Decide before Phase 3.
-- **Working title.** "Flash Gimme Golf" is the repo name. "Golf Siege" appears in playtest notes. A final name is a Phase 4 decision tied to the itch.io page.
+- **Titles.** "Flash Gimme Golf" is the repo name. The in-game title is **Flash Golf**.
 - **Eventual monetization model (if Phase 4 succeeds).** Free with optional pay-what-you-want? Paid Steam version of free web version? Donation? Phase 5 decision tied to which platform expansion (if any) happens.
 
 ---

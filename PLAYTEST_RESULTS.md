@@ -1,4 +1,4 @@
-# Golf Siege — PR comparison & local playtest results
+# Flash Golf — PR comparison & local playtest results
 
 Generated after setting up all four PR worktrees, fixing PR #3/#4 Vite config, verifying production builds, and starting dev servers.
 

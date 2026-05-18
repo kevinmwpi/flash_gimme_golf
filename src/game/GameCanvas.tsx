@@ -47,5 +47,5 @@ export default function GameCanvas() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} aria-label="Golf Siege playable canvas" />;
+  return <canvas ref={canvasRef} aria-label="Flash Golf playable canvas" />;
 }

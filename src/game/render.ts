@@ -289,7 +289,7 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number,
   const golfer = activeGolfer(state);
   ctx.fillStyle = '#ffffff';
   ctx.font = '700 22px system-ui';
-  ctx.fillText(`Golf Siege — ${state.level.name}`, 34, 46);
+  ctx.fillText(`Flash Golf — ${state.level.name}`, 34, 46);
   ctx.font = '14px system-ui';
   ctx.fillText(state.level.subtitle, 34, 70);
   ctx.fillText(`Wind: ${state.level.wind > 0 ? '→' : '←'} ${Math.abs(state.level.wind).toFixed(0)}   Camera: ${state.cameraMode}`, 34, 94);
@@ -351,7 +351,7 @@ function drawStart(ctx: CanvasRenderingContext2D, _state: GameState, width: numb
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff';
   ctx.font = `900 ${Math.min(52, panelW * 0.09)}px system-ui`;
-  ctx.fillText('Golf Siege', cx, contentTop);
+  ctx.fillText('Flash Golf', cx, contentTop);
 
   ctx.fillStyle = 'rgba(255,255,255,0.78)';
   ctx.font = '17px system-ui';
@@ -432,7 +432,7 @@ function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, w
   ctx.textBaseline = 'top';
   ctx.fillStyle = '#fff';
   ctx.font = '800 34px system-ui';
-  ctx.fillText('Siege Cleared!', cx, panelY + 28);
+  ctx.fillText('All Courses Cleared!', cx, panelY + 28);
   ctx.font = '16px system-ui';
   ctx.fillStyle = 'rgba(255,255,255,0.75)';
   ctx.fillText('Final leaderboard — lowest total strokes wins', cx, panelY + 72);
