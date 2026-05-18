@@ -177,3 +177,13 @@ These were surfaced during planning but didn't need resolution to start Phase 1:
 ## 9. What this project is not, in plain language
 
 It is not a comprehensive multi-mode platform. It is not a showcase of one person's scope ambition. It is not an AI-generated content engine. It is not the next Golf With Your Friends. It is a small, sharp, browser-playable co-op golf puzzle game that two friends can pick up in a browser tab and finish in an evening. If the document ever drifts from that, drift back.
+
+---
+
+## 10. Companion documents
+
+- **[HANDOFF.md](./HANDOFF.md)** — conversational context and the reasoning behind every decision in this file. Read by any AI assistant or collaborator joining the project. If a decision here seems arbitrary, the "why" lives there.
+- **[LEVEL_DESIGN.md](./LEVEL_DESIGN.md)** — design vocabulary and difficulty axes for the 12 hand-crafted levels authored in Phase 3. A working tool, not strategy.
+- **[IDEAS.md](./IDEAS.md)** — graveyard for thoughts that came up during planning but were not committed to. Explicitly **not** a roadmap and **not** a deferred-feature list. Items there require Phase 4 data (and a high bar) before being promoted anywhere else. Do not propose moving anything out of IDEAS.md without that.
+- **[PLAYTEST_RESULTS.md](./PLAYTEST_RESULTS.md)** — historical notes from the original four-PR comparison.
+- **[README.md](./README.md)** — public-facing entry point.
