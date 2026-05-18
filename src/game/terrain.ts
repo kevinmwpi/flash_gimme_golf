@@ -1,37 +1,29 @@
-import type { GroundBlock, Level, Vec } from './types';
+import type { Level, Rect, Terrain, TerrainPiece, Vec } from './types';
 
-const TILE = 40;
+type PropDef = Omit<Rect, 'x' | 'y'> & { centerX: number };
 
-/** Build stacked Mario-style ground from a row of surface heights. */
-export function blocksFromHeights(
-  segments: { x: number; w: number; surfaceY: number; thickness?: number }[],
-): GroundBlock[] {
-  return segments.map((s) => ({
-    x: s.x,
-    y: s.surfaceY,
-    w: s.w,
-    h: s.thickness ?? 120,
-    kind: 'solid' as const,
-  }));
+/** Build one connected terrain piece from [x,y] control points (sorted by x). */
+export function terrainPiece(points: [number, number][], baseY: number): TerrainPiece {
+  return {
+    surface: points.map(([x, y]) => ({ x, y })),
+    baseY,
+  };
 }
 
-export function blocksFromRow(x: number, count: number, surfaceY: number, thickness = 120): GroundBlock[] {
-  const out: GroundBlock[] = [];
-  for (let i = 0; i < count; i += 1) {
-    out.push({ x: x + i * TILE, y: surfaceY, w: TILE, h: thickness, kind: 'solid' });
-  }
-  return out;
+export function inGap(terrain: Terrain, x: number) {
+  return terrain.gaps?.some((g) => x >= g.x1 && x <= g.x2) ?? false;
 }
 
-/** Top ground surface Y at world X (smallest y = highest point). */
+/** Interpolate surface height at x across all terrain pieces. */
 export function surfaceYAt(level: Level, x: number): number | null {
+  if (inGap(level.terrain, x)) return null;
   let best: number | null = null;
-  for (const block of level.blocks) {
-    if (x < block.x || x > block.x + block.w) continue;
-    if (best === null || block.y < best) best = block.y;
+  for (const piece of level.terrain.pieces) {
+    const y = surfaceYOnPiece(piece, x);
+    if (y !== null && (best === null || y < best)) best = y;
   }
   for (const seg of level.segments) {
-    if (seg.kind !== 'ramp') continue;
+    if (seg.kind !== 'platform') continue;
     const minX = Math.min(seg.a.x, seg.b.x);
     const maxX = Math.max(seg.a.x, seg.b.x);
     if (x < minX || x > maxX) continue;
@@ -42,18 +34,41 @@ export function surfaceYAt(level: Level, x: number): number | null {
   return best;
 }
 
+function surfaceYOnPiece(piece: TerrainPiece, x: number): number | null {
+  const pts = piece.surface;
+  if (pts.length < 2) return null;
+  if (x < pts[0].x || x > pts[pts.length - 1].x) return null;
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (x >= a.x && x <= b.x) {
+      const t = (x - a.x) / Math.max(b.x - a.x, 1);
+      return a.y + (b.y - a.y) * t;
+    }
+  }
+  return null;
+}
+
 export function surfaceNormalAt(level: Level, x: number): Vec {
-  const eps = 8;
+  const eps = 10;
   const y0 = surfaceYAt(level, x - eps);
   const y1 = surfaceYAt(level, x + eps);
   if (y0 === null || y1 === null) return { x: 0, y: -1 };
-  const dx = eps * 2;
-  const dy = y1 - y0;
-  const tangent = { x: dx, y: dy };
-  const len = Math.hypot(tangent.x, tangent.y) || 1;
-  tangent.x /= len;
-  tangent.y /= len;
+  const tangent = { x: eps * 2, y: y1 - y0 };
+  const l = Math.hypot(tangent.x, tangent.y) || 1;
+  tangent.x /= l;
+  tangent.y /= l;
   return { x: -tangent.y, y: tangent.x };
+}
+
+export function terrainSurfaceSegments(level: Level): { a: Vec; b: Vec }[] {
+  const segs: { a: Vec; b: Vec }[] = [];
+  for (const piece of level.terrain.pieces) {
+    for (let i = 0; i < piece.surface.length - 1; i += 1) {
+      segs.push({ a: piece.surface[i], b: piece.surface[i + 1] });
+    }
+  }
+  return segs;
 }
 
 export function snapToSurface(level: Level, x: number, radius: number): Vec | null {
@@ -63,7 +78,7 @@ export function snapToSurface(level: Level, x: number, radius: number): Vec | nu
 }
 
 export function placeBallOnSurface(level: Level, x: number, radius: number): Vec {
-  return snapToSurface(level, x, radius) ?? { x, y: level.starts[0]?.y ?? 500 };
+  return snapToSurface(level, x, radius) ?? { x, y: 520 };
 }
 
 export function placeGolferBesideBall(ballPos: Vec, facing = 1): Vec {
@@ -76,39 +91,91 @@ export function alignGolferToGround(level: Level, golfer: Vec, ballRadius: numbe
   return { x: golfer.x, y: surface - ballRadius - 20 };
 }
 
-/** Left/right world bounds from blocks. */
-export function levelBounds(level: Level) {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  for (const b of level.blocks) {
-    minX = Math.min(minX, b.x);
-    maxX = Math.max(maxX, b.x + b.w);
-  }
-  return { minX: minX === Infinity ? 0 : minX, maxX: maxX === -Infinity ? level.width : maxX };
-}
-
 export function isOverHole(level: Level, pos: Vec, radius: number) {
   const { hole } = level;
-  const dx = pos.x - hole.x;
-  return Math.abs(dx) < hole.radius * 0.85 && pos.y + radius >= hole.rimY - 4;
+  return Math.abs(pos.x - hole.x) < hole.radius * 0.85 && pos.y + radius >= hole.rimY - 4;
 }
 
-export function drawMarioBlock(ctx: CanvasRenderingContext2D, block: GroundBlock) {
-  const { x, y, w, h } = block;
-  ctx.fillStyle = '#6b3f1f';
-  ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = '#8b5528';
-  for (let row = 0; row < h; row += TILE / 2) {
-    for (let col = 0; col < w; col += TILE) {
-      const ox = (col / TILE) % 2 === 0 ? 0 : TILE / 2;
-      ctx.fillRect(x + col + ox, y + row, TILE / 2 - 2, TILE / 2 - 2);
-    }
-  }
-  ctx.fillStyle = '#5cb838';
-  ctx.fillRect(x, y, w, 10);
-  ctx.fillStyle = '#7ee85a';
-  ctx.fillRect(x, y, w, 4);
+/** Place rect/switch so it sits on top of the walkable surface. */
+export function rectOnSurface(level: Level, centerX: number, w: number, h: number): { x: number; y: number } {
+  const y = surfaceYAt(level, centerX);
+  const top = y ?? 560;
+  return { x: centerX - w / 2, y: top - h };
+}
+
+/** Height for a bridge/gate spanning a gap between two ground lips. */
+export function bridgeSurfaceY(level: Level, gapX1: number, gapX2: number): number {
+  const left = surfaceYAt(level, gapX1 - 4);
+  const right = surfaceYAt(level, gapX2 + 4);
+  if (left !== null && right !== null) return (left + right) / 2;
+  return left ?? right ?? 600;
+}
+
+export function switchOnSurface(level: Level, centerX: number, w: number, h: number) {
+  const { x, y } = rectOnSurface(level, centerX, w, h);
+  return { x, y: y + h - 2 };
+}
+
+export function applyPropsOnSurface(level: Level, props: PropDef[]): Rect[] {
+  return props.map((p) => {
+    const { centerX, ...rest } = p;
+    const { x, y } = rectOnSurface(level, centerX, rest.w, rest.h);
+    return { ...rest, x, y };
+  });
+}
+
+export function applySwitchesOnSurface(
+  level: Level,
+  defs: { id: string; centerX: number; w: number; h: number; label: string }[],
+) {
+  return defs.map((d) => {
+    const { x, y } = switchOnSurface(level, d.centerX, d.w, d.h);
+    return { id: d.id, x, y, w: d.w, h: d.h, pressed: false, label: d.label };
+  });
+}
+
+export function holeAt(level: Level, x: number, radius = 16) {
+  const rimY = surfaceYAt(level, x) ?? 500;
+  return { x, y: rimY + radius * 0.35, radius, rimY, depth: radius * 1.8 };
+}
+
+export function drawTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain) {
+  for (const piece of terrain.pieces) drawTerrainPiece(ctx, piece);
+}
+
+function drawTerrainPiece(ctx: CanvasRenderingContext2D, piece: TerrainPiece) {
+  const { surface, baseY } = piece;
+  if (surface.length < 2) return;
+
+  ctx.beginPath();
+  ctx.moveTo(surface[0].x, surface[0].y);
+  for (let i = 1; i < surface.length; i += 1) ctx.lineTo(surface[i].x, surface[i].y);
+  ctx.lineTo(surface[surface.length - 1].x, baseY);
+  ctx.lineTo(surface[0].x, baseY);
+  ctx.closePath();
+
+  const minY = Math.min(...surface.map((p) => p.y));
+  const grad = ctx.createLinearGradient(0, minY, 0, baseY);
+  grad.addColorStop(0, '#7ee85a');
+  grad.addColorStop(0.06, '#5cb838');
+  grad.addColorStop(0.12, '#8b5528');
+  grad.addColorStop(1, '#5a3418');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
   ctx.strokeStyle = '#3d6620';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(surface[0].x, surface[0].y);
+  for (let i = 1; i < surface.length; i += 1) ctx.lineTo(surface[i].x, surface[i].y);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  for (let row = minY + 24; row < baseY; row += 22) {
+    ctx.beginPath();
+    ctx.moveTo(surface[0].x, row);
+    ctx.lineTo(surface[surface.length - 1].x, row);
+    ctx.stroke();
+  }
 }

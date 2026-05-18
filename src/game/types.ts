@@ -2,19 +2,22 @@ export type Vec = { x: number; y: number };
 export type GamePhase = 'start' | 'aiming' | 'flying' | 'levelComplete' | 'campaignComplete';
 export type HazardColor = 'red' | 'blue' | 'green' | 'gold';
 
-/** Mario-style solid ground block (y = top edge of grass surface). */
-export type GroundBlock = {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  kind?: 'solid' | 'platform';
+/** One solid ground mass: hilly top surface extruded down to baseY. */
+export type TerrainPiece = {
+  surface: Vec[];
+  baseY: number;
+};
+
+export type Terrain = {
+  pieces: TerrainPiece[];
+  /** World-x ranges with no ground (balls fall; bridges span these). */
+  gaps?: { x1: number; x2: number }[];
 };
 
 export type Segment = {
   a: Vec;
   b: Vec;
-  kind?: 'ramp' | 'bumper';
+  kind?: 'platform' | 'bumper';
   bounce?: number;
   color?: string;
   switchId?: string;
@@ -50,7 +53,6 @@ export type Hole = {
   x: number;
   y: number;
   radius: number;
-  /** Top rim of the cup (ground level at hole). */
   rimY: number;
   depth: number;
 };
@@ -63,7 +65,7 @@ export type Level = {
   starts: Vec[];
   hole: Hole;
   wind: number;
-  blocks: GroundBlock[];
+  terrain: Terrain;
   segments: Segment[];
   rects: Rect[];
   switches: PressureSwitch[];
@@ -112,6 +114,16 @@ export type Particle = {
 
 export type CameraMode = 'follow' | 'overview';
 
+export type LeaderboardRow = {
+  rank: number;
+  playerId: number;
+  name: string;
+  color: string;
+  total: number;
+  perLevel: number[];
+  isWinner: boolean;
+};
+
 export type GameState = {
   phase: GamePhase;
   playerCount: number;
@@ -128,6 +140,8 @@ export type GameState = {
   particles: Particle[];
   messageTimer: number;
   time: number;
+  /** Strokes per level per player (player index → level scores). */
+  campaignHistory: number[][];
 };
 
 export type InputState = {

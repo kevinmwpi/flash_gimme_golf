@@ -1,5 +1,5 @@
-import { Ball, Golfer, GroundBlock, Level, Particle, Rect, Segment, Vec } from './types';
-import { isOverHole, surfaceNormalAt, surfaceYAt } from './terrain';
+import { Ball, Golfer, Level, Particle, Rect, Segment, Vec } from './types';
+import { isOverHole, surfaceNormalAt, surfaceYAt, terrainSurfaceSegments } from './terrain';
 
 export const GRAVITY = 620;
 const REST_SPEED = 20;
@@ -88,8 +88,8 @@ export function stepBall(ball: Ball, level: Level, dt: number, particles: Partic
   let grounded = false;
   let onSand = false;
   for (let i = 0; i < 4; i += 1) {
-    grounded = collideBlocks(ball, level.blocks) || grounded;
-    grounded = collideRamps(ball, level) || grounded;
+    grounded = collideTerrain(ball, level) || grounded;
+    grounded = collidePlatforms(ball, level) || grounded;
     const rectHit = collideRects(ball, level, particles);
     grounded = grounded || rectHit.grounded;
     onSand = onSand || rectHit.onSand;
@@ -163,50 +163,32 @@ function stepBallIntoCup(ball: Ball, level: Level, dt: number, particles: Partic
   }
 }
 
-function collideBlocks(ball: Ball, blocks: GroundBlock[]): boolean {
-  let grounded = false;
-  for (const block of blocks) {
-    const cx = ball.pos.x;
-    const cy = ball.pos.y;
-    const r = ball.radius;
-    if (cx + r < block.x || cx - r > block.x + block.w) continue;
-
-    const top = block.y;
-    const onTop = cy + r > top && cy + r < top + 28 && ball.vel.y >= -30;
-    if (onTop && cx >= block.x - 4 && cx <= block.x + block.w + 4) {
-      ball.pos.y = top - r;
-      if (ball.vel.y > 0) ball.vel.y *= -0.35;
-      const tangent = { x: 1, y: 0 };
-      const vt = dot(ball.vel, tangent);
-      ball.vel.x -= tangent.x * vt * 0.08;
-      grounded = true;
-      continue;
-    }
-
-    if (cy - r < block.y + block.h && cy + r > block.y) {
-      if (cx < block.x && cx + r > block.x) {
-        ball.pos.x = block.x - r;
-        ball.vel.x = -Math.abs(ball.vel.x) * 0.45;
-        grounded = true;
-      } else if (cx > block.x + block.w && cx - r < block.x + block.w) {
-        ball.pos.x = block.x + block.w + r;
-        ball.vel.x = Math.abs(ball.vel.x) * 0.45;
-        grounded = true;
-      }
-    }
-  }
-  return grounded;
-}
-
-function collideRamps(ball: Ball, level: Level): boolean {
+function collideTerrain(ball: Ball, level: Level): boolean {
   let touched = false;
-  for (const segment of level.segments) {
-    if (segment.kind !== 'ramp' || !isSegmentActive(segment, level)) continue;
+  for (const segment of terrainSurfaceSegments(level)) {
     const closest = closestPointOnSegment(ball.pos, segment.a, segment.b);
     const delta = sub(ball.pos, closest);
     const distanceToLine = len(delta);
     if (distanceToLine >= ball.radius) continue;
-    const normal = distanceToLine < EPSILON ? segmentNormal(segment) : normalize(delta);
+    const normal = distanceToLine < EPSILON ? segmentNormalUp(segment) : normalize(delta);
+    if (normal.y > 0) normal.y = -Math.abs(normal.y);
+    if (ball.vel.y > 0 || dot(ball.vel, normal) < 0) {
+      resolveCollision(ball, normal, ball.radius - distanceToLine, 0.38);
+      touched = true;
+    }
+  }
+  return touched;
+}
+
+function collidePlatforms(ball: Ball, level: Level): boolean {
+  let touched = false;
+  for (const segment of level.segments) {
+    if (segment.kind !== 'platform' || !isSegmentActive(segment, level)) continue;
+    const closest = closestPointOnSegment(ball.pos, segment.a, segment.b);
+    const delta = sub(ball.pos, closest);
+    const distanceToLine = len(delta);
+    if (distanceToLine >= ball.radius) continue;
+    const normal = distanceToLine < EPSILON ? segmentNormalUp(segment) : normalize(delta);
     if (normal.y > 0) normal.y = -normal.y;
     resolveCollision(ball, normal, ball.radius - distanceToLine, segment.bounce ?? 0.42);
     touched = true;
@@ -260,7 +242,7 @@ function closestPointOnSegment(p: Vec, a: Vec, b: Vec) {
   return add(a, mul(ab, t));
 }
 
-function segmentNormal(segment: Segment) {
+function segmentNormalUp(segment: { a: Vec; b: Vec }) {
   const d = sub(segment.b, segment.a);
   const n = normalize({ x: -d.y, y: d.x });
   if (n.y > 0) return { x: -n.x, y: -n.y };

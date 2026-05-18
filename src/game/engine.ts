@@ -12,7 +12,7 @@ import {
   updateSwitches,
 } from './physics';
 import { alignGolferToGround, placeBallOnSurface, placeGolferBesideBall } from './terrain';
-import { Ball, GameState, Golfer, Player } from './types';
+import { Ball, GameState, Golfer, LeaderboardRow, Player } from './types';
 
 const MIN_POWER = 10;
 const MAX_POWER = 100;
@@ -45,6 +45,7 @@ export function createGameState(playerCount = 2, levelIndex = 0): GameState {
     particles: [],
     messageTimer: 0,
     time: 0,
+    campaignHistory: Array.from({ length: playerCount }, () => []),
   };
 }
 
@@ -81,20 +82,54 @@ function spawnGolfers(level: GameState['level'], balls: Ball[]): Golfer[] {
 export function startGame(playerCount: number) {
   const state = createGameState(playerCount, 0);
   state.phase = 'aiming';
+  state.campaignHistory = Array.from({ length: playerCount }, () => []);
   return state;
+}
+
+function recordLevelScores(state: GameState) {
+  state.players.forEach((player, i) => {
+    if (!state.campaignHistory[i]) state.campaignHistory[i] = [];
+    state.campaignHistory[i].push(player.strokes);
+  });
+}
+
+export function getCampaignLeaderboard(state: GameState): LeaderboardRow[] {
+  const rows: LeaderboardRow[] = state.players.map((player, i) => {
+    const perLevel = state.campaignHistory[i] ?? [];
+    const total = perLevel.reduce((sum, strokes) => sum + strokes, 0);
+    return {
+      rank: 0,
+      playerId: player.id,
+      name: player.name,
+      color: player.color,
+      total,
+      perLevel,
+      isWinner: false,
+    };
+  });
+  rows.sort((a, b) => a.total - b.total || a.playerId - b.playerId);
+  const best = rows[0]?.total ?? 0;
+  rows.forEach((row, index) => {
+    row.rank = index + 1;
+    row.isWinner = row.total === best;
+  });
+  return rows;
 }
 
 export function resetLevel(state: GameState) {
   const fresh = createGameState(state.playerCount, state.levelIndex);
+  fresh.campaignHistory = state.campaignHistory.map((scores) => [...scores]);
   fresh.phase = 'aiming';
   return fresh;
 }
 
 export function nextLevel(state: GameState) {
+  recordLevelScores(state);
   if (state.levelIndex >= levels.length - 1) {
     return { ...state, phase: 'campaignComplete' as const };
   }
   const fresh = createGameState(state.playerCount, state.levelIndex + 1);
+  fresh.campaignHistory = state.campaignHistory.map((scores) => [...scores]);
   fresh.phase = 'aiming';
   return fresh;
 }

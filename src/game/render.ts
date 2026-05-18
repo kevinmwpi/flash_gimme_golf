@@ -1,10 +1,12 @@
-import { activeBall, activeGolfer, aimArc, dynamicRects } from './engine';
-import { drawMarioBlock } from './terrain';
+import { activeBall, activeGolfer, aimArc, dynamicRects, getCampaignLeaderboard } from './engine';
+import { levels } from './levels';
+import { drawTerrain } from './terrain';
 import { Ball, GameState, Golfer, Rect } from './types';
 
 export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
   ctx.clearRect(0, 0, width, height);
   if (state.phase === 'start') return drawStart(ctx, state, width, height);
+  if (state.phase === 'campaignComplete') return drawCampaignComplete(ctx, state, width, height);
 
   ctx.save();
   const scale = fitScale(state, width, height);
@@ -22,7 +24,6 @@ export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, widt
 
   drawHud(ctx, state, width, height);
   if (state.phase === 'levelComplete') drawLevelComplete(ctx, state, width, height);
-  if (state.phase === 'campaignComplete') drawCampaignComplete(ctx, state, width, height);
 }
 
 function fitScale(state: GameState, width: number, height: number) {
@@ -51,8 +52,8 @@ function drawWorld(ctx: CanvasRenderingContext2D, state: GameState) {
     ctx.stroke();
   }
 
-  for (const block of state.level.blocks) drawMarioBlock(ctx, block);
-  drawRamps(ctx, state);
+  drawTerrain(ctx, state.level.terrain);
+  drawPlatforms(ctx, state);
   drawHoleCup(ctx, state);
   drawSwitches(ctx, state);
   for (const rect of dynamicRects(state)) drawRectMechanic(ctx, rect, state.time);
@@ -64,18 +65,15 @@ function drawWorld(ctx: CanvasRenderingContext2D, state: GameState) {
   }
 }
 
-function drawRamps(ctx: CanvasRenderingContext2D, state: GameState) {
+function drawPlatforms(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.lineCap = 'round';
   for (const seg of state.level.segments) {
-    if (seg.kind !== 'ramp') continue;
+    if (seg.kind !== 'platform') continue;
     ctx.strokeStyle = '#5cb838';
-    ctx.lineWidth = 14;
+    ctx.lineWidth = 12;
     ctx.beginPath();
     ctx.moveTo(seg.a.x, seg.a.y);
     ctx.lineTo(seg.b.x, seg.b.y);
-    ctx.stroke();
-    ctx.strokeStyle = '#8b5528';
-    ctx.lineWidth = 6;
     ctx.stroke();
   }
 }
@@ -322,33 +320,76 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number,
   ctx.fillText(state.level.hint, 34, height - 27);
 }
 
-function drawStart(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
+function drawStart(ctx: CanvasRenderingContext2D, _state: GameState, width: number, height: number) {
   ctx.fillStyle = '#0c0e18';
   ctx.fillRect(0, 0, width, height);
-  panel(ctx, width / 2 - 330, height / 2 - 210, 660, 420);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let gx = 0; gx < width; gx += 80) {
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, height);
+    ctx.stroke();
+  }
+  for (let gy = 0; gy < height; gy += 80) {
+    ctx.beginPath();
+    ctx.moveTo(0, gy);
+    ctx.lineTo(width, gy);
+    ctx.stroke();
+  }
+
+  const panelW = Math.min(560, width - 48);
+  const panelH = Math.min(400, height - 48);
+  const panelX = (width - panelW) / 2;
+  const panelY = (height - panelH) / 2;
+  const cx = width / 2;
+
+  panel(ctx, panelX, panelY, panelW, panelH);
+
+  const contentTop = panelY + 52;
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff';
-  ctx.font = '900 64px system-ui';
-  ctx.fillText('Golf Siege', width / 2, height / 2 - 116);
-  ctx.font = '20px system-ui';
-  ctx.fillText('Co-op artillery golf on floating Mario-style platforms.', width / 2, height / 2 - 70);
-  ctx.font = '700 24px system-ui';
-  ctx.fillText('Choose local players', width / 2, height / 2 - 12);
-  for (let i = 1; i <= 4; i += 1) {
-    const x = width / 2 - 220 + (i - 1) * 146;
-    ctx.fillStyle = ['#ff5d73', '#50b7ff', '#72de72', '#ffd75c'][i - 1];
-    roundedRect(ctx, x, height / 2 + 24, 108, 82, 18);
+  ctx.font = `900 ${Math.min(52, panelW * 0.09)}px system-ui`;
+  ctx.fillText('Golf Siege', cx, contentTop);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.font = '17px system-ui';
+  ctx.fillText('Co-op artillery golf', cx, contentTop + 44);
+  ctx.fillText('Walk to your ball, aim, and shoot into the cup.', cx, contentTop + 68);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '700 20px system-ui';
+  ctx.fillText('Players', cx, contentTop + 108);
+
+  const colors = ['#ff5d73', '#50b7ff', '#72de72', '#ffd75c'];
+  const btnW = Math.min(96, (panelW - 80) / 4);
+  const btnH = 72;
+  const gap = Math.max(10, (panelW - 48 - btnW * 4) / 3);
+  const rowW = btnW * 4 + gap * 3;
+  let btnX = cx - rowW / 2;
+  const btnY = contentTop + 132;
+
+  for (let i = 0; i < 4; i += 1) {
+    ctx.fillStyle = colors[i];
+    roundedRect(ctx, btnX, btnY, btnW, btnH, 14);
     ctx.fill();
     ctx.fillStyle = '#102033';
-    ctx.font = '900 34px system-ui';
-    ctx.fillText(String(i), x + 54, height / 2 + 73);
-    ctx.font = '13px system-ui';
-    ctx.fillText(`${i} player${i > 1 ? 's' : ''}`, x + 54, height / 2 + 96);
+    ctx.font = '800 28px system-ui';
+    ctx.fillText(String(i + 1), btnX + btnW / 2, btnY + btnH / 2 - 6);
+    ctx.font = '12px system-ui';
+    ctx.fillStyle = 'rgba(16,32,51,0.85)';
+    ctx.fillText(i === 0 ? '1 player' : `${i + 1} players`, btnX + btnW / 2, btnY + btnH / 2 + 18);
+    btnX += btnW + gap;
   }
+
   ctx.fillStyle = '#b8c8e8';
-  ctx.font = '16px system-ui';
-  ctx.fillText('Press 1–4 to start. Walk to your ball, then aim and shoot.', width / 2, height / 2 + 154);
+  ctx.font = '15px system-ui';
+  ctx.fillText('Press 1, 2, 3, or 4 on your keyboard to begin', cx, panelY + panelH - 36);
+
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function drawLevelComplete(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
@@ -371,16 +412,101 @@ function drawLevelComplete(ctx: CanvasRenderingContext2D, state: GameState, widt
 }
 
 function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
-  panel(ctx, width / 2 - 260, height / 2 - 130, 520, 260);
+  ctx.fillStyle = '#0c0e18';
+  ctx.fillRect(0, 0, width, height);
+
+  const leaderboard = getCampaignLeaderboard(state);
+  const rowH = 48;
+  const headerH = 140;
+  const footerH = 48;
+  const panelW = Math.min(620, width - 48);
+  const panelH = Math.min(headerH + leaderboard.length * rowH + footerH + 24, height - 48);
+  const panelX = (width - panelW) / 2;
+  const panelY = (height - panelH) / 2;
+  const cx = width / 2;
+
+  panel(ctx, panelX, panelY, panelW, panelH);
+
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff';
-  ctx.font = '800 38px system-ui';
-  ctx.fillText('Siege Cleared!', width / 2, height / 2 - 54);
-  ctx.font = '18px system-ui';
-  ctx.fillText('All courses complete. Thanks for playing!', width / 2, height / 2 - 12);
-  ctx.fillStyle = '#b8c8e8';
-  ctx.fillText('Press Space or Enter to restart.', width / 2, height / 2 + 48);
+  ctx.font = '800 36px system-ui';
+  ctx.fillText('Siege Cleared!', cx, panelY + 40);
+  ctx.font = '17px system-ui';
+  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.fillText('Final leaderboard — lowest total strokes wins', cx, panelY + 72);
+
+  const tableTop = panelY + headerH;
+  const colRank = panelX + 36;
+  const colName = panelX + 88;
+  const colTotal = panelX + panelW - 52;
+
   ctx.textAlign = 'left';
+  ctx.font = '700 13px system-ui';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillText('RANK', colRank, tableTop - 14);
+  ctx.fillText('PLAYER', colName, tableTop - 14);
+  ctx.textAlign = 'right';
+  ctx.fillText('TOTAL', colTotal, tableTop - 14);
+
+  leaderboard.forEach((row, i) => {
+    const y = tableTop + i * rowH + rowH / 2;
+    const rowY = tableTop + i * rowH;
+
+    if (row.isWinner) {
+      ctx.fillStyle = 'rgba(255, 215, 80, 0.12)';
+      roundedRect(ctx, panelX + 16, rowY + 4, panelW - 32, rowH - 8, 10);
+      ctx.fill();
+    }
+
+    ctx.textAlign = 'left';
+    ctx.font = row.isWinner ? '800 18px system-ui' : '600 17px system-ui';
+    ctx.fillStyle = row.isWinner ? '#ffe066' : 'rgba(255,255,255,0.7)';
+    const rankLabel = row.rank === 1 ? '1st' : row.rank === 2 ? '2nd' : row.rank === 3 ? '3rd' : `${row.rank}th`;
+    ctx.fillText(rankLabel, colRank, y);
+
+    ctx.fillStyle = row.color;
+    ctx.beginPath();
+    ctx.arc(colName - 14, y, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = row.isWinner ? '700 18px system-ui' : '600 17px system-ui';
+    ctx.fillText(row.name, colName, y);
+    if (row.isWinner) {
+      ctx.fillStyle = '#ffe066';
+      ctx.font = '600 12px system-ui';
+      ctx.fillText('Winner', colName + 92, y);
+    }
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = row.isWinner ? '#ffe066' : '#fff';
+    ctx.font = row.isWinner ? '800 20px system-ui' : '700 18px system-ui';
+    ctx.fillText(String(row.total), colTotal, y);
+
+    const breakdown = row.perLevel
+      .map((strokes, levelIndex) => `${levels[levelIndex]?.name.split(' ')[0] ?? `L${levelIndex + 1}`}: ${strokes}`)
+      .join('  ·  ');
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = '12px system-ui';
+    ctx.fillText(breakdown, colName, y + 14);
+  });
+
+  const winners = leaderboard.filter((row) => row.isWinner);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#b8c8e8';
+  ctx.font = '15px system-ui';
+  const winText =
+    winners.length > 1
+      ? `Tie! ${winners.map((w) => w.name).join(', ')} — ${winners[0].total} strokes each`
+      : `${winners[0]?.name ?? 'Champion'} wins with ${winners[0]?.total ?? 0} strokes`;
+  ctx.fillText(winText, cx, panelY + panelH - 48);
+  ctx.fillStyle = 'rgba(184,200,232,0.85)';
+  ctx.font = '14px system-ui';
+  ctx.fillText('Press Space or Enter to play again', cx, panelY + panelH - 22);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function panel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
