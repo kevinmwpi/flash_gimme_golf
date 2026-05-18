@@ -2,7 +2,7 @@
 
 A flash-style 2D co-op golf game you can play with a friend in your browser in 10 minutes.
 
-**Status:** Prototype. Pre-Phase 1. Not yet deployed.
+**Status:** Phase 1 — deterministic foundation in place. Public URL coming with the first Vercel deploy.
 
 ---
 
@@ -16,9 +16,10 @@ This is *not* trying to be Golf With Your Friends. It's smaller, sharper, web-fi
 
 ## Tech
 
-- TypeScript + Vite
-- HTML5 Canvas for the game, React for menu/HUD overlays
-- Fixed-timestep deterministic physics (foundation for multiplayer + replays + future async mode)
+- TypeScript + Vite, exact-pinned dependencies
+- HTML5 Canvas for the game, React for the app shell
+- Fixed-timestep deterministic physics with a seeded PRNG — the foundation for multiplayer, replays, and future async mode
+- Game state is JSON-serializable and URL-encodable: a complete state (level + balls + turn + scores + RNG seed) round-trips through `?state=…` so any moment can be shared as a link
 
 ## Running locally
 
@@ -44,10 +45,18 @@ Then open the URL Vite prints (usually `http://localhost:5173/`).
 
 ```
 flash_gimme_golf/
-├── src/              # Game source (TypeScript)
-├── index.html        # Entry point
-├── vite.config.ts    # Vite config
-└── CLAUDE.md         # Vision, constraints, and phased plan (read this first)
+├── src/                 # Game source (TypeScript)
+│   └── game/
+│       ├── engine.ts    # Turn/phase state machine
+│       ├── physics.ts   # Deterministic ball physics
+│       ├── rng.ts       # Seeded PRNG (mulberry32)
+│       ├── state.ts     # JSON-serialize + URL-encode game state
+│       └── …
+├── .github/workflows/   # CI: `npm run build` on every PR and push to main
+├── vercel.json          # Vercel deploy config (SPA rewrite)
+├── index.html           # Entry point
+├── vite.config.ts       # Vite config
+└── CLAUDE.md            # Vision, constraints, and phased plan (read this first)
 ```
 
 ## Roadmap
