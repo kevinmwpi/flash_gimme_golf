@@ -115,6 +115,8 @@ export type Particle = {
 
 export type CameraMode = 'follow' | 'overview';
 
+export type RngState = { state: number };
+
 export type LeaderboardRow = {
   rank: number;
   playerId: number;
@@ -145,6 +147,10 @@ export type GameState = {
   time: number;
   /** Strokes per level per player (player index → level scores). */
   campaignHistory: number[][];
+  /** Seed used to initialize the simulation RNG. Stored so a state is fully reproducible. */
+  seed: number;
+  /** Seeded PRNG state. Advanced by every gameplay-side random draw. */
+  rng: RngState;
 };
 
 export type InputState = {

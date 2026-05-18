@@ -11,6 +11,7 @@ import {
   updateGolferHandoff,
   updateSwitches,
 } from './physics';
+import { createRng } from './rng';
 import { alignGolferToGround, placeBallOnSurface, placeGolferBesideBall } from './terrain';
 import { Ball, GameState, Golfer, LeaderboardRow, Player } from './types';
 
@@ -19,7 +20,7 @@ const MAX_POWER = 100;
 const BALL_RADIUS = 12;
 const TURN_HANDOFF_DURATION = 1;
 
-export function createGameState(playerCount = 2, levelIndex = 0): GameState {
+export function createGameState(playerCount = 2, levelIndex = 0, seed = 1): GameState {
   const players: Player[] = Array.from({ length: playerCount }, (_, i) => ({
     id: i,
     name: `Player ${i + 1}`,
@@ -48,6 +49,8 @@ export function createGameState(playerCount = 2, levelIndex = 0): GameState {
     turnHandoffLeft: 0,
     time: 0,
     campaignHistory: Array.from({ length: playerCount }, () => []),
+    seed,
+    rng: createRng(seed),
   };
 }
 
@@ -81,8 +84,8 @@ function spawnGolfers(level: GameState['level'], balls: Ball[]): Golfer[] {
   });
 }
 
-export function startGame(playerCount: number) {
-  const state = createGameState(playerCount, 0);
+export function startGame(playerCount: number, seed = Date.now() >>> 0) {
+  const state = createGameState(playerCount, 0, seed);
   state.phase = 'aiming';
   state.campaignHistory = Array.from({ length: playerCount }, () => []);
   return state;
@@ -119,7 +122,7 @@ export function getCampaignLeaderboard(state: GameState): LeaderboardRow[] {
 }
 
 export function resetLevel(state: GameState) {
-  const fresh = createGameState(state.playerCount, state.levelIndex);
+  const fresh = createGameState(state.playerCount, state.levelIndex, state.seed);
   fresh.campaignHistory = state.campaignHistory.map((scores) => [...scores]);
   fresh.phase = 'aiming';
   return fresh;
@@ -130,7 +133,7 @@ export function nextLevel(state: GameState) {
   if (state.levelIndex >= levels.length - 1) {
     return { ...state, phase: 'campaignComplete' as const };
   }
-  const fresh = createGameState(state.playerCount, state.levelIndex + 1);
+  const fresh = createGameState(state.playerCount, state.levelIndex + 1, state.seed);
   fresh.campaignHistory = state.campaignHistory.map((scores) => [...scores]);
   fresh.phase = 'aiming';
   return fresh;
@@ -197,13 +200,13 @@ function shoot(state: GameState) {
   state.phase = 'flying';
   state.cameraMode = 'follow';
   state.turnHandoffLeft = 0;
-  burst(state.particles, ball.pos, ball.color, 10);
+  burst(state.rng, state.particles, ball.pos, ball.color, 10);
 }
 
 function handleFlight(state: GameState, dt: number) {
   const ball = activeBall(state);
   if (!ball) return;
-  stepBall(ball, state.level, Math.min(dt, 1 / 30), state.particles);
+  stepBall(ball, state.level, Math.min(dt, 1 / 30), state.particles, state.rng);
   updateSwitches(state.level, state.balls);
   if (ball.sunk || (ball.asleep && !ball.sinking)) {
     updateSwitches(state.level, state.balls);

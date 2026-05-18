@@ -2,11 +2,15 @@ import { useEffect, useRef } from 'react';
 import { createGameState, updateGame } from './engine';
 import { bindInput, createInput, endInputFrame } from './input';
 import { renderGame } from './render';
+import { readStateFromUrl } from './state';
 import { GameState } from './types';
+
+const FIXED_STEP = 1 / 60;
+const MAX_FRAME = 0.25;
 
 export default function GameCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stateRef = useRef<GameState>(createGameState(2));
+  const stateRef = useRef<GameState>(readStateFromUrl() ?? createGameState(2));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -18,6 +22,7 @@ export default function GameCanvas() {
     const unbind = bindInput(input);
     let frame = 0;
     let last = performance.now();
+    let accumulator = 0;
 
     const resize = () => {
       const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
@@ -31,11 +36,16 @@ export default function GameCanvas() {
     window.addEventListener('resize', resize);
 
     const loop = (now: number) => {
-      const dt = Math.min(0.033, (now - last) / 1000);
+      const frameDt = Math.min(MAX_FRAME, (now - last) / 1000);
       last = now;
-      stateRef.current = updateGame(stateRef.current, input, dt, { x: window.innerWidth, y: window.innerHeight });
+      accumulator += frameDt;
+      const viewport = { x: window.innerWidth, y: window.innerHeight };
+      while (accumulator >= FIXED_STEP) {
+        stateRef.current = updateGame(stateRef.current, input, FIXED_STEP, viewport);
+        endInputFrame(input);
+        accumulator -= FIXED_STEP;
+      }
       renderGame(ctx, stateRef.current, window.innerWidth, window.innerHeight);
-      endInputFrame(input);
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);

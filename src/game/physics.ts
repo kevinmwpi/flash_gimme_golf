@@ -1,4 +1,5 @@
-import { Ball, Golfer, Level, Particle, Rect, Segment, Vec } from './types';
+import { Ball, Golfer, Level, Particle, Rect, RngState, Segment, Vec } from './types';
+import { rngNext } from './rng';
 import { isOverHole, surfaceNormalAt, surfaceYAt, terrainSurfaceSegments } from './terrain';
 
 export const GRAVITY = 620;
@@ -63,10 +64,10 @@ export function updateGolferHandoff(golfer: Golfer, ball: Ball, level: Level, pr
   golfer.ready = t >= 1;
 }
 
-export function stepBall(ball: Ball, level: Level, dt: number, particles: Particle[]) {
+export function stepBall(ball: Ball, level: Level, dt: number, particles: Particle[], rng: RngState) {
   if (ball.sunk) return;
   if (ball.sinking) {
-    stepBallIntoCup(ball, level, dt, particles);
+    stepBallIntoCup(ball, level, dt, particles, rng);
     return;
   }
 
@@ -90,7 +91,7 @@ export function stepBall(ball: Ball, level: Level, dt: number, particles: Partic
   for (let i = 0; i < 4; i += 1) {
     grounded = collideTerrain(ball, level) || grounded;
     grounded = collidePlatforms(ball, level) || grounded;
-    const rectHit = collideRects(ball, level, particles);
+    const rectHit = collideRects(ball, level, particles, rng);
     grounded = grounded || rectHit.grounded;
     onSand = onSand || rectHit.onSand;
   }
@@ -110,7 +111,7 @@ export function stepBall(ball: Ball, level: Level, dt: number, particles: Partic
     ball.pos = { x: startX, y: (surface ?? 560) - ball.radius };
     ball.vel = { x: 0, y: 0 };
     ball.asleep = true;
-    burst(particles, ball.pos, '#b6f3ff', 12);
+    burst(rng, particles, ball.pos, '#b6f3ff', 12);
     return;
   }
 
@@ -147,7 +148,7 @@ export function stepBall(ball: Ball, level: Level, dt: number, particles: Partic
   if (ball.trail.length > 24) ball.trail.shift();
 }
 
-function stepBallIntoCup(ball: Ball, level: Level, dt: number, particles: Particle[]) {
+function stepBallIntoCup(ball: Ball, level: Level, dt: number, particles: Particle[], rng: RngState) {
   const { hole } = level;
   ball.sinkT += dt;
   ball.pos.x += (hole.x - ball.pos.x) * Math.min(1, 6 * dt);
@@ -159,7 +160,7 @@ function stepBallIntoCup(ball: Ball, level: Level, dt: number, particles: Partic
     ball.pos = { x: hole.x, y: hole.y + hole.depth * 0.5 };
     ball.vel = { x: 0, y: 0 };
     ball.asleep = true;
-    burst(particles, { x: hole.x, y: hole.rimY }, ball.color, 28);
+    burst(rng, particles, { x: hole.x, y: hole.rimY }, ball.color, 28);
   }
 }
 
@@ -196,7 +197,7 @@ function collidePlatforms(ball: Ball, level: Level): boolean {
   return touched;
 }
 
-function collideRects(ball: Ball, level: Level, particles: Particle[]) {
+function collideRects(ball: Ball, level: Level, particles: Particle[], rng: RngState) {
   let grounded = false;
   let onSand = false;
   for (const rect of level.rects) {
@@ -219,7 +220,7 @@ function collideRects(ball: Ball, level: Level, particles: Particle[]) {
       ball.vel.y -= 160;
       ball.vel.x += (ball.pos.x < liveRect.x + liveRect.w / 2 ? -1 : 1) * 40;
     }
-    if (rect.kind === 'hazard') burst(particles, closest, hazardColor(rect.color), 5);
+    if (rect.kind === 'hazard') burst(rng, particles, closest, hazardColor(rect.color), 5);
     if (rect.kind === 'bridge' || rect.kind === 'gate') grounded = true;
     if (rect.kind === 'sand' || rect.kind === 'bumper') grounded = true;
   }
@@ -289,17 +290,17 @@ export function predictArc(start: Vec, angle: number, power: number, wind: numbe
   return points;
 }
 
-export function burst(particles: Particle[], pos: Vec, color: string, amount: number) {
+export function burst(rng: RngState, particles: Particle[], pos: Vec, color: string, amount: number) {
   for (let i = 0; i < amount; i += 1) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 45 + Math.random() * 180;
+    const angle = rngNext(rng) * Math.PI * 2;
+    const speed = 45 + rngNext(rng) * 180;
     particles.push({
       pos: { ...pos },
       vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
-      life: 0.45 + Math.random() * 0.4,
+      life: 0.45 + rngNext(rng) * 0.4,
       maxLife: 0.85,
       color,
-      size: 2 + Math.random() * 4,
+      size: 2 + rngNext(rng) * 4,
     });
   }
 }
