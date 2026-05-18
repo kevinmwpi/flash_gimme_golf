@@ -184,4 +184,57 @@ function hazardCavernLevel(): Level {
   return level;
 }
 
-export const levels: Level[] = [tutorialLevel(), switchBridgeLevel(), hazardCavernLevel()];
+function ricochetHeightsLevel(): Level {
+  const terrain = {
+    pieces: [
+      terrainPiece(
+        [
+          [0, 612],
+          [220, 608],
+          [420, 614],
+          [620, 608],
+          [820, 612],
+          [1000, 614],
+          [1140, 610],
+          [1180, 588],
+          [1220, 478],
+          [1260, 410],
+          [1340, 408],
+          [1480, 410],
+          [1620, 405],
+          [1780, 410],
+          [1900, 408],
+        ],
+        730,
+      ),
+    ],
+  };
+
+  const level: Level = {
+    name: 'Ricochet Heights',
+    subtitle: 'The cup is up top — drop onto the bumper to launch onto the green.',
+    width: 1900,
+    height: 740,
+    starts: [{ x: 100, y: 0 }, { x: 140, y: 0 }, { x: 180, y: 0 }, { x: 220, y: 0 }],
+    hole: { x: 1600, y: 0, radius: 16, rimY: 0, depth: 28 },
+    wind: 0,
+    hint: "A direct shot can't reach the cup. Arc your ball onto the bumper to ricochet up.",
+    terrain,
+    segments: [],
+    rects: [],
+    switches: [],
+  };
+
+  level.hole = holeAt(level, 1600);
+  level.rects = applyPropsOnSurface(level, [
+    { centerX: 1000, w: 64, h: 16, kind: 'bumper', bounce: 1.5, label: 'launch' },
+  ]);
+  return level;
+}
+
+export const levels: Level[] = [
+  tutorialLevel(),
+  switchBridgeLevel(),
+  hazardCavernLevel(),
+  ricochetHeightsLevel(),
+];
