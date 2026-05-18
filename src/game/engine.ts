@@ -17,7 +17,7 @@ import { Ball, GameState, Golfer, LeaderboardRow, Player } from './types';
 const MIN_POWER = 10;
 const MAX_POWER = 100;
 const BALL_RADIUS = 12;
-const TURN_HANDOFF_DURATION = 0.5;
+const TURN_HANDOFF_DURATION = 1;
 
 export function createGameState(playerCount = 2, levelIndex = 0): GameState {
   const players: Player[] = Array.from({ length: playerCount }, (_, i) => ({
