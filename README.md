@@ -2,7 +2,9 @@
 
 A flash-style 2D co-op golf game you can play with a friend in your browser in 10 minutes.
 
-**Status:** Phase 1 — deterministic foundation in place. Public URL coming with the first Vercel deploy.
+**Play it:** https://flash-golf.vercel.app/
+
+**Status:** Phase 1 complete — deterministic foundation in place, deployed, ready for Phase 2 playtesting.
 
 ---
 
@@ -52,7 +54,7 @@ flash_gimme_golf/
 │       ├── rng.ts       # Seeded PRNG (mulberry32)
 │       ├── state.ts     # JSON-serialize + URL-encode game state
 │       └── …
-├── .github/workflows/   # CI: `npm run build` on every PR and push to main
+├── .github/workflows/   # CI: `npm run build` + `npm test` on every PR and push to main
 ├── vercel.json          # Vercel deploy config (SPA rewrite)
 ├── index.html           # Entry point
 ├── vite.config.ts       # Vite config
