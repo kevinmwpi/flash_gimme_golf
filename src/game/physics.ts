@@ -38,29 +38,29 @@ export function updateSwitches(level: Level, balls: Ball[]) {
   }
 }
 
-export function updateGolferApproach(golfer: Golfer, ball: Ball, level: Level, dt: number) {
+export function golferHandoffTarget(ball: Ball, level: Level, fromX: number): Vec {
+  const facing = ball.pos.x >= fromX ? 1 : -1;
+  const targetX = ball.pos.x - 24 * facing;
+  const surface = surfaceYAt(level, targetX);
+  const targetY = surface !== null ? surface - ball.radius - 20 : ball.pos.y - ball.radius - 20;
+  return { x: targetX, y: targetY };
+}
+
+/** Move golfer toward the ball; progress 0→1 over the handoff window. */
+export function updateGolferHandoff(golfer: Golfer, ball: Ball, level: Level, progress: number) {
   if (ball.sunk) {
     golfer.ready = false;
     return;
   }
-  const facing = ball.pos.x >= golfer.pos.x ? 1 : -1;
-  const targetX = ball.pos.x - 24 * facing;
-  const surface = surfaceYAt(level, targetX);
-  const targetY = surface !== null ? surface - ball.radius - 20 : ball.pos.y - ball.radius - 20;
-  const dx = targetX - golfer.pos.x;
-  const dy = targetY - golfer.pos.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 8) {
-    golfer.pos = { x: targetX, y: targetY };
-    golfer.facing = facing;
-    golfer.ready = true;
-    return;
-  }
-  const speed = 220;
-  golfer.pos.x += (dx / dist) * speed * dt;
-  golfer.pos.y += (dy / dist) * speed * dt;
-  golfer.facing = facing;
-  golfer.ready = false;
+  const from = golfer.handoffFrom ?? golfer.pos;
+  const target = golferHandoffTarget(ball, level, from.x);
+  const t = clamp(progress, 0, 1);
+  golfer.pos = {
+    x: from.x + (target.x - from.x) * t,
+    y: from.y + (target.y - from.y) * t,
+  };
+  golfer.facing = ball.pos.x >= from.x ? 1 : -1;
+  golfer.ready = t >= 1;
 }
 
 export function stepBall(ball: Ball, level: Level, dt: number, particles: Particle[]) {
@@ -151,9 +151,9 @@ function stepBallIntoCup(ball: Ball, level: Level, dt: number, particles: Partic
   const { hole } = level;
   ball.sinkT += dt;
   ball.pos.x += (hole.x - ball.pos.x) * Math.min(1, 6 * dt);
-  ball.pos.y += 95 * dt;
+  ball.pos.y += 280 * dt;
   ball.vel = mul(ball.vel, 0.82);
-  if (ball.pos.y >= hole.y + hole.depth || ball.sinkT > 0.55) {
+  if (ball.pos.y >= hole.y + hole.depth || ball.sinkT > 0.12) {
     ball.sunk = true;
     ball.sinking = false;
     ball.pos = { x: hole.x, y: hole.y + hole.depth * 0.5 };
@@ -201,6 +201,7 @@ function collideRects(ball: Ball, level: Level, particles: Particle[]) {
   let onSand = false;
   for (const rect of level.rects) {
     if (!isRectActive(rect, level)) continue;
+    if (rect.kind === 'fan') continue;
     if (rect.kind === 'hazard' && rect.color === ball.safeColor) continue;
     const liveRect = liveRectPosition(rect, level);
     const closest = {

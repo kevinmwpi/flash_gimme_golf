@@ -87,14 +87,18 @@ function drawRectMechanic(ctx: CanvasRenderingContext2D, rect: Rect, time: numbe
     ctx.shadowBlur = 14;
   } else if (rect.kind === 'sand') ctx.fillStyle = '#e8c779';
   else if (rect.kind === 'spring') ctx.fillStyle = '#ff85e1';
-  else if (rect.kind === 'fan') ctx.fillStyle = '#87f2ff';
+  else if (rect.kind === 'fan') {
+    ctx.globalAlpha = 0.32;
+    ctx.fillStyle = '#87f2ff';
+  }
   else if (rect.kind === 'bridge') ctx.fillStyle = '#7ed38a';
   else if (rect.kind === 'gate') ctx.fillStyle = '#6f6c8f';
   else ctx.fillStyle = '#ffb74f';
   roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, round);
   ctx.fill();
+  ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = 'rgba(255,255,255,.45)';
+  ctx.strokeStyle = rect.kind === 'fan' ? 'rgba(135,242,255,.35)' : 'rgba(255,255,255,.45)';
   ctx.lineWidth = 2;
   ctx.stroke();
   if (rect.kind === 'fan') {
