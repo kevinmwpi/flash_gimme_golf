@@ -502,7 +502,7 @@ function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, w
     ctx.font = row.isWinner ? '800 22px system-ui' : '700 18px system-ui';
     ctx.fillText(String(row.total), colTotal, mainY);
 
-    const levelShort = ['Tutorial', 'Switch', 'Hazard'];
+    const levelShort = ['Tutorial', 'Switch', 'Hazard', 'Ricochet'];
     const breakdown = row.perLevel
       .map((strokes, levelIndex) => `${levelShort[levelIndex] ?? `L${levelIndex + 1}`}: ${strokes}`)
       .join('   ·   ');
