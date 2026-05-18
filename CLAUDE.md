@@ -54,6 +54,8 @@ These were considered and explicitly rejected for v1.0. They can be revisited *o
 - **Ranked / competitive ladder / matchmaking.** Phase 5+.
 - **Monetization, IAP, ads.** v1.0 is free.
 - **"First AI flash game" marketing.** Do not use this framing. AI is a development tool, not a feature.
+- **iMessage extension / GamePigeon-style port.** Rejected as a platform target. Requires a full Swift rewrite (cannot reuse TypeScript codebase), locks out Android and desktop players, and the "async with friends in a chat" feeling can be captured on web via shareable URLs. iMessage stays a *design inspiration* for what async should feel like, not a build target.
+- **Native iOS / Android app store releases.** Mobile is a money sink for solo devs without a UA budget. Mobile web (responsive browser) covers this need.
 
 ---
 
@@ -73,6 +75,7 @@ The repo is currently a scaffold with four unmerged AI-generated PRs and `node_m
 - Add GitHub Actions running `npm run build` on every PR.
 - Update `README.md` to describe the game, controls, and link to the live URL.
 - **Refactor physics to be deterministic and game state to be serializable.** Fixed timestep, seeded RNG, JSON-serializable state. This is the foundation everything else depends on.
+- **Design game state to be URL-encodable.** A complete game state (level + ball positions + turn order + shot history) must be expressible as a short URL parameter or shareable code. Costs nothing now, enables async play, replay sharing, and Steam Workshop levels later. Use base64-encoded compact JSON or a similar scheme.
 
 **Exit condition:** A public URL anyone can play, deployed automatically, with deterministic physics and a clean repo.
 
@@ -129,19 +132,67 @@ Free release, browser-only.
 
 ### Phase 5 — Conditional (planned after Phase 4 data, not before)
 
-Possible directions, none committed:
-- Async mode (the deterministic-state foundation makes this tractable).
-- Level editor + sharing via URL codes.
-- Steam release with a "complete edition" (more levels, polish, $5 price).
-- Steam Workshop integration.
-- 3–4 player support.
-- Mobile / touch controls.
+Possible directions, none committed. Platform expansions are evaluated against §6 Platform strategy.
+
+- **Async mode** (the deterministic + URL-encodable state foundation makes this tractable on web with no port).
+- **Level editor + sharing via URL codes.**
+- **Steam release** as a "complete edition" — only if Phase 4 traction justifies the marketing investment. See §6.
+- **Steam Workshop integration** — bundled with the Steam decision, not separate.
+- **Discord Activities port** — possible cheap reuse of the web codebase. See §6.
+- **3–4 player support.**
+- **Mobile web polish** (responsive layout, touch controls) — likely a Phase 4 polish item, not a separate platform.
 
 Do not plan Phase 5 specifics until Phase 4 ships and data exists.
 
 ---
 
-## 6. Technical conventions
+## 6. Platform strategy
+
+Long-term platform plan, codified to prevent re-litigation. Each platform is classified as **launch**, **conditional port**, **cheap port**, or **rejected**.
+
+### Web — launch platform (non-negotiable)
+
+itch.io + Newgrounds + own URL (Vercel/Netlify). The only platform where the "flash game" identity is coherent and where the codebase already runs. Distribution model is friend-shares-link, which requires zero install friction. Free at launch.
+
+**Known weakness:** retention. Web games don't get re-opened the way Steam library entries do. Mitigations to design in: shareable replay clips, async turn notifications (Phase 5), email signup, Discord community.
+
+### Steam — conditional Phase 5 port
+
+Only pursued if Phase 4 exit condition (a) hits (500+ plays, strong completion, organic sharing). Steam is where indie games get *bought*, and Steam Workshop is the gold standard for UGC if a level editor ships.
+
+**Real costs to budget for if/when Steam happens:**
+- Electron or Tauri wrapper (2–4 weeks of porting work after web is done).
+- $100 Steam Direct fee.
+- 60-second trailer with real production value.
+- 3–6 month wishlist campaign *before* launch.
+- Press/streamer outreach.
+- Steam takes 30%. At $5, net is $3.50/copy. Median solo indie lifetime sales ~100 copies = ~$350 lifetime revenue. Plan accordingly.
+
+**The marketing work is what builds audience, not Steam itself.** Steam doesn't generate players from nothing. Phase 4 traction is the prerequisite.
+
+### Discord Activities — cheap Phase 5/6 port
+
+Discord's Embedded App SDK runs web apps inside voice channels. Reuses the existing TypeScript codebase nearly unchanged. Audience overlap with the target demographic (friend groups on Discord) is high. Worth pursuing as a low-cost expansion *after* the web launch is stable. Not a launch target.
+
+### Mobile web (responsive browser) — Phase 4 polish
+
+Not a separate platform — just ensuring the web version works in mobile Safari/Chrome. Captures the "friend shares a link in iMessage, opens in browser" use case without any iMessage-specific work. Should be a Phase 4 polish item.
+
+### iMessage extension — rejected
+
+See §4. The async-with-friends feeling iMessage represents is being captured on web via URL-shareable game states.
+
+### Native iOS/Android apps — rejected
+
+See §4. Mobile web covers the need without a 30%-store-tax product on a hyper-competitive distribution channel.
+
+### Why this ordering
+
+The technical foundation (deterministic + serializable + URL-encodable state) is being built in Phase 1 specifically so that *all* future platform expansions are cheap. Steam port = wrap in Tauri. Discord Activities = embed the same web build. Async = pass URL-encoded state via a backend. iMessage would have been the *only* platform that breaks this pattern (requires Swift rewrite), which is the structural reason it's rejected, not just the audience math.
+
+---
+
+## 7. Technical conventions
 
 - **Stack:** TypeScript, Vite, HTML5 Canvas, React for menu/HUD overlays only (PR #2 model).
 - **Physics:** Fixed timestep (recommend 60Hz simulation, decoupled from render). Integer or fixed-point math where determinism matters. Seeded PRNG (e.g. mulberry32) for all randomness — no `Math.random()` calls in gameplay code.
@@ -152,7 +203,7 @@ Do not plan Phase 5 specifics until Phase 4 ships and data exists.
 
 ---
 
-## 7. Decision-making principles for any assistant working on this project
+## 8. Decision-making principles for any assistant working on this project
 
 1. **Default to saying no to new scope.** The cut list in §4 is long on purpose. Adding to it is almost always wrong.
 2. **Point to phase exit conditions.** If the user wants to skip ahead, ask whether the current phase's exit condition is met. If it isn't, the answer is to finish the current phase, not start the next.
@@ -163,17 +214,17 @@ Do not plan Phase 5 specifics until Phase 4 ships and data exists.
 
 ---
 
-## 8. Open questions to revisit when relevant
+## 9. Open questions to revisit when relevant
 
 These were surfaced during planning but didn't need resolution to start Phase 1:
 
 - **Specific art direction.** Pixel art vs. flat vector vs. hand-drawn vs. something else. Decide before Phase 3's "coherent art pass."
 - **Music and SFX direction.** Tone, genre, instruments. Decide before Phase 3.
 - **Working title.** "Flash Gimme Golf" is the repo name. "Golf Siege" appears in playtest notes. A final name is a Phase 4 decision tied to the itch.io page.
-- **Eventual monetization model (if Phase 4 succeeds).** Free with optional pay-what-you-want? Paid Steam version of free web version? Donation? Phase 5 decision.
+- **Eventual monetization model (if Phase 4 succeeds).** Free with optional pay-what-you-want? Paid Steam version of free web version? Donation? Phase 5 decision tied to which platform expansion (if any) happens.
 
 ---
 
-## 9. What this project is not, in plain language
+## 10. What this project is not, in plain language
 
 It is not a comprehensive multi-mode platform. It is not a showcase of one person's scope ambition. It is not an AI-generated content engine. It is not the next Golf With Your Friends. It is a small, sharp, browser-playable co-op golf puzzle game that two friends can pick up in a browser tab and finish in an evening. If the document ever drifts from that, drift back.
