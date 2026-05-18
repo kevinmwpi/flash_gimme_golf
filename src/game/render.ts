@@ -1,5 +1,4 @@
 import { activeBall, activeGolfer, aimArc, dynamicRects, getCampaignLeaderboard } from './engine';
-import { levels } from './levels';
 import { drawTerrain } from './terrain';
 import { Ball, GameState, Golfer, Rect } from './types';
 
@@ -416,11 +415,13 @@ function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, w
   ctx.fillRect(0, 0, width, height);
 
   const leaderboard = getCampaignLeaderboard(state);
-  const rowH = 48;
-  const headerH = 140;
-  const footerH = 48;
-  const panelW = Math.min(620, width - 48);
-  const panelH = Math.min(headerH + leaderboard.length * rowH + footerH + 24, height - 48);
+  const rowH = 68;
+  const headerH = 118;
+  const tableHeaderH = 28;
+  const footerH = 80;
+  const panelW = Math.min(640, width - 48);
+  const contentH = headerH + tableHeaderH + leaderboard.length * rowH + footerH;
+  const panelH = Math.min(contentH, height - 40);
   const panelX = (width - panelW) / 2;
   const panelY = (height - panelH) / 2;
   const cx = width / 2;
@@ -428,82 +429,100 @@ function drawCampaignComplete(ctx: CanvasRenderingContext2D, state: GameState, w
   panel(ctx, panelX, panelY, panelW, panelH);
 
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.textBaseline = 'top';
   ctx.fillStyle = '#fff';
-  ctx.font = '800 36px system-ui';
-  ctx.fillText('Siege Cleared!', cx, panelY + 40);
-  ctx.font = '17px system-ui';
-  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.font = '800 34px system-ui';
+  ctx.fillText('Siege Cleared!', cx, panelY + 28);
+  ctx.font = '16px system-ui';
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
   ctx.fillText('Final leaderboard — lowest total strokes wins', cx, panelY + 72);
 
   const tableTop = panelY + headerH;
-  const colRank = panelX + 36;
-  const colName = panelX + 88;
-  const colTotal = panelX + panelW - 52;
+  const colRank = panelX + 28;
+  const colDot = panelX + 78;
+  const colName = panelX + 100;
+  const colTotal = panelX + panelW - 36;
 
   ctx.textAlign = 'left';
-  ctx.font = '700 13px system-ui';
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.fillText('RANK', colRank, tableTop - 14);
-  ctx.fillText('PLAYER', colName, tableTop - 14);
+  ctx.font = '700 12px system-ui';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('RANK', colRank, tableTop + 4);
+  ctx.fillText('PLAYER', colName, tableTop + 4);
   ctx.textAlign = 'right';
-  ctx.fillText('TOTAL', colTotal, tableTop - 14);
+  ctx.fillText('STROKES', colTotal, tableTop + 4);
+
+  const firstRowY = tableTop + tableHeaderH;
 
   leaderboard.forEach((row, i) => {
-    const y = tableTop + i * rowH + rowH / 2;
-    const rowY = tableTop + i * rowH;
+    const rowY = firstRowY + i * rowH;
+    const mainY = rowY + 16;
+    const subY = rowY + 40;
 
     if (row.isWinner) {
-      ctx.fillStyle = 'rgba(255, 215, 80, 0.12)';
-      roundedRect(ctx, panelX + 16, rowY + 4, panelW - 32, rowH - 8, 10);
+      ctx.fillStyle = 'rgba(255, 215, 80, 0.1)';
+      roundedRect(ctx, panelX + 14, rowY + 6, panelW - 28, rowH - 12, 12);
       ctx.fill();
     }
 
+    ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    ctx.font = row.isWinner ? '800 18px system-ui' : '600 17px system-ui';
-    ctx.fillStyle = row.isWinner ? '#ffe066' : 'rgba(255,255,255,0.7)';
+    ctx.font = row.isWinner ? '800 17px system-ui' : '600 16px system-ui';
+    ctx.fillStyle = row.isWinner ? '#ffe066' : 'rgba(255,255,255,0.65)';
     const rankLabel = row.rank === 1 ? '1st' : row.rank === 2 ? '2nd' : row.rank === 3 ? '3rd' : `${row.rank}th`;
-    ctx.fillText(rankLabel, colRank, y);
+    ctx.fillText(rankLabel, colRank, mainY);
 
     ctx.fillStyle = row.color;
     ctx.beginPath();
-    ctx.arc(colName - 14, y, 7, 0, Math.PI * 2);
+    ctx.arc(colDot, mainY, 9, 0, Math.PI * 2);
     ctx.fill();
+
     ctx.fillStyle = '#fff';
-    ctx.font = row.isWinner ? '700 18px system-ui' : '600 17px system-ui';
-    ctx.fillText(row.name, colName, y);
+    ctx.font = row.isWinner ? '700 17px system-ui' : '600 16px system-ui';
+    ctx.fillText(row.name, colName, mainY);
+
     if (row.isWinner) {
+      ctx.fillStyle = 'rgba(255, 224, 102, 0.2)';
+      const badgeW = 58;
+      const badgeX = colName + 108;
+      roundedRect(ctx, badgeX, mainY - 10, badgeW, 20, 8);
+      ctx.fill();
       ctx.fillStyle = '#ffe066';
-      ctx.font = '600 12px system-ui';
-      ctx.fillText('Winner', colName + 92, y);
+      ctx.font = '600 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('Winner', badgeX + badgeW / 2, mainY);
+      ctx.textAlign = 'left';
     }
 
     ctx.textAlign = 'right';
     ctx.fillStyle = row.isWinner ? '#ffe066' : '#fff';
-    ctx.font = row.isWinner ? '800 20px system-ui' : '700 18px system-ui';
-    ctx.fillText(String(row.total), colTotal, y);
+    ctx.font = row.isWinner ? '800 22px system-ui' : '700 18px system-ui';
+    ctx.fillText(String(row.total), colTotal, mainY);
 
+    const levelShort = ['Tutorial', 'Switch', 'Hazard'];
     const breakdown = row.perLevel
-      .map((strokes, levelIndex) => `${levels[levelIndex]?.name.split(' ')[0] ?? `L${levelIndex + 1}`}: ${strokes}`)
-      .join('  ·  ');
+      .map((strokes, levelIndex) => `${levelShort[levelIndex] ?? `L${levelIndex + 1}`}: ${strokes}`)
+      .join('   ·   ');
     ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(255,255,255,0.42)';
     ctx.font = '12px system-ui';
-    ctx.fillText(breakdown, colName, y + 14);
+    ctx.fillText(breakdown, colName, subY);
   });
 
   const winners = leaderboard.filter((row) => row.isWinner);
+  const footerTop = panelY + panelH - footerH + 12;
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
   ctx.fillStyle = '#b8c8e8';
   ctx.font = '15px system-ui';
   const winText =
     winners.length > 1
-      ? `Tie! ${winners.map((w) => w.name).join(', ')} — ${winners[0].total} strokes each`
-      : `${winners[0]?.name ?? 'Champion'} wins with ${winners[0]?.total ?? 0} strokes`;
-  ctx.fillText(winText, cx, panelY + panelH - 48);
-  ctx.fillStyle = 'rgba(184,200,232,0.85)';
+      ? `Tie — ${winners.map((w) => w.name).join(' & ')} at ${winners[0].total} strokes`
+      : `${winners[0]?.name ?? 'Champion'} wins with ${winners[0]?.total ?? 0} total strokes`;
+  ctx.fillText(winText, cx, footerTop);
+  ctx.fillStyle = 'rgba(184,200,232,0.8)';
   ctx.font = '14px system-ui';
-  ctx.fillText('Press Space or Enter to play again', cx, panelY + panelH - 22);
+  ctx.fillText('Press Space or Enter to play again', cx, footerTop + 28);
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
