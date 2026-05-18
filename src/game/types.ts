@@ -85,6 +85,7 @@ export type Golfer = {
   pos: Vec;
   facing: number;
   ready: boolean;
+  handoffFrom?: Vec;
 };
 
 export type Ball = {
@@ -139,6 +140,8 @@ export type GameState = {
   cameraMode: CameraMode;
   particles: Particle[];
   messageTimer: number;
+  /** Seconds left before the active golfer is ready for the next shot. */
+  turnHandoffLeft: number;
   time: number;
   /** Strokes per level per player (player index → level scores). */
   campaignHistory: number[][];

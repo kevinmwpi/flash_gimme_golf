@@ -8,7 +8,7 @@ import {
   isRectActive,
   predictArc,
   stepBall,
-  updateGolferApproach,
+  updateGolferHandoff,
   updateSwitches,
 } from './physics';
 import { alignGolferToGround, placeBallOnSurface, placeGolferBesideBall } from './terrain';
@@ -17,6 +17,7 @@ import { Ball, GameState, Golfer, LeaderboardRow, Player } from './types';
 const MIN_POWER = 10;
 const MAX_POWER = 100;
 const BALL_RADIUS = 12;
+const TURN_HANDOFF_DURATION = 1;
 
 export function createGameState(playerCount = 2, levelIndex = 0): GameState {
   const players: Player[] = Array.from({ length: playerCount }, (_, i) => ({
@@ -44,6 +45,7 @@ export function createGameState(playerCount = 2, levelIndex = 0): GameState {
     cameraMode: 'overview',
     particles: [],
     messageTimer: 0,
+    turnHandoffLeft: 0,
     time: 0,
     campaignHistory: Array.from({ length: playerCount }, () => []),
   };
@@ -167,7 +169,11 @@ function handleAiming(state: GameState, input: InputState, dt: number) {
   const golfer = activeGolfer(state);
   if (!ball || !golfer || ball.sunk) return;
 
-  updateGolferApproach(golfer, ball, state.level, dt);
+  if (state.turnHandoffLeft > 0) {
+    state.turnHandoffLeft = Math.max(0, state.turnHandoffLeft - dt);
+    const progress = 1 - state.turnHandoffLeft / TURN_HANDOFF_DURATION;
+    updateGolferHandoff(golfer, ball, state.level, progress);
+  }
 
   const turnSpeed = 1.7;
   if (isHeld(input, 'ArrowLeft', 'a')) state.angle -= turnSpeed * dt;
@@ -190,6 +196,7 @@ function shoot(state: GameState) {
   state.players[ball.playerId].strokes = ball.strokes;
   state.phase = 'flying';
   state.cameraMode = 'follow';
+  state.turnHandoffLeft = 0;
   burst(state.particles, ball.pos, ball.color, 10);
 }
 
@@ -217,9 +224,13 @@ function advanceTurn(state: GameState) {
       state.angle = -Math.PI / 4;
       state.power = clamp(state.power, MIN_POWER, MAX_POWER);
       state.phase = 'aiming';
-      state.messageTimer = 1.2;
+      state.messageTimer = 0;
+      state.turnHandoffLeft = TURN_HANDOFF_DURATION;
       const golfer = state.golfers[next];
-      if (golfer) golfer.ready = false;
+      if (golfer) {
+        golfer.handoffFrom = { ...golfer.pos };
+        golfer.ready = false;
+      }
       return;
     }
   }

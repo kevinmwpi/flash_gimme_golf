@@ -12,7 +12,7 @@ Two friends. One browser tab. Twelve levels. Cooperative golf puzzles where you 
 
 "Flash" is a double meaning. **Nostalgic** — the era of Miniclip, Kongregate, Newgrounds. Browser-native, instant load, no install. **Fast-paced** — short sessions, quick matches, low friction.
 
-This is *not* trying to be Golf With Your Friends. It's smaller, sharper, web-first, and built around co-op puzzle-solving rather than chaotic racing.
+This is *not* trying to be Golf With Your Friends. It's smaller, sharper, web-first, and built around co-op puzzle-solving rather than chaotic racing... but you can still race your friends if you want.
 
 ## Tech
 
@@ -47,8 +47,7 @@ flash_gimme_golf/
 ├── src/              # Game source (TypeScript)
 ├── index.html        # Entry point
 ├── vite.config.ts    # Vite config
-├── CLAUDE.md         # Vision, constraints, and phased plan (read this first)
-└── PLAYTEST_RESULTS.md  # Notes from comparing the four initial prototype branches
+└── CLAUDE.md         # Vision, constraints, and phased plan (read this first)
 ```
 
 ## Roadmap
