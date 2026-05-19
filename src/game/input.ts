@@ -2,7 +2,11 @@ import { GamePhase, InputState } from './types';
 
 const normalizeKey = (key: string) => key.length === 1 ? key.toLowerCase() : key;
 
-const AIM_KEYS = new Set(['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's', ' ']);
+// Keys that should only reach the active player during an aiming/flying turn.
+// Multi-character key names (arrows) keep their PascalCase form from
+// KeyboardEvent.key; single chars are lowercased by normalizeKey. The set
+// must match those storage shapes exactly or the filter silently misses.
+const AIM_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'a', 'd', 'w', 's', ' ']);
 
 export function snapshotInput(input: InputState): { held: string[]; pressed: string[] } {
   return { held: [...input.held], pressed: [...input.pressed] };
