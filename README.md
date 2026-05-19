@@ -43,7 +43,20 @@ npm run dev:all
 
 This starts the Vite client and the WebSocket game server (`ws://localhost:3001`, proxied at `/ws`). One player **Create online room**, shares the code or invite link; the other **Join**. Host presses **Start game** when both are connected.
 
-For production, deploy the static client to Vercel and run the server separately (Railway, Fly.io, etc.). Set `VITE_WS_URL` at build time to your server’s public `wss://…` URL.
+For production, deploy the static client to Vercel and run the server separately. The repo ships a `Dockerfile` + `fly.toml` for Fly.io:
+
+```bash
+# one-time
+fly launch --no-deploy       # accept defaults, or rename the app
+fly deploy                   # builds the Dockerfile, boots the server
+
+# then on Vercel
+# Project Settings → Environment Variables:
+#   VITE_WS_URL = wss://<your-app-name>.fly.dev/ws
+# Redeploy the frontend so the client picks up the var.
+```
+
+The Fly machine sleeps when idle to stay in the free allowance (~1-2s cold start when the first player creates a room after a quiet period). Bump `min_machines_running` in `fly.toml` to `1` if that becomes a problem in playtests.
 
 ## Controls
 

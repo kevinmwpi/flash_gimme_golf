@@ -1,0 +1,34 @@
+# Fly.io deploy config for the Flash Golf game server.
+#
+# First-time setup (run from repo root):
+#   fly launch --no-deploy   # accept defaults, keep app name or change it
+#   fly deploy
+#
+# After the first deploy, set on Vercel:
+#   VITE_WS_URL = wss://<your-app-name>.fly.dev/ws
+# then redeploy the frontend so the client points here.
+#
+# auto_stop_machines + min_machines_running=0 keeps the server inside
+# Fly's free allowance by sleeping when idle. Cold-start adds ~1-2s the
+# first time a player creates a room after a quiet period. Bump
+# min_machines_running to 1 if that becomes noticeable in playtests.
+
+app = "flash-golf-server"
+primary_region = "yyz"
+
+[build]
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
