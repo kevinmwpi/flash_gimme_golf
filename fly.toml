@@ -13,7 +13,7 @@
 # first time a player creates a room after a quiet period. Bump
 # min_machines_running to 1 if that becomes noticeable in playtests.
 
-app = "flash-golf-server"
+app = "flash-gimme-golf"
 primary_region = "yyz"
 
 [build]
