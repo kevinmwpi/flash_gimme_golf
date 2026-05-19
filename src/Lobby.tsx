@@ -49,6 +49,14 @@ export default function Lobby({ onLocalPlay, onOnlinePlay }: LobbyProps) {
     }
   };
 
+  const errorHint = () => {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return 'Local dev: run npm run server in another terminal.';
+    }
+    return 'Online mode isn’t available yet on this build. Try Play locally for same-keyboard co-op.';
+  };
+
   return (
     <div className="lobby">
       <div className="lobby-panel">
@@ -127,7 +135,7 @@ export default function Lobby({ onLocalPlay, onOnlinePlay }: LobbyProps) {
         {status.kind === 'error' && (
           <div className="lobby-error">
             <p>{status.message}</p>
-            <p className="lobby-hint">Local dev: run npm run server in another terminal.</p>
+            <p className="lobby-hint">{errorHint()}</p>
             <button type="button" className="lobby-btn" onClick={() => client.disconnect()}>
               Back
             </button>

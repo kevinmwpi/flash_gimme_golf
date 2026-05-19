@@ -4,7 +4,7 @@ A flash-style 2D co-op golf game you can play with a friend in your browser in 1
 
 **Play it:** https://flash-golf.vercel.app/
 
-**Status:** Phase 1 complete. **Online 2P validation slice** in progress — room codes + server-authoritative co-op for remote playtesting.
+**Status:** Phase 1 complete. The Phase 2 **online 2P validation slice** is code-complete — room codes, invite URLs, and server-authoritative co-op all work end-to-end against `npm run dev:all`. The live Vercel URL currently serves local-keyboard play only; remote-friend online mode needs the WebSocket server (`server/`) deployed to a host like Railway or Fly.io with `VITE_WS_URL` pointed at it. Once that's live, Phase 2 playtests can begin — see [`CLAUDE.md`](./CLAUDE.md) §5 Phase 2 for the exit condition.
 
 ---
 
@@ -43,7 +43,20 @@ npm run dev:all
 
 This starts the Vite client and the WebSocket game server (`ws://localhost:3001`, proxied at `/ws`). One player **Create online room**, shares the code or invite link; the other **Join**. Host presses **Start game** when both are connected.
 
-For production, deploy the static client to Vercel and run the server separately (Railway, Fly.io, etc.). Set `VITE_WS_URL` at build time to your server’s public `wss://…` URL.
+For production, deploy the static client to Vercel and run the server separately. The repo ships a `Dockerfile` + `fly.toml` for Fly.io:
+
+```bash
+# one-time
+fly launch --no-deploy       # accept defaults, or rename the app
+fly deploy                   # builds the Dockerfile, boots the server
+
+# then on Vercel
+# Project Settings → Environment Variables:
+#   VITE_WS_URL = wss://<your-app-name>.fly.dev/ws
+# Redeploy the frontend so the client picks up the var.
+```
+
+The Fly machine sleeps when idle to stay in the free allowance (~1-2s cold start when the first player creates a room after a quiet period). Bump `min_machines_running` in `fly.toml` to `1` if that becomes a problem in playtests.
 
 ## Controls
 

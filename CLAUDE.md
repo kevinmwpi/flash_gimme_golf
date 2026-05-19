@@ -63,6 +63,8 @@ These were considered and explicitly rejected for v1.0. They can be revisited *o
 
 Each phase has a hard exit condition. **Do not advance without it.** If a phase reveals the project shouldn't continue, stopping is a valid outcome.
 
+> **Current status (2026-05-19).** Phase 1 is complete. The Phase 2 online-validation-slice **code** is built — room codes, invite URLs, server-authoritative sim — and runs locally via `npm run dev:all`. The remaining concrete blockers before Phase 2 playtests can start are (a) deploying the WebSocket server to a public host and wiring `VITE_WS_URL` on the Vercel build, and (b) recruiting playtesters. Neither is a coding task. This pointer is a status note only; the plan below is unchanged and remains source-of-truth.
+
 ### Phase 1 — Make `main` real (2 weeks)
 
 The repo is currently a scaffold with four unmerged AI-generated PRs and `node_modules` committed. Phase 1 fixes the foundation.
