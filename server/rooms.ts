@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws';
-import { createGameState, startGame, updateGame } from '../src/game/engine';
+import { createGameState, SIM_VIEWPORT, startGame, updateGame } from '../src/game/engine';
 import { filterOnlineInput } from '../src/game/input';
 import { serializeState } from '../src/game/state';
 import { GameState, InputState } from '../src/game/types';
@@ -7,7 +7,6 @@ import type { ClientMessage, ServerMessage } from '../src/net/protocol';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const FIXED_STEP = 1 / 60;
-const SIM_VIEWPORT = { x: 1280, y: 720 };
 
 type InputSnapshot = { held: string[]; pressed: string[] };
 

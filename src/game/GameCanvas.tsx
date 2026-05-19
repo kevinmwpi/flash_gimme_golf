@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createGameState, updateGame } from './engine';
+import { createGameState, SIM_VIEWPORT, updateGame } from './engine';
 import { bindInput, createInput, endInputFrame, snapshotInput } from './input';
 import { renderGame } from './render';
 import { readStateFromUrl } from './state';
@@ -8,6 +8,7 @@ import type { OnlineSession } from '../net/protocol';
 
 const FIXED_STEP = 1 / 60;
 const MAX_FRAME = 0.25;
+const SIM_ASPECT = SIM_VIEWPORT.x / SIM_VIEWPORT.y;
 
 type GameCanvasProps = {
   online?: OnlineSession;
@@ -33,11 +34,22 @@ export default function GameCanvas({ online }: GameCanvasProps) {
 
     const resize = () => {
       const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
-      canvas.width = Math.floor(window.innerWidth * dpr);
-      canvas.height = Math.floor(window.innerHeight * dpr);
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Fit the largest 16:9 box inside the window. Anything outside is
+      // letterbox (the body's gradient shows through).
+      let cssW = window.innerWidth;
+      let cssH = cssW / SIM_ASPECT;
+      if (cssH > window.innerHeight) {
+        cssH = window.innerHeight;
+        cssW = cssH * SIM_ASPECT;
+      }
+      canvas.width = Math.max(1, Math.floor(cssW * dpr));
+      canvas.height = Math.max(1, Math.floor(cssH * dpr));
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      // Combine DPR with the sim->canvas scale so draw calls use the fixed
+      // 1280x720 logical coord space regardless of the actual canvas size.
+      const simScale = canvas.width / SIM_VIEWPORT.x;
+      ctx.setTransform(simScale, 0, 0, simScale, 0, 0);
     };
     resize();
     window.addEventListener('resize', resize);
@@ -46,7 +58,6 @@ export default function GameCanvas({ online }: GameCanvasProps) {
       const frameDt = Math.min(MAX_FRAME, (now - last) / 1000);
       last = now;
       accumulator += frameDt;
-      const viewport = { x: window.innerWidth, y: window.innerHeight };
       const session = onlineRef.current;
 
       while (accumulator >= FIXED_STEP) {
@@ -55,7 +66,7 @@ export default function GameCanvas({ online }: GameCanvasProps) {
           session.sendInput(snap.held, snap.pressed);
           stateRef.current = session.state;
         } else {
-          stateRef.current = updateGame(stateRef.current, input, FIXED_STEP, viewport);
+          stateRef.current = updateGame(stateRef.current, input, FIXED_STEP, SIM_VIEWPORT);
         }
         endInputFrame(input);
         accumulator -= FIXED_STEP;
@@ -63,7 +74,7 @@ export default function GameCanvas({ online }: GameCanvasProps) {
 
       const renderState = onlineRef.current?.state ?? stateRef.current;
       const localPlayerId = onlineRef.current?.playerId;
-      renderGame(ctx, renderState, window.innerWidth, window.innerHeight, { localPlayerId });
+      renderGame(ctx, renderState, SIM_VIEWPORT.x, SIM_VIEWPORT.y, { localPlayerId });
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
