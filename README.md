@@ -4,7 +4,7 @@ A flash-style 2D co-op golf game you can play with a friend in your browser in 1
 
 **Play it:** https://flash-golf.vercel.app/
 
-**Status:** Phase 1 complete. **Online 2P validation slice** in progress — room codes + server-authoritative co-op for remote playtesting.
+**Status:** Phase 1 complete. The Phase 2 **online 2P validation slice** is code-complete — room codes, invite URLs, and server-authoritative co-op all work end-to-end against `npm run dev:all`. The live Vercel URL currently serves local-keyboard play only; remote-friend online mode needs the WebSocket server (`server/`) deployed to a host like Railway or Fly.io with `VITE_WS_URL` pointed at it. Once that's live, Phase 2 playtests can begin — see [`CLAUDE.md`](./CLAUDE.md) §5 Phase 2 for the exit condition.
 
 ---
 
