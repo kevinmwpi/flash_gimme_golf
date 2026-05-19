@@ -103,14 +103,20 @@ export class GameClient {
           this.setStatus({ ...this.status, peerConnected: true });
         }
         break;
-      case 'gameState':
-        this.latestState = deserializeState(message.state);
+      case 'gameState': {
+        const state = deserializeState(message.state);
+        // Server broadcasts state every tick from room creation, so the
+        // first gameState arrives in the same frame as peerJoined. Without
+        // this guard the lobby unmounts before the host can click Start.
+        if (state.phase === 'start') return;
+        this.latestState = state;
         this.tick = message.tick;
         this.setStatus({
           kind: 'playing',
           session: this.buildSession(),
         });
         break;
+      }
       case 'error':
         this.setStatus({ kind: 'error', message: message.message });
         break;
