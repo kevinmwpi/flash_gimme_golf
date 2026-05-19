@@ -20,6 +20,13 @@ const MAX_POWER = 100;
 const BALL_RADIUS = 12;
 const TURN_HANDOFF_DURATION = 1;
 
+// Fixed simulation viewport, in world units. The canvas always renders this
+// 16:9 region; the browser window letterboxes around it. Camera math (follow
+// scroll bounds, overview centering) operates against these dimensions so the
+// game looks identical on every window size. Server and client share it so
+// the authoritative sim and local rendering stay in lockstep.
+export const SIM_VIEWPORT = { x: 1280, y: 720 } as const;
+
 export function createGameState(playerCount = 2, levelIndex = 0, seed = 1): GameState {
   const players: Player[] = Array.from({ length: playerCount }, (_, i) => ({
     id: i,

@@ -35,11 +35,13 @@ export function renderGame(
   if (state.phase === 'levelComplete') drawLevelComplete(ctx, state, width, height);
 }
 
-function fitScale(state: GameState, width: number, height: number) {
+function fitScale(state: GameState, viewW: number, viewH: number) {
   if (state.cameraMode === 'overview' || state.phase === 'levelComplete' || state.phase === 'campaignComplete') {
-    return Math.min(width / state.level.width, height / state.level.height);
+    return Math.min(viewW / state.level.width, viewH / state.level.height);
   }
-  return Math.min(1.05, Math.max(0.82, Math.min(width / 1120, height / 680)));
+  // Follow: 1:1 zoom against the fixed sim viewport. Levels wider than the
+  // viewport scroll horizontally via the camera clamp in updateCamera.
+  return 1;
 }
 
 function drawWorld(ctx: CanvasRenderingContext2D, state: GameState) {
