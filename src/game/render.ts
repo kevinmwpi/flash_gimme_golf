@@ -2,7 +2,17 @@ import { activeBall, activeGolfer, aimArc, dynamicRects, getCampaignLeaderboard 
 import { drawTerrain } from './terrain';
 import { Ball, GameState, Golfer, Rect } from './types';
 
-export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
+export type RenderOptions = {
+  localPlayerId?: number;
+};
+
+export function renderGame(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  width: number,
+  height: number,
+  options?: RenderOptions,
+) {
   ctx.clearRect(0, 0, width, height);
   if (state.phase === 'start') return drawStart(ctx, state, width, height);
   if (state.phase === 'campaignComplete') return drawCampaignComplete(ctx, state, width, height);
@@ -21,7 +31,7 @@ export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, widt
   drawParticles(ctx, state);
   ctx.restore();
 
-  drawHud(ctx, state, width, height);
+  drawHud(ctx, state, width, height, options?.localPlayerId);
   if (state.phase === 'levelComplete') drawLevelComplete(ctx, state, width, height);
 }
 
@@ -287,7 +297,13 @@ function drawParticles(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.globalAlpha = 1;
 }
 
-function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
+function drawHud(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  width: number,
+  height: number,
+  localPlayerId?: number,
+) {
   panel(ctx, 18, 16, 400, 136);
   const active = activeBall(state);
   const golfer = activeGolfer(state);
@@ -321,6 +337,11 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, width: number,
   ctx.fillText('A/D aim • W/S power • Space shoot (when at ball) • R reset • Tab camera', 34, height - 48);
   ctx.fillStyle = '#b8c8e8';
   ctx.fillText(state.level.hint, 34, height - 27);
+  if (localPlayerId !== undefined && state.phase === 'aiming') {
+    const mine = state.activePlayerIndex === localPlayerId;
+    ctx.fillStyle = mine ? '#72de72' : '#ffd75c';
+    ctx.fillText(mine ? 'Your turn — aim and shoot' : 'Waiting for opponent…', 34, height - 8);
+  }
 }
 
 function drawStart(ctx: CanvasRenderingContext2D, _state: GameState, width: number, height: number) {

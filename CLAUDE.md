@@ -81,16 +81,22 @@ The repo is currently a scaffold with four unmerged AI-generated PRs and `node_m
 
 ### Phase 2 — Validate the core loop (2–3 weeks)
 
-No new features. The current build gets tested against real humans.
+No new *mechanics*, no 12-level campaign, no SFX pass, no art overhaul. The current build gets tested against real humans.
+
+**Exception — online validation slice (after Phase 1):** Remote friends cannot validate co-op on one keyboard. Ship the smallest online 2P build needed first:
+- Create/join room via short code or invite URL (`?room=CODE`).
+- Each browser controls one assigned player only.
+- Server-authoritative sim on existing levels.
+- Then run playtests below against that build.
 
 - Recruit 10 playtesters (mix of friends and strangers).
-- Send the URL with no instructions beyond "play this for 10 minutes."
+- Send the URL with no instructions beyond "play ~10 minutes with a friend online."
 - Watch 3+ play over screenshare without explaining. Note confusion, laughter, drop-off.
 - Collect short written feedback from the rest.
 
-**Exit condition:** 3+ playtesters express *unprompted* interest in playing again or playing with a specific friend.
+**Exit condition:** 3+ playtesters express *unprompted* interest in playing again or sending a room code to someone remote.
 
-**If exit condition fails:** the core loop needs work before anything else. Replace Phase 3 with "redesign the core mechanic until 3+ playtesters get excited." If multiple redesigns fail, consider sunsetting the project — that's a mature outcome, not a failure.
+**If exit condition fails:** iterate one axis (tutorial, co-op clarity, turn flow) before authoring levels 4–12. If multiple iterations fail, consider sunsetting — that's a mature outcome, not a failure.
 
 ### Phase 3 — Build the live co-op v1.0 (8–12 weeks)
 
@@ -102,7 +108,7 @@ Only if Phase 2 cleared.
 - 12 hand-crafted levels in 3 worlds of 4 levels each.
 - Keyboard and gamepad support.
 - Complete core loop: menu → create/join room → wait for friend → play world → results → continue or quit.
-- One coherent art pass. Pick a visual style, apply it consistently.
+- One coherent **scrappy Flash** art pass — consistent palette, labels, and readable hazards; not high-fidelity polish (see §9).
 - Sound effects for every meaningful interaction. One music track per world.
 - Server-authoritative netcode using the deterministic physics from Phase 1.
 - "Solo mode" is just "play with no friend joined" — same game, same levels, no second player.
@@ -218,7 +224,7 @@ The technical foundation (deterministic + serializable + URL-encodable state) is
 
 These were surfaced during planning but didn't need resolution to start Phase 1:
 
-- **Specific art direction.** Pixel art vs. flat vector vs. hand-drawn vs. something else. Decide before Phase 3's "coherent art pass."
+- **Art direction (decided).** Intentional late-Flash **scrappy** look — nostalgic, funny, keeps focus on geometry and co-op puzzles. Phase 3 "art pass" means **consistency** across levels, not hiring an artist or smoothing rough edges. Readability of mechanics (cup, hazards, switches) still required.
 - **Music and SFX direction.** Tone, genre, instruments. Decide before Phase 3.
 - **Titles.** "Flash Gimme Golf" is the repo name. The in-game title is **Flash Golf**.
 - **Eventual monetization model (if Phase 4 succeeds).** Free with optional pay-what-you-want? Paid Steam version of free web version? Donation? Phase 5 decision tied to which platform expansion (if any) happens.

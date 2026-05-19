@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
 import { createGameState, updateGame } from './engine';
-import { bindInput, createInput, endInputFrame } from './input';
+import { bindInput, createInput, endInputFrame, snapshotInput } from './input';
 import { renderGame } from './render';
 import { readStateFromUrl } from './state';
 import { GameState } from './types';
+import type { OnlineSession } from '../net/protocol';
 
 const FIXED_STEP = 1 / 60;
 const MAX_FRAME = 0.25;
 
-export default function GameCanvas() {
+type GameCanvasProps = {
+  online?: OnlineSession;
+};
+
+export default function GameCanvas({ online }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GameState>(readStateFromUrl() ?? createGameState(2));
+  const onlineRef = useRef(online);
+  onlineRef.current = online;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -40,12 +47,23 @@ export default function GameCanvas() {
       last = now;
       accumulator += frameDt;
       const viewport = { x: window.innerWidth, y: window.innerHeight };
+      const session = onlineRef.current;
+
       while (accumulator >= FIXED_STEP) {
-        stateRef.current = updateGame(stateRef.current, input, FIXED_STEP, viewport);
+        if (session) {
+          const snap = snapshotInput(input);
+          session.sendInput(snap.held, snap.pressed);
+          stateRef.current = session.state;
+        } else {
+          stateRef.current = updateGame(stateRef.current, input, FIXED_STEP, viewport);
+        }
         endInputFrame(input);
         accumulator -= FIXED_STEP;
       }
-      renderGame(ctx, stateRef.current, window.innerWidth, window.innerHeight);
+
+      const renderState = onlineRef.current?.state ?? stateRef.current;
+      const localPlayerId = onlineRef.current?.playerId;
+      renderGame(ctx, renderState, window.innerWidth, window.innerHeight, { localPlayerId });
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);

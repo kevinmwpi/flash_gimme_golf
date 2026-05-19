@@ -4,7 +4,7 @@ A flash-style 2D co-op golf game you can play with a friend in your browser in 1
 
 **Play it:** https://flash-golf.vercel.app/
 
-**Status:** Phase 1 complete — deterministic foundation in place, deployed, ready for Phase 2 playtesting.
+**Status:** Phase 1 complete. **Online 2P validation slice** in progress — room codes + server-authoritative co-op for remote playtesting.
 
 ---
 
@@ -25,12 +25,25 @@ This is *not* trying to be Golf With Your Friends. It's smaller, sharper, web-fi
 
 ## Running locally
 
+**Local same-keyboard play:**
+
 ```bash
 npm install
 npm run dev
 ```
 
-Then open the URL Vite prints (usually `http://localhost:5173/`).
+Open the URL Vite prints (usually `http://localhost:5173/`) and choose **Play locally**.
+
+**Online 2-player (two browsers):**
+
+```bash
+npm install
+npm run dev:all
+```
+
+This starts the Vite client and the WebSocket game server (`ws://localhost:3001`, proxied at `/ws`). One player **Create online room**, shares the code or invite link; the other **Join**. Host presses **Start game** when both are connected.
+
+For production, deploy the static client to Vercel and run the server separately (Railway, Fly.io, etc.). Set `VITE_WS_URL` at build time to your server’s public `wss://…` URL.
 
 ## Controls
 
@@ -47,7 +60,9 @@ Then open the URL Vite prints (usually `http://localhost:5173/`).
 
 ```
 flash_gimme_golf/
+├── server/              # WebSocket lobby + authoritative sim
 ├── src/                 # Game source (TypeScript)
+│   ├── net/             # Online client protocol
 │   └── game/
 │       ├── engine.ts    # Turn/phase state machine
 │       ├── physics.ts   # Deterministic ball physics

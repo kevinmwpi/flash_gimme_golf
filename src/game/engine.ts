@@ -1,4 +1,4 @@
-import { consume, isHeld } from './input';
+import { consume, filterOnlineInput, isHeld } from './input';
 import { InputState } from './types';
 import { levels, playerColors, safeColors } from './levels';
 import {
@@ -139,7 +139,28 @@ export function nextLevel(state: GameState) {
   return fresh;
 }
 
-export function updateGame(state: GameState, input: InputState, dt: number, viewport: { x: number; y: number }) {
+export type UpdateOptions = {
+  localPlayerId?: number;
+  isHost?: boolean;
+};
+
+export function updateGame(
+  state: GameState,
+  input: InputState,
+  dt: number,
+  viewport: { x: number; y: number },
+  options?: UpdateOptions,
+) {
+  if (options?.localPlayerId !== undefined) {
+    input = filterOnlineInput(
+      input,
+      state.phase,
+      state.activePlayerIndex,
+      options.localPlayerId,
+      options.isHost ?? false,
+    );
+  }
+
   state.time += dt;
 
   if (state.phase === 'start') {
