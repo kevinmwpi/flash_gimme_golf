@@ -145,7 +145,15 @@ export function handleClientMessage(ws: WebSocket, message: ClientMessage) {
       const room = findRoomBySocket(ws);
       if (!room) return;
       const playerId = room.host === ws ? 0 : 1;
-      room.inputs[playerId] = { held: message.held, pressed: message.pressed };
+      const slot = room.inputs[playerId];
+      slot.held = message.held;
+      // Accumulate pressed events across client messages. The client clears
+      // its own pressed set every step, so a one-shot key (space, enter, R)
+      // only appears in one snapshot; if two snapshots arrive before the
+      // next server tick, replacing would drop the event.
+      for (const key of message.pressed) {
+        if (!slot.pressed.includes(key)) slot.pressed.push(key);
+      }
       break;
     }
     case 'startGame': {
