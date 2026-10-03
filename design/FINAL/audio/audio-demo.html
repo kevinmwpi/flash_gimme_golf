@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Golf Audio Audition</title>
+<meta name="description" content="Audition page for every synthesized Flash Golf sound effect and the generative music bed. No asset files; Web Audio only. The PORT BOUNDARY block is src/view/audio.ts.">
+<style>
+  :root {
+    --sky: #7fd3ff; --sky2: #cfefff; --grass: #58c93a; --grass-dark: #2f8a22; --dirt: #b8743a;
+    --ink: #1f2a44; --card: #ffffff; --card-edge: #1f2a44; --p1: #ff5d73; --p2: #50b7ff;
+    --gold: #ffc531; --silver: #cfd6e0; --bronze: #d58b4a; --muted: #5b6a8c; --btn: #ffd84d; --btn-edge: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --sky: #1a3350; --sky2: #0f1d30; --card: #22314d; --ink: #f2f6ff; --muted: #a8b6d1; --card-edge: #0b1322; } }
+  :root[data-theme="dark"] { --sky: #1a3350; --sky2: #0f1d30; --card: #22314d; --ink: #f2f6ff; --muted: #a8b6d1; --card-edge: #0b1322; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: linear-gradient(180deg, var(--sky) 0%, var(--sky2) 100%); min-height: 100vh; }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: clamp(28px, 5vw, 44px); margin: 0 0 4px; letter-spacing: -0.5px; text-shadow: 3px 3px 0 rgba(0,0,0,0.18); }
+  h1 span { color: var(--p1); } h1 b { color: var(--p2); }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 15px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; background: var(--card);
+    border: 3px solid var(--card-edge); border-radius: 14px; padding: 12px 14px; margin-bottom: 18px; box-shadow: 0 5px 0 rgba(0,0,0,0.18); }
+  .bar label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; }
+  .bar input[type=range] { width: 110px; }
+  .status { font-size: 13px; color: var(--muted); margin-left: auto; }
+  .status.ok { color: var(--grass-dark); font-weight: 700; }
+  section { background: var(--card); border: 3px solid var(--card-edge); border-radius: 14px; padding: 14px; margin-bottom: 16px; box-shadow: 0 5px 0 rgba(0,0,0,0.18); }
+  section h2 { margin: 0 0 4px; font-size: 20px; }
+  section p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { font: inherit; font-weight: 800; font-size: 14px; color: #2b1d00; background: var(--btn); border: 3px solid var(--btn-edge);
+    border-radius: 10px; padding: 8px 12px; cursor: pointer; box-shadow: 0 3px 0 var(--btn-edge); transition: transform 60ms; }
+  button:hover { transform: translateY(-1px); }
+  button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--btn-edge); }
+  button:focus-visible { outline: 4px solid var(--p2); outline-offset: 2px; }
+  button.p1 { background: var(--p1); border-color: #8a1f30; box-shadow: 0 3px 0 #8a1f30; color: #fff; }
+  button.p2 { background: var(--p2); border-color: #1a5f8f; box-shadow: 0 3px 0 #1a5f8f; color: #fff; }
+  button.gold { background: var(--gold); } button.silver { background: var(--silver); } button.bronze { background: var(--bronze); color: #fff; }
+  button.on { outline: 4px solid var(--grass); }
+  button.quiet { background: #e9eef7; border-color: #7a879f; box-shadow: 0 3px 0 #7a879f; }
+  button.hud { display: inline-flex; align-items: center; gap: 8px; background: #fff; border-color: var(--card-edge); box-shadow: 0 3px 0 var(--card-edge); color: var(--ink); }
+  button.hud svg { width: 22px; height: 22px; display: block; }
+  button.hud[data-state="locked"] { background: #fff4c2; }
+  button.hud[data-state="muted"] { background: #ffe1e6; }
+  code { background: rgba(0,0,0,0.08); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 140px; overflow: auto; white-space: pre-wrap; margin-top: 8px; }
+  .debug { border-style: dashed; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>Flash</span> <b>Golf</b> audio audition</h1>
+  <p class="sub">Every sound is synthesized live with the Web Audio API. Click anything to unlock audio. The code between the
+    <code>PORT BOUNDARY</code> comments is <code>src/view/audio.ts</code> (ARCH.md 1.10 <code>AudioSystem</code> surface plus
+    the extra members listed in AUDIO.md section 1). The "HUD mute" button mirrors the three HUD states.</p>
+
+  <div class="bar">
+    <button id="hudMute" class="hud" data-state="locked" aria-label="Enable sound" title="Tap for sound"></button>
+    <label><input type="checkbox" id="musicOn"> Music (persisted)</label>
+    <label>Volume <input type="range" id="vol" min="0" max="100" value="80"></label>
+    <span class="status" id="status">audio locked - click or press a key to unlock</span>
+  </div>
+
+  <section>
+    <h2>Shot and ball</h2>
+    <p>ballHit scales with power (pitch, brightness, level). Bounces are per <code>BounceSurface</code> and ignore impacts under strength 0.08.</p>
+    <div class="grid">
+      <button data-sfx="ballHit" data-arg="0.15">ballHit power 0.15</button>
+      <button data-sfx="ballHit" data-arg="0.5">ballHit power 0.5</button>
+      <button data-sfx="ballHit" data-arg="1">ballHit power 1.0</button>
+      <button data-sfx="bounce" data-arg='[0.2,"grass"]'>bounce grass 0.2</button>
+      <button data-sfx="bounce" data-arg='[0.7,"grass"]'>bounce grass 0.7</button>
+      <button data-sfx="bounce" data-arg='[0.6,"dirtWall"]'>bounce dirtWall 0.6</button>
+      <button data-sfx="bounce" data-arg='[0.6,"levelEdge"]'>bounce levelEdge 0.6</button>
+      <button data-sfx="bounce" data-arg='[0.5,"ceiling"]'>bounce ceiling 0.5</button>
+      <button data-sfx="bounce" data-arg='[0.6,"bridge"]'>bounce bridge 0.6</button>
+      <button data-sfx="bounce" data-arg='[0.6,"blocker"]'>bounce blocker 0.6</button>
+      <button data-sfx="enterSand">enterSand</button>
+      <button data-sfx="rollStop">rollStop (ballRest)</button>
+      <button data-sfx="fellOffWorld">fellOffWorld</button>
+      <button data-sfx="nearCup">nearCup (so close)</button>
+      <button data-sfx="lipOut">lipOut (too fast)</button>
+      <button data-sfx="gimme" class="p1">gimme</button>
+      <button data-sfx="sink">sink (rolled in: plonk + chime)</button>
+      <button data-sfx="sink" data-arg='[{"chime":false}]'>sink after gimme (no chime)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Mechanics</h2>
+    <p>Each mechanic has its own timbre family so it can be identified blind: spring = boing, bumper = pinball ding, sand = shuffle,
+      fan = air loop (+ "whff" on entry), colour gate = electric bzzt (blocked) / zwip (passed), switch = click + confirm, bridge = wooden slide.</p>
+    <div class="grid">
+      <button data-sfx="spring">spring</button>
+      <button data-sfx="bumper">bumper</button>
+      <button data-sfx="hazardBlock">hazardBlock (wrong colour)</button>
+      <button data-sfx="gatePass">gatePass (right colour)</button>
+      <button data-sfx="switchOn">switchOn</button>
+      <button data-sfx="switchOff">switchOff</button>
+      <button data-sfx="bridgeToggle" data-arg="true">bridgeToggle on</button>
+      <button data-sfx="bridgeToggle" data-arg="false">bridgeToggle off</button>
+      <button data-sfx="fanEnter">fan entry "whff"</button>
+      <button id="fanBtn">setFan(true) loop (toggle)</button>
+      <label>fan intensity <input type="range" id="fanInt" min="0" max="100" value="60"></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Turns, results, campaign</h2>
+    <p>Each player owns a note (P1 red = C5, P2 blue = G5). Medal jingles share one motif and add notes as the medal improves.
+      Sequence buttons go through <code>handleEvents()</code> with real <code>SimEvent</code> shapes.</p>
+    <div class="grid">
+      <button data-sfx="turnStart" data-arg="0" class="p1">turnStart P1</button>
+      <button data-sfx="turnStart" data-arg="1" class="p2">turnStart P2</button>
+      <button data-sfx="turnStart" data-arg='[0,{"sameAsBefore":true}]' class="quiet">turnStart sameAsBefore (whoosh only)</button>
+      <button data-sfx="levelComplete" data-arg='"gold"' class="gold">levelComplete gold</button>
+      <button data-sfx="levelComplete" data-arg='"silver"' class="silver">levelComplete silver</button>
+      <button data-sfx="levelComplete" data-arg='"bronze"' class="bronze">levelComplete bronze</button>
+      <button data-sfx="levelComplete" data-arg='"none"' class="quiet">levelComplete none</button>
+      <button data-sfx="campaignComplete" class="gold">campaignComplete</button>
+      <button data-seq="gimmeHoleOut" class="quiet">seq: gimme, sink +350 ms (same player)</button>
+      <button data-seq="sinkComplete" class="quiet">seq: sink + levelComplete gold (same tick)</button>
+      <button data-seq="twoFall" class="quiet">seq: both balls fellOffWorld (same tick)</button>
+      <button data-seq="twoBounce" class="quiet">seq: both balls bounce (ticks 0 and 2)</button>
+      <button data-seq="rejected" class="quiet">seq: commandRejected turnDelay (silent) + wrongPhase (bonk)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>UI and online</h2>
+    <p>Hover plays only for <code>pointerType === 'mouse'</code> and for keyboard focus (<code>:focus-visible</code>); taps on touch never hover.</p>
+    <div class="grid">
+      <button data-sfx="uiClick" class="quiet">uiClick</button>
+      <button data-sfx="uiBack" class="quiet">uiBack</button>
+      <button data-sfx="uiHover" class="quiet">uiHover</button>
+      <button data-sfx="uiInvalid" class="quiet">uiInvalid (not your turn)</button>
+      <button data-sfx="uiPause" class="quiet">uiPause</button>
+      <button data-sfx="uiResume" class="quiet">uiResume</button>
+      <button data-sfx="partnerJoined" class="quiet">partnerJoined</button>
+      <button data-sfx="partnerLeft" class="quiet">partnerLeft</button>
+      <button data-sfx="aimTick" data-arg="0.5" class="quiet">aimTick (power notch)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Music bed</h2>
+    <p>Generative, C major, 84 BPM, Cmaj7 - Am7 - Fmaj7 - G6 (two bars each), no drums. "title" = pad + bass; "play" adds sparse pentatonic plucks.
+      Hidden tabs switch the scheduler to a 2.5 s lookahead / 1 s interval; a catch-up clamp skips missed beats instead of stacking them.</p>
+    <div class="grid">
+      <button id="musTitle">music: title mode</button>
+      <button id="musPlay">music: play mode</button>
+      <button id="musStop" class="quiet">music: stop</button>
+      <button id="duckTest" class="quiet">duck test (jingle over music)</button>
+      <button id="bgToggle" class="quiet">simulate hidden tab (toggle)</button>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="debug">
+    <h2>Debug (not shipped in Settings)</h2>
+    <p>Settings ships mute + music toggle + one volume slider only. Bus trims exist for mixing sessions via <code>setBusDb()</code>.</p>
+    <div class="grid">
+      <label>SFX bus <input type="range" id="sfxDb" min="-30" max="0" value="-6"> <span id="sfxDbV">-6 dB</span></label>
+      <label>Music bus <input type="range" id="musDb" min="-40" max="-6" value="-15"> <span id="musDbV">-15 dB</span></label>
+    </div>
+  </section>
+</main>
+
+<script>
+// =====================================================================================================
+// PORT BOUNDARY - everything from here to "END PORT BOUNDARY" becomes src/view/audio.ts.
+// In audio.ts: `import { DT, MAX_POWER } from '../sim/types'` replaces the two constants below, the
+// `declare global { interface Window { webkitAudioContext?: typeof AudioContext } }` block goes at the top,
+// and the option bags get the interfaces from AUDIO.md section 1 (OscOpts, NoiseOpts, NoteOpts, SfxOpts).
+// No DOM dependencies except window.AudioContext, localStorage (try/catch) and the listeners in attachUnlock().
+// Nothing here touches the sim RNG.
+// =====================================================================================================
+
+const DT = 1 / 60;          // from sim/types
+const MAX_POWER = 100;      // from sim/types
+
+/** dB -> linear gain. */
+const dB = (x) => Math.pow(10, x / 20);
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+/** View-side RNG: mulberry32. Never the sim's rng. */
+function makeAudioRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const STORAGE = { muted: 'flashgolf.audio.muted', music: 'flashgolf.audio.music', volume: 'flashgolf.audio.volume' };
+function loadSettings() {
+  const s = { muted: false, music: true, volume: 0.8 };
+  try {
+    const m = localStorage.getItem(STORAGE.muted); if (m !== null) s.muted = m === '1';
+    const mu = localStorage.getItem(STORAGE.music); if (mu !== null) s.music = mu === '1';
+    const v = localStorage.getItem(STORAGE.volume); if (v !== null) { const n = Number(v); if (Number.isFinite(n)) s.volume = clamp01(n); }
+  } catch (_) { /* private mode / blocked storage: keep defaults */ }
+  return s;
+}
+function saveSetting(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* ignore */ } }
+
+/** Bus defaults (dB). Settings never exposes these; setBusDb() is for mixing sessions. */
+const SFX_BUS_DB = -6;
+const MUSIC_BUS_DB = -15;
+
+/** Fatigue watch-list: the sounds most likely to be reported as "annoying" in playtests. One literal each (dB). */
+const TUNE = { turnDing: -6, nearCup: -7, aimTick: -22, uiHover: -24, rollStop: -20 };
+
+/** Per-SFX polyphony policy: max simultaneous voices (per name) and minimum retrigger interval (ms, per name+player key). */
+const POLY = {
+  ballHit: { max: 1, minMs: 60 }, bounce: { max: 4, minMs: 45 }, enterSand: { max: 2, minMs: 250 },
+  rollStop: { max: 2, minMs: 200 }, spring: { max: 2, minMs: 80 }, bumper: { max: 3, minMs: 40 },
+  hazardBlock: { max: 2, minMs: 120 }, gatePass: { max: 2, minMs: 100 }, switchOn: { max: 2, minMs: 100 }, switchOff: { max: 2, minMs: 100 },
+  bridgeToggle: { max: 2, minMs: 150 }, fellOffWorld: { max: 2, minMs: 400 }, fanEnter: { max: 2, minMs: 300 },
+  nearCup: { max: 1, minMs: 500 }, lipOut: { max: 2, minMs: 300 },
+  gimme: { max: 2, minMs: 500 }, sink: { max: 2, minMs: 200 }, turnStart: { max: 1, minMs: 300 },
+  levelComplete: { max: 1, minMs: 1000 }, campaignComplete: { max: 1, minMs: 2000 }, uiClick: { max: 3, minMs: 30 }, uiBack: { max: 2, minMs: 60 },
+  uiHover: { max: 2, minMs: 60 }, uiInvalid: { max: 1, minMs: 200 }, uiPause: { max: 1, minMs: 200 },
+  uiResume: { max: 1, minMs: 200 }, partnerJoined: { max: 1, minMs: 500 }, partnerLeft: { max: 1, minMs: 500 },
+  aimTick: { max: 2, minMs: 35 },
+};
+const GLOBAL_MAX_VOICES = 24;
+
+/** createAudio(opts?: { seed?: number; compressor?: boolean }) — seed makes jitter deterministic for tests; compressor:false is for measuring makeup gain only. */
+function createAudio(opts = {}) {
+  const settings = loadSettings();
+  let ctx = null;         // AudioContext, created on first gesture
+  let master, comp, sfxBus, musicBus, noiseBuf;
+  let sfxBusDb = SFX_BUS_DB, musicBusDb = MUSIC_BUS_DB;
+  let activeVoices = 0;
+  const voiceCount = {};  // name -> active voices
+  const lastAt = {};      // name or name:playerId -> last scheduled time (ms)
+  const rng = makeAudioRng(opts.seed !== undefined ? opts.seed : (Date.now() ^ (performance.now() * 1000)) >>> 0);
+  const rand = (lo, hi) => lo + (hi - lo) * rng();
+  const jitterCents = (cents) => Math.pow(2, rand(-cents, cents) / 1200);
+  let suppressUntil = 0;  // while a jingle plays, suppress bounces until this ctx time
+  let pendingUntil = 0;   // performance.now() deadline during which a suspended ctx is still schedulable (unlock gesture)
+  let introVisible = false;               // levelStart .. playStart (router skips turnStart dings)
+  const lastGimmeAt = [-Infinity, -Infinity]; // per player, ctx seconds
+  const readyCbs = [];
+  const listeners = [];   // [target, type, fn, capture] for dispose()
+
+  // ---------- context / unlock ----------
+  function ensureContext() {
+    if (ctx) return ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ctx = new AC({ latencyHint: 'interactive' });
+    master = ctx.createGain();
+    sfxBus = ctx.createGain(); musicBus = ctx.createGain();
+    sfxBus.connect(master); musicBus.connect(master);
+    if (opts.compressor !== false) {
+      // Safety limiter. knee 6 => gain reduction starts at -15 dBFS. Chrome/WebKit add automatic makeup gain
+      // (measured: transients 9.6 dB lower, sustained jingles 4 dB higher than the raw graph); every number in AUDIO.md includes it.
+      comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -12; comp.knee.value = 6; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.15;
+      master.connect(comp); comp.connect(ctx.destination);
+    } else { master.connect(ctx.destination); }
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);   // 2 s of white noise shared by every noise voice
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = rng() * 2 - 1;
+    applyGains(true);
+    return ctx;
+  }
+  function applyGains(immediate) {
+    if (!ctx) return;
+    const t = ctx.currentTime, k = immediate ? 0.001 : 0.05;
+    master.gain.setTargetAtTime(settings.muted ? 0 : volumeToGain(settings.volume), t, k);
+    sfxBus.gain.setTargetAtTime(dB(sfxBusDb), t, k);
+    musicBus.gain.setTargetAtTime(settings.music ? dB(musicBusDb) : 0, t, k);
+  }
+  /** 0..1 slider -> gain: -40 dB at 0.01, 0 dB at 1 (perceptual), hard 0 at 0. */
+  function volumeToGain(v) { return v <= 0 ? 0 : dB(-40 * (1 - v)); }
+
+  const ready = () => !!ctx && (ctx.state === 'running' || performance.now() < pendingUntil);
+
+  function onRunning() {
+    if (!ctx || ctx.state !== 'running') return;
+    pendingUntil = 0;
+    detachGesture();
+    if (settings.music && music.wantedMode && !music.playing) music.start(music.wantedMode);
+    while (readyCbs.length) { const cb = readyCbs.shift(); try { cb(); } catch (_) {} }
+  }
+  /** Call synchronously inside a pointerdown / keydown / touchend / click handler. Idempotent. Returns ready(). */
+  function unlock() {
+    const c = ensureContext();
+    if (!c) return false;
+    if (c.state !== 'running') {
+      // Web Audio accepts scheduling on a suspended context (nodes start when it resumes), so the gesture's own
+      // click sound is not dropped on Safari, where `state` only flips when resume() resolves.
+      pendingUntil = performance.now() + 1000;
+      c.resume().then(onRunning, () => {});
+      // iOS Safari: a one-sample silent buffer started inside the gesture is what actually opens the audio route.
+      try { const b = c.createBuffer(1, 1, c.sampleRate); const s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); } catch (_) {}
+    } else { onRunning(); }
+    return ready();
+  }
+  function resumeIfNeeded() { if (ctx && ctx.state !== 'running') ctx.resume().then(onRunning, () => {}); }
+  let gestureHandlers = null;
+  function detachGesture() { if (!gestureHandlers) return; gestureHandlers.forEach(([tgt, type, fn]) => tgt.removeEventListener(type, fn, true)); gestureHandlers = null; }
+  function listen(tgt, type, fn, capture) { tgt.addEventListener(type, fn, capture); listeners.push([tgt, type, fn, capture]); }
+  /** Attach once at app start; gesture listeners stay until the context reports running. */
+  function attachUnlock(target) {
+    const tgt = target || window;
+    const handler = () => unlock();
+    gestureHandlers = ['pointerdown', 'keydown', 'touchend'].map((e) => { tgt.addEventListener(e, handler, true); return [tgt, e, handler]; });
+    // iOS 'interrupted' (calls, Siri, backgrounding) and Android tab switches: resume when we come back; the music
+    // scheduler widens its lookahead while hidden because Chrome throttles timers to >= 1 s there.
+    listen(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'visible') { resumeIfNeeded(); music.setBackground(false); }
+      else music.setBackground(true);
+    }, false);
+    listen(window, 'focus', resumeIfNeeded, false);
+  }
+  /** cb fires once when the context is running (immediately if it already is). Returns an unsubscribe. */
+  function onReady(cb) { if (ctx && ctx.state === 'running') { cb(); return () => {}; } readyCbs.push(cb); return () => { const i = readyCbs.indexOf(cb); if (i >= 0) readyCbs.splice(i, 1); }; }
+
+  // ---------- voice bookkeeping ----------
+  /** key = name or name:playerId (ball-owned sounds are rate-limited per ball). at = scheduled ctx time. */
+  function admit(name, key, at) {
+    if (!ready()) return false;
+    const pol = POLY[name] || { max: 4, minMs: 30 };
+    const k = key || name; const nowMs = at * 1000;
+    if (nowMs - (lastAt[k] !== undefined ? lastAt[k] : -Infinity) < pol.minMs) return false;
+    if ((voiceCount[name] || 0) >= pol.max) return false;
+    if (activeVoices >= GLOBAL_MAX_VOICES) return false;
+    lastAt[k] = nowMs; voiceCount[name] = (voiceCount[name] || 0) + 1; activeVoices++;
+    return true;
+  }
+  function release(name) { voiceCount[name] = Math.max(0, (voiceCount[name] || 0) - 1); activeVoices = Math.max(0, activeVoices - 1); }
+  /**
+   * GainNode routed to `bus` that releases the voice slot when a silent sentinel ConstantSource ends at at+len
+   * (audio-clock bookkeeping; setTimeout is throttled in hidden tabs). volume = linear multiplier from play(name, volume).
+   */
+  function voiceOut(name, at, len, volume, bus) {
+    const g = ctx.createGain(); g.gain.value = volume === undefined ? 1 : clamp01(volume); g.connect(bus || sfxBus);
+    const done = () => { release(name); try { g.disconnect(); } catch (_) {} };
+    if (typeof ctx.createConstantSource === 'function') {
+      const s = ctx.createConstantSource(); s.offset.value = 0; s.connect(g); s.onended = done; s.start(at); s.stop(at + len + 0.05);
+    } else { setTimeout(done, (at - ctx.currentTime + len + 0.05) * 1000); }
+    return g;
+  }
+  /** Common prologue of every sfx: admit under the player key, open the voice. Returns { at, out } or null. */
+  function begin(name, o, len) {
+    if (!ready()) return null;
+    const at = o.at !== undefined ? o.at : ctx.currentTime;
+    const key = o.playerId !== undefined ? name + ':' + o.playerId : name;
+    if (!admit(name, key, at)) return null;
+    return { at, out: voiceOut(name, at, len, o.volume) };
+  }
+
+  // ---------- synthesis primitives ----------
+  /**
+   * Freeze an AudioParam's automation at `at` so a new ramp can start from there without a jump.
+   * Never read param.value for this: it reports the value at *now*, not at `at`, and before the first
+   * automation event it reports the default (1.0). Firefox lacks cancelAndHoldAtTime, hence the fallback.
+   */
+  function holdAt(param, at, knownValue) {
+    if (typeof param.cancelAndHoldAtTime === 'function') { param.cancelAndHoldAtTime(at); }
+    else { param.cancelScheduledValues(at); param.setValueAtTime(Math.max(0.0001, knownValue), at); }
+  }
+  /**
+   * Multiplicative amplitude modulation stage: out = in * (1 - depth + depth * sin(2*pi*rate*t)), i.e. the
+   * level swings between 1-2*depth and 1. Inserted in SERIES before the envelope so the ADSR still gates the voice.
+   */
+  function amStage(rate, depth, t0, t1) {
+    const dpt = clamp01(depth);
+    const mod = ctx.createGain(); mod.gain.value = 1 - dpt;
+    const l = ctx.createOscillator(); l.frequency.value = rate; const lg = ctx.createGain(); lg.gain.value = dpt;
+    l.connect(lg); lg.connect(mod.gain); l.start(t0); l.stop(t1);
+    return mod;
+  }
+  /**
+   * Oscillator voice with ADSR (seconds) and optional pitch glide, biquad filter and LFO.
+   * OscOpts = { type, freq, freqEnd, glide, detune, a, d, s, r, dur, gain, filter:{type,freq,freqEnd,sweep,q}, lfo:{rate,depth,target:'freq'|'gain'}, at }
+   * lfo.target 'freq' adds +/-depth Hz (vibrato); 'gain' is multiplicative tremolo with depth in 0..1 (see amStage).
+   */
+  function osc(out, o) {
+    const t0 = o.at !== undefined ? o.at : ctx.currentTime;
+    const a = o.a !== undefined ? o.a : 0.002, d = o.d !== undefined ? o.d : 0.08, s = o.s || 0, r = o.r !== undefined ? o.r : 0.03, dur = o.dur !== undefined ? o.dur : (a + d);
+    const tEnd = t0 + dur + r + 0.05;
+    const node = ctx.createOscillator(); node.type = o.type || 'sine';
+    node.frequency.setValueAtTime(o.freq, t0);
+    if (o.freqEnd) node.frequency.exponentialRampToValueAtTime(Math.max(1, o.freqEnd), t0 + (o.glide !== undefined ? o.glide : dur));
+    if (o.detune) node.detune.value = o.detune;
+    const env = ctx.createGain();
+    const peak = o.gain !== undefined ? o.gain : 0.5;
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(peak, t0 + a);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * (s > 0 ? s : 0.001)), t0 + a + d);
+    if (s > 0) env.gain.setValueAtTime(peak * s, t0 + dur);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + r);
+    let last = node;
+    if (o.filter) {
+      const f = ctx.createBiquadFilter(); f.type = o.filter.type || 'lowpass'; f.Q.value = o.filter.q !== undefined ? o.filter.q : 0.8;
+      f.frequency.setValueAtTime(o.filter.freq, t0);
+      if (o.filter.freqEnd) f.frequency.exponentialRampToValueAtTime(o.filter.freqEnd, t0 + (o.filter.sweep !== undefined ? o.filter.sweep : dur));
+      node.connect(f); last = f;
+    }
+    if (o.lfo && o.lfo.target === 'gain') { const mod = amStage(o.lfo.rate, o.lfo.depth, t0, tEnd); last.connect(mod); last = mod; }
+    else if (o.lfo) {
+      const l = ctx.createOscillator(); l.frequency.value = o.lfo.rate; const lg = ctx.createGain(); lg.gain.value = o.lfo.depth;
+      l.connect(lg); lg.connect(node.frequency); l.start(t0); l.stop(tEnd);
+    }
+    last.connect(env); env.connect(out);
+    node.start(t0); node.stop(tEnd);
+    return node;
+  }
+  /** Filtered white-noise burst. NoiseOpts = { a, d, s, r, dur, gain, rate, filter:{type,freq,freqEnd,sweep,q}, at } */
+  function noise(out, n) {
+    const t0 = n.at !== undefined ? n.at : ctx.currentTime;
+    const a = n.a !== undefined ? n.a : 0.001, d = n.d !== undefined ? n.d : 0.05, s = n.s || 0, r = n.r !== undefined ? n.r : 0.02, dur = n.dur !== undefined ? n.dur : (a + d);
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    src.playbackRate.value = n.rate !== undefined ? n.rate : 1;
+    const fo = n.filter || {};
+    const f = ctx.createBiquadFilter(); f.type = fo.type || 'bandpass'; f.Q.value = fo.q !== undefined ? fo.q : 1;
+    f.frequency.setValueAtTime(fo.freq || 1000, t0);
+    if (fo.freqEnd) f.frequency.exponentialRampToValueAtTime(fo.freqEnd, t0 + (fo.sweep !== undefined ? fo.sweep : dur));
+    const env = ctx.createGain(); const peak = n.gain !== undefined ? n.gain : 0.3;
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(peak, t0 + a);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * (s > 0 ? s : 0.001)), t0 + a + d);
+    if (s > 0) env.gain.setValueAtTime(peak * s, t0 + dur);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + r);
+    src.connect(f); f.connect(env); env.connect(out);
+    src.start(t0, rng() * 1.5); src.stop(t0 + dur + r + 0.05);
+    return src;
+  }
+  /** Melodic note: triangle (LP 3 kHz) + quiet square an octave down (LP 1.2 kHz, 18 %). NoteOpts = { type, vib, r, lp, sub } */
+  function note(out, freq, at, len, gain, opts) {
+    const o = opts || {};
+    osc(out, { type: o.type || 'triangle', freq, at, a: 0.004, d: len * 0.6, s: 0.5, dur: len, r: o.r !== undefined ? o.r : 0.12, gain, filter: { type: 'lowpass', freq: o.lp || 3000 }, lfo: o.vib ? { rate: 6, depth: freq * 0.012, target: 'freq' } : undefined });
+    if (o.sub !== false) osc(out, { type: 'square', freq: freq / 2, at, a: 0.004, d: len * 0.5, s: 0.3, dur: len, r: o.r !== undefined ? o.r : 0.1, gain: gain * 0.18, filter: { type: 'lowpass', freq: 1200 } });
+  }
+  const C4 = 261.63, D4 = 293.66, E4 = 329.63, F4 = 349.23, G4 = 392.0, A4 = 440.0, B4 = 493.88;
+  const C5 = 523.25, D5 = 587.33, E5 = 659.25, F5 = 698.46, G5 = 783.99, A5 = 880.0, B5 = 987.77, C6 = 1046.5, E6 = 1318.5, G6 = 1568.0;
+
+  // ---------- SFX catalogue (one function per sound; every function takes a trailing SfxOpts { at, playerId, volume, ... }) ----------
+  const sfx = {
+    /** power01 in [0,1]. Thwock: pitched body + bandpassed click + snap; all scale with power. */
+    ballHit(power01 = 0.5, o = {}) {
+      const v = begin('ballHit', o, 0.25); if (!v) return; const { at, out } = v;
+      const p = clamp01(power01); const j = jitterCents(40); const lvl = dB(-8 + 7 * p);
+      osc(out, { type: 'sine', freq: (170 + 60 * p) * j, freqEnd: 70 * j, glide: 0.07, at, a: 0.001, d: 0.06 + 0.06 * p, gain: lvl * 0.9 });
+      noise(out, { at, a: 0.001, d: 0.03 + 0.04 * p, gain: lvl * (0.35 + 0.35 * p), filter: { type: 'bandpass', freq: 900 + 1400 * p, q: 1.2 } });
+      osc(out, { type: 'triangle', freq: (900 + 500 * p) * j, freqEnd: 400, glide: 0.03, at, a: 0.001, d: 0.025, gain: lvl * 0.25 * p });
+    },
+    /** strength01 = impact / MAX_BALL_SPEED. surface: BounceSurface = 'grass'|'dirtWall'|'bridge'|'blocker'|'levelEdge'|'ceiling'. */
+    bounce(strength01 = 0.5, surface = 'grass', o = {}) {
+      const s = clamp01(strength01);
+      if (s < 0.08 || !ready()) return;                    // settle micro-bounces are silent
+      const at0 = o.at !== undefined ? o.at : ctx.currentTime;
+      if (at0 < suppressUntil) return;                     // jingle playing
+      const v = begin('bounce', o, 0.2); if (!v) return; const { at, out } = v; const j = jitterCents(60);
+      if (surface === 'bridge') {                          // hollow wooden "tok"
+        const lvl = dB(-12 + 8 * s);
+        osc(out, { type: 'square', freq: 520 * j, freqEnd: 380 * j, glide: 0.04, at, a: 0.001, d: 0.045, gain: lvl * 0.5, filter: { type: 'lowpass', freq: 2200 } });
+        osc(out, { type: 'sine', freq: 900 * j, at, a: 0.001, d: 0.025, gain: lvl * 0.3 });
+        noise(out, { at, d: 0.015, gain: lvl * 0.25, filter: { type: 'bandpass', freq: 2500, q: 1.5 } });
+      } else if (surface === 'blocker') {                  // metallic "clang" (blocker gate wall)
+        const lvl = dB(-13 + 9 * s);
+        osc(out, { type: 'square', freq: 330 * j, freqEnd: 260 * j, glide: 0.05, at, a: 0.001, d: 0.05, gain: lvl * 0.6, filter: { type: 'lowpass', freq: 2800 } });
+        osc(out, { type: 'sine', freq: 1320 * j, at, a: 0.001, d: 0.04, gain: lvl * 0.4 });
+        noise(out, { at, d: 0.015, gain: lvl * 0.35, filter: { type: 'bandpass', freq: 3200, q: 1.2 } });
+      } else if (surface === 'dirtWall' || surface === 'levelEdge' || surface === 'ceiling') {   // woody
+        const lvl = dB(-14 + 10 * s);
+        osc(out, { type: 'triangle', freq: 240 * j, freqEnd: 120 * j, glide: 0.06, at, a: 0.001, d: 0.06, gain: lvl * 0.8 });
+        noise(out, { at, d: 0.03, gain: lvl * 0.45, filter: { type: 'bandpass', freq: 1800, q: 1.0 } });
+      } else {                                             // grass thud
+        const lvl = dB(-18 + 12 * s);
+        osc(out, { type: 'sine', freq: 160 * j, freqEnd: 70 * j, glide: 0.05, at, a: 0.001, d: 0.05 + 0.03 * s, gain: lvl });
+        noise(out, { at, d: 0.025, gain: lvl * 0.5, filter: { type: 'lowpass', freq: 600, q: 0.7 } });
+      }
+    },
+    /** Ball enters a sand zone: shuffled noise with a falling lowpass. */
+    enterSand(o = {}) {
+      const v = begin('enterSand', o, 0.35); if (!v) return; const { at, out } = v;
+      noise(out, { at, a: 0.005, d: 0.12, s: 0.35, dur: 0.14, r: 0.18, gain: dB(-10), rate: 0.9, filter: { type: 'lowpass', freq: 3000, freqEnd: 500, sweep: 0.3, q: 0.7 } });
+      noise(out, { at, a: 0.002, d: 0.04, gain: dB(-16), filter: { type: 'bandpass', freq: 1200, q: 0.7 } });
+    },
+    /** ballRest: quiet settle tick. */
+    rollStop(o = {}) {
+      const v = begin('rollStop', o, 0.1); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'sine', freq: 320 * jitterCents(50), freqEnd: 200, glide: 0.05, at, a: 0.001, d: 0.05, gain: dB(TUNE.rollStop) });
+    },
+    /** Spring pad: boing - fast upward glide with vibrato, plus a square thunk and a falling tail. */
+    spring(o = {}) {
+      const v = begin('spring', o, 0.5); if (!v) return; const { at, out } = v; const j = jitterCents(50);
+      osc(out, { type: 'square', freq: 110 * j, at, a: 0.001, d: 0.04, gain: dB(-10), filter: { type: 'lowpass', freq: 800 } });
+      osc(out, { type: 'sine', freq: 220 * j, freqEnd: 880 * j, glide: 0.09, at, a: 0.002, d: 0.3, gain: dB(-2), lfo: { rate: 18, depth: 30, target: 'freq' } });
+      osc(out, { type: 'triangle', freq: 660 * j, freqEnd: 440 * j, glide: 0.2, at: at + 0.09, a: 0.001, d: 0.2, gain: dB(-14) });
+    },
+    /** Bumper pad: pinball ding - square fundamental, sine octave, bright click. */
+    bumper(o = {}) {
+      const v = begin('bumper', o, 0.25); if (!v) return; const { at, out } = v; const j = jitterCents(30);
+      noise(out, { at, d: 0.008, gain: dB(-12), filter: { type: 'highpass', freq: 3000, q: 0.7 } });
+      osc(out, { type: 'square', freq: 880 * j, at, a: 0.001, d: 0.03, gain: dB(-9), filter: { type: 'lowpass', freq: 4000 } });
+      osc(out, { type: 'sine', freq: 1760 * j, at, a: 0.001, d: 0.09, gain: dB(-5) });
+      osc(out, { type: 'sine', freq: 2640 * j, at, a: 0.001, d: 0.05, gain: dB(-16) });
+    },
+    /** Colour gate rejects the wrong ball: electric bzzt (saw ring-modulated at 50 Hz, depth 0.5) + descending square. */
+    hazardBlock(o = {}) {
+      const v = begin('hazardBlock', o, 0.25); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'sawtooth', freq: 110, at, a: 0.002, d: 0.1, s: 0.5, dur: 0.12, r: 0.03, gain: dB(-7), filter: { type: 'lowpass', freq: 1200, q: 2 }, lfo: { rate: 50, depth: 0.5, target: 'gain' } });
+      osc(out, { type: 'square', freq: 220, freqEnd: 140, glide: 0.14, at, a: 0.002, d: 0.12, gain: dB(-13), filter: { type: 'lowpass', freq: 1500 } });
+      noise(out, { at, d: 0.02, gain: dB(-14), filter: { type: 'bandpass', freq: 2800, q: 2 } });
+    },
+    /** Matching ball passes a colour gate: quick upward "zwip" (mine passes, yours bounces). */
+    gatePass(o = {}) {
+      const v = begin('gatePass', o, 0.15); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'square', freq: 440, freqEnd: 880, glide: 0.06, at, a: 0.002, d: 0.06, gain: dB(-16), filter: { type: 'lowpass', freq: 2500 } });
+    },
+    /** Pressure switch pressed: mechanical click + rising E4->A4 confirm. */
+    switchOn(o = {}) {
+      const v = begin('switchOn', o, 0.25); if (!v) return; const { at, out } = v;
+      noise(out, { at, d: 0.012, gain: dB(-10), filter: { type: 'highpass', freq: 2000, q: 0.7 } });
+      osc(out, { type: 'sine', freq: 140, freqEnd: 70, glide: 0.04, at, a: 0.001, d: 0.05, gain: dB(-12) });
+      osc(out, { type: 'square', freq: E4, at: at + 0.03, a: 0.002, d: 0.05, gain: dB(-14), filter: { type: 'lowpass', freq: 2500 } });
+      osc(out, { type: 'square', freq: A4, at: at + 0.085, a: 0.002, d: 0.08, gain: dB(-12), filter: { type: 'lowpass', freq: 2500 } });
+    },
+    /** Switch released: clack + falling A4->E4, 3 dB quieter than switchOn. */
+    switchOff(o = {}) {
+      const v = begin('switchOff', o, 0.25); if (!v) return; const { at, out } = v;
+      noise(out, { at, d: 0.01, gain: dB(-13), filter: { type: 'highpass', freq: 1500, q: 0.7 } });
+      osc(out, { type: 'square', freq: A4, at: at + 0.02, a: 0.002, d: 0.05, gain: dB(-17), filter: { type: 'lowpass', freq: 2200 } });
+      osc(out, { type: 'square', freq: E4, at: at + 0.075, a: 0.002, d: 0.08, gain: dB(-15), filter: { type: 'lowpass', freq: 2200 } });
+    },
+    /** Bridge appears / blocker opens (active=true: ascending slide + 3 toks) or bridge vanishes / blocker closes (false: descending + clunk). */
+    bridgeToggle(active = true, o = {}) {
+      const v = begin('bridgeToggle', o, 0.35); if (!v) return; const { at, out } = v;
+      if (active) {
+        osc(out, { type: 'triangle', freq: 200, freqEnd: 400, glide: 0.18, at, a: 0.005, d: 0.18, gain: dB(-12) });
+        [500, 600, 700].forEach((f, i) => osc(out, { type: 'square', freq: f, freqEnd: f * 0.8, glide: 0.03, at: at + i * 0.06, a: 0.001, d: 0.03, gain: dB(-12), filter: { type: 'lowpass', freq: 2200 } }));
+      } else {
+        osc(out, { type: 'triangle', freq: 400, freqEnd: 150, glide: 0.22, at, a: 0.005, d: 0.22, gain: dB(-12) });
+        osc(out, { type: 'sine', freq: 90, freqEnd: 50, glide: 0.08, at: at + 0.2, a: 0.001, d: 0.08, gain: dB(-8) });
+        noise(out, { at: at + 0.2, d: 0.03, gain: dB(-16), filter: { type: 'lowpass', freq: 700 } });
+      }
+    },
+    /** Ball entered a fan volume (once per entry): short "whff" of rising air. The loop itself is driven by setFan(). */
+    fanEnter(o = {}) {
+      const v = begin('fanEnter', o, 0.3); if (!v) return; const { at, out } = v;
+      noise(out, { at, a: 0.02, d: 0.1, s: 0.3, dur: 0.16, r: 0.08, gain: dB(-14), filter: { type: 'lowpass', freq: 400, freqEnd: 1600, sweep: 0.12, q: 0.8 } });
+    },
+    /** Ball fell below the level: slide whistle down (9 Hz tremolo, depth 0.35) then a plop (respawn +1). */
+    fellOffWorld(o = {}) {
+      const v = begin('fellOffWorld', o, 0.85); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'sine', freq: 900, freqEnd: 200, glide: 0.6, at, a: 0.01, d: 0.5, s: 0.6, dur: 0.58, r: 0.04, gain: dB(-12), lfo: { rate: 9, depth: 0.35, target: 'gain' } });
+      osc(out, { type: 'sine', freq: 150, freqEnd: 60, glide: 0.08, at: at + 0.66, a: 0.001, d: 0.09, gain: dB(-9) });
+      noise(out, { at: at + 0.66, d: 0.05, gain: dB(-14), filter: { type: 'lowpass', freq: 800 } });
+    },
+    /** Rested within NEAR_CUP_RADIUS but outside GIMME_RADIUS: a questioning rising "whoop?". */
+    nearCup(o = {}) {
+      const v = begin('nearCup', o, 0.25); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'triangle', freq: 500, freqEnd: 700, glide: 0.12, at, a: 0.01, d: 0.12, gain: dB(TUNE.nearCup), filter: { type: 'lowpass', freq: 2500 } });
+    },
+    /** Crossed the cup too fast: falling "skip" + rim tick. Distinct from nearCup (which rises). */
+    lipOut(o = {}) {
+      const v = begin('lipOut', o, 0.2); if (!v) return; const { at, out } = v; const j = jitterCents(30);
+      osc(out, { type: 'sine', freq: 600 * j, freqEnd: 300 * j, glide: 0.06, at, a: 0.001, d: 0.07, gain: dB(-10) });
+      noise(out, { at, d: 0.015, gain: dB(-16), filter: { type: 'bandpass', freq: 2000, q: 1 } });
+      osc(out, { type: 'sine', freq: 400 * j, freqEnd: 250 * j, glide: 0.04, at: at + 0.05, a: 0.001, d: 0.04, gain: dB(-14) });
+    },
+    /** Gimme conceded: cheerful C5-E5-G5 square arpeggio; the sim's sink follows ~350 ms later (router mutes that sink's chime). */
+    gimme(o = {}) {
+      const v = begin('gimme', o, 0.45); if (!v) return; const { at, out } = v;
+      [C5, E5, G5].forEach((f, i) => osc(out, { type: 'square', freq: f, at: at + i * 0.07, a: 0.002, d: 0.06, s: 0.4, dur: 0.07, r: 0.08, gain: dB(-9), filter: { type: 'lowpass', freq: 3000 } }));
+    },
+    /** Ball drops in: plonk + rattle; chime (G5->C6) only for a genuine rolled-in sink (o.chime !== false). */
+    sink(o = {}) {
+      const chime = o.chime !== false;
+      const v = begin('sink', o, chime ? 0.6 : 0.2); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'sine', freq: 420, freqEnd: 180, glide: 0.09, at, a: 0.001, d: 0.09, gain: dB(-5) });
+      noise(out, { at, d: 0.02, gain: dB(-12), filter: { type: 'lowpass', freq: 1500 } });
+      [0, 0.045, 0.08].forEach((dt, i) => osc(out, { type: 'square', freq: 1400 - i * 200, at: at + 0.03 + dt, a: 0.001, d: 0.012, gain: dB(-16 - i * 3), filter: { type: 'lowpass', freq: 3000 } }));
+      if (chime) { note(out, G5, at + 0.16, 0.09, dB(-9)); note(out, C6, at + 0.26, 0.2, dB(-7), { r: 0.25 }); }
+    },
+    /** New turn. playerId 0 = red (C5), 1 = blue (G5). o.sameAsBefore: whoosh only (same player continues). */
+    turnStart(playerId = 0, o = {}) {
+      const v = begin('turnStart', o, 0.3); if (!v) return; const { at, out } = v;
+      if (!o.sameAsBefore) osc(out, { type: 'triangle', freq: playerId === 0 ? C5 : G5, at, a: 0.002, d: 0.14, gain: dB(TUNE.turnDing), filter: { type: 'lowpass', freq: 2500 } });
+      noise(out, { at, a: 0.03, d: 0.08, s: 0.3, dur: 0.12, r: 0.1, gain: dB(-26), filter: { type: 'lowpass', freq: 1200, freqEnd: 400, sweep: 0.2 } });
+    },
+    /** Level results jingle. medal: Medal. One motif, more notes for better medals. Ducks music by 4 dB. */
+    levelComplete(medal = 'bronze', o = {}) {
+      const v = begin('levelComplete', o, 1.4); if (!v) return; const { at, out } = v;
+      const seq = { gold: [[C5, 0], [E5, 0.1], [G5, 0.2], [C6, 0.3], [E6, 0.45]], silver: [[C5, 0], [E5, 0.11], [G5, 0.22], [C6, 0.33]],
+        bronze: [[C5, 0], [E5, 0.12], [G5, 0.24]], none: [[G4, 0], [C5, 0.15]] }[medal] || [[G4, 0], [C5, 0.15]];
+      const lvl = dB(medal === 'none' ? -8 : -4);
+      seq.forEach(([f, dt], i) => { const last = i === seq.length - 1; note(out, f, at + dt, last ? (medal === 'gold' ? 0.6 : 0.45) : 0.09, lvl, { vib: last, r: last ? 0.35 : 0.1 }); });
+      if (medal === 'gold') noise(out, { at: at + 0.45, a: 0.02, d: 0.3, gain: dB(-22), filter: { type: 'highpass', freq: 6000, q: 0.7 } });
+      duck(at, 1.3); suppressUntil = at + 1.0;
+    },
+    /** Campaign results: I-IV-V-I chord stabs then E5 G5 C6 G6 melody. 2.4 s. Ducks music by 4 dB. */
+    campaignComplete(o = {}) {
+      const v = begin('campaignComplete', o, 2.4); if (!v) return; const { at, out } = v;
+      const chords = [[C4, E4, G4], [F4, A4, C5], [G4, B4, D5], [C4, E4, G4]];
+      chords.forEach((ch, i) => ch.forEach((f) => note(out, f, at + i * 0.22, 0.18, dB(-14), { sub: false })));
+      [[E5, 0.9], [G5, 1.02], [C6, 1.14], [G6, 1.3]].forEach(([f, dt], i) => note(out, f, at + dt, i === 3 ? 0.7 : 0.1, dB(-5), { vib: i === 3, r: i === 3 ? 0.4 : 0.1 }));
+      noise(out, { at: at + 1.3, a: 0.02, d: 0.4, gain: dB(-20), filter: { type: 'highpass', freq: 6000, q: 0.7 } });
+      duck(at, 2.4); suppressUntil = at + 1.8;
+    },
+    /** Button press. */
+    uiClick(o = {}) {
+      const v = begin('uiClick', o, 0.08); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'square', freq: 1100, at, a: 0.001, d: 0.018, gain: dB(-14), filter: { type: 'lowpass', freq: 4000 } });
+      osc(out, { type: 'sine', freq: 2200, at, a: 0.001, d: 0.008, gain: dB(-18) });
+    },
+    /** Back / cancel / level restart announced: descending cousin of uiClick. */
+    uiBack(o = {}) {
+      const v = begin('uiBack', o, 0.1); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'square', freq: 900, freqEnd: 650, glide: 0.05, at, a: 0.001, d: 0.04, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+      osc(out, { type: 'sine', freq: 1300, at, a: 0.001, d: 0.008, gain: dB(-20) });
+    },
+    /** Mouse enters a button / keyboard focus moves. Very quiet. Never on touch. */
+    uiHover(o = {}) {
+      const v = begin('uiHover', o, 0.06); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'sine', freq: 1500, at, a: 0.001, d: 0.012, gain: dB(TUNE.uiHover) });
+    },
+    /** Rejected action: shoot during flight / not your turn / bad room code. Two low bonks. */
+    uiInvalid(o = {}) {
+      const v = begin('uiInvalid', o, 0.3); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'square', freq: 180, freqEnd: 140, glide: 0.08, at, a: 0.002, d: 0.08, gain: dB(-10), filter: { type: 'lowpass', freq: 1200 } });
+      osc(out, { type: 'square', freq: 160, freqEnd: 120, glide: 0.08, at: at + 0.12, a: 0.002, d: 0.08, gain: dB(-10), filter: { type: 'lowpass', freq: 1200 } });
+    },
+    uiPause(o = {}) {
+      const v = begin('uiPause', o, 0.25); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'square', freq: G5, at, a: 0.002, d: 0.06, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+      osc(out, { type: 'square', freq: E5, at: at + 0.08, a: 0.002, d: 0.1, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+    },
+    /** Resume: a single C5 with a 20 ms noise click (not the E5-G5 pair, which is partnerJoined's). */
+    uiResume(o = {}) {
+      const v = begin('uiResume', o, 0.2); if (!v) return; const { at, out } = v;
+      noise(out, { at, d: 0.02, gain: dB(-16), filter: { type: 'highpass', freq: 2500, q: 0.7 } });
+      osc(out, { type: 'square', freq: C5, at, a: 0.002, d: 0.12, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+    },
+    partnerJoined(o = {}) {
+      const v = begin('partnerJoined', o, 0.5); if (!v) return; const { at, out } = v;
+      note(out, E5, at, 0.1, dB(-10)); note(out, G5, at + 0.14, 0.22, dB(-9), { r: 0.2 });
+    },
+    partnerLeft(o = {}) {
+      const v = begin('partnerLeft', o, 0.5); if (!v) return; const { at, out } = v;
+      note(out, G5, at, 0.1, dB(-12)); note(out, E5, at + 0.14, 0.22, dB(-11), { r: 0.2 });
+    },
+    /** Power meter crosses a 10 % notch while aiming. Barely audible; keeps the slingshot drag tactile. */
+    aimTick(power01 = 0.5, o = {}) {
+      const v = begin('aimTick', o, 0.05); if (!v) return; const { at, out } = v;
+      osc(out, { type: 'triangle', freq: 600 + 900 * clamp01(power01), at, a: 0.001, d: 0.012, gain: dB(TUNE.aimTick) });
+    },
+  };
+
+  /** ARCH 1.10 play(name: SfxName, volume?). volume: power01 for 'hit', strength01 for bounce*, else a 0..1 multiplier. */
+  const PLAY = {
+    hit: (v) => sfx.ballHit(v === undefined ? 0.5 : v), bounceSoft: (v) => sfx.bounce(v === undefined ? 0.3 : v, 'grass'), bounceHard: (v) => sfx.bounce(v === undefined ? 0.7 : v, 'dirtWall'),
+    sand: (v) => sfx.enterSand({ volume: v }), spring: (v) => sfx.spring({ volume: v }), bumper: (v) => sfx.bumper({ volume: v }), fan: (v) => sfx.fanEnter({ volume: v }),
+    gateBlock: (v) => sfx.hazardBlock({ volume: v }), gatePass: (v) => sfx.gatePass({ volume: v }), switchOn: (v) => sfx.switchOn({ volume: v }), switchOff: (v) => sfx.switchOff({ volume: v }),
+    bridge: (v) => sfx.bridgeToggle(true, { volume: v }), fall: (v) => sfx.fellOffWorld({ volume: v }), rest: (v) => sfx.rollStop({ volume: v }), nearCup: (v) => sfx.nearCup({ volume: v }),
+    lipOut: (v) => sfx.lipOut({ volume: v }), gimme: (v) => sfx.gimme({ volume: v }), sink: (v) => sfx.sink({ volume: v }), levelWin: (v) => sfx.levelComplete('gold', { volume: v }),
+    campaignWin: (v) => sfx.campaignComplete({ volume: v }), turn: (v) => sfx.turnStart(0, { volume: v }), uiClick: (v) => sfx.uiClick({ volume: v }), uiBack: (v) => sfx.uiBack({ volume: v }),
+    uiHover: (v) => sfx.uiHover({ volume: v }), uiInvalid: (v) => sfx.uiInvalid({ volume: v }), uiPause: (v) => sfx.uiPause({ volume: v }), uiResume: (v) => sfx.uiResume({ volume: v }),
+    partnerJoined: (v) => sfx.partnerJoined({ volume: v }), partnerLeft: (v) => sfx.partnerLeft({ volume: v }), aimTick: (v) => sfx.aimTick(v === undefined ? 0.5 : v),
+  };
+  function play(name, volume) { const f = PLAY[name]; if (f) f(volume); }
+
+  // ---------- fan loop (single instance, state-driven via setFan) ----------
+  const fan = (() => {
+    let nodes = null, fade = null, level = dB(-20);
+    function start() {
+      if (!ready() || nodes) return; const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 350; lp.Q.value = 0.8;
+      const hum = ctx.createOscillator(); hum.type = 'sine'; hum.frequency.value = 55;
+      const humG = ctx.createGain(); humG.gain.value = 0.35;
+      const mod = amStage(0.7, 0.12, t, t + 3600);        // gentle 0.7 Hz wobble, +/-1.1 dB, multiplicative
+      fade = ctx.createGain(); level = dB(-18);
+      fade.gain.setValueAtTime(0.0001, t); fade.gain.exponentialRampToValueAtTime(level, t + 0.15);
+      src.connect(lp); lp.connect(mod); hum.connect(humG); humG.connect(mod); mod.connect(fade); fade.connect(sfxBus);
+      src.start(t); hum.start(t);
+      nodes = { src, hum, lp, mod };
+    }
+    function stop() {
+      if (!nodes) return; const n = nodes, g = fade; nodes = null; fade = null;
+      const t = ctx.currentTime; holdAt(g.gain, t, level);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      n.src.stop(t + 0.35); n.hum.stop(t + 0.35);
+      n.src.onended = () => { try { g.disconnect(); } catch (_) {} };
+    }
+    /** k in [0,1] = how hard the fan pushes (1 - (ball.y - rect.y) / rect.h). Cutoff 350..1250 Hz, level -21..-15 dB, 80 ms smoothing. */
+    function setIntensity(k) {
+      if (!nodes) return; const t = ctx.currentTime; const v = clamp01(k);
+      nodes.lp.frequency.setTargetAtTime(350 + 900 * v, t, 0.08);
+      level = dB(-21 + 6 * v); fade.gain.setTargetAtTime(level, t, 0.08);
+    }
+    return { start, stop, setIntensity, get running() { return !!nodes; } };
+  })();
+  /** Called once per frame by GameCanvas: active = some non-sunk ball centre inside a FanRect AABB. */
+  function setFan(active, intensity01) {
+    if (!ready()) return;
+    if (active) { if (!fan.running) fan.start(); fan.setIntensity(intensity01 === undefined ? 0.6 : intensity01); }
+    else if (fan.running) fan.stop();
+  }
+
+  // ---------- music: generative bed (title = pad + bass, play = + plucks) ----------
+  function duck(at, seconds) {
+    if (!ctx || !settings.music) return;
+    holdAt(musicBus.gain, at, dB(musicBusDb));
+    musicBus.gain.linearRampToValueAtTime(dB(musicBusDb - 4), at + 0.06);
+    musicBus.gain.linearRampToValueAtTime(dB(musicBusDb), at + seconds + 0.8);
+  }
+  const music = (() => {
+    const BPM = 84, BEAT = 60 / BPM, BARS = 16, PAD_GAIN = dB(-26);
+    const LOOK_FG = 0.15, LOOK_BG = 2.5, INT_FG = 50, INT_BG = 1000;
+    // Chord tones (octave 3/4), bass root, shimmer (chord 5th in octave 5, nothing above B5) and the pluck pool.
+    const CH = [
+      { name: 'Cmaj7', pad: [C4, E4, G4, B4], bass: C4 / 2, shimmer: G5, pool: [C5, D5, E5, G5, A5] },
+      { name: 'Am7',   pad: [A4 / 2, C4, E4, G4], bass: A4 / 4, shimmer: E5, pool: [C5, D5, E5, G5, A5] },
+      { name: 'Fmaj7', pad: [F4, A4, C5, E5], bass: F4 / 2, shimmer: C5, pool: [C5, D5, E5, F5, A5] },
+      { name: 'G6',    pad: [G4, B4, D5, E5], bass: G4 / 2, shimmer: D5, pool: [D5, E5, G5, A5, B5] },
+    ];
+    let timer = null, nextBeat = 0, beatIndex = 0, mode = 'title', wantedMode = null, lastPluck = 0, padVoices = [], padChordIdx = -1;
+    let look = LOOK_FG, intervalMs = INT_FG, hidden = false;
+    const chordAt = (b) => Math.floor((Math.floor(b / 4) % BARS) / 2) % CH.length;
+    function padChord(i, at) {
+      // Crossfade: previous pad voices release over 1.5 s, new ones attack over 1.2 s. Never reads gain.value (see holdAt).
+      padVoices.forEach((v) => { holdAt(v.g.gain, at, PAD_GAIN); v.g.gain.linearRampToValueAtTime(0.0001, at + 1.5); v.oscs.forEach((o) => o.stop(at + 1.6)); });
+      padVoices = []; padChordIdx = i;
+      const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(PAD_GAIN, at + 1.2);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 0.7;
+      const lfo = ctx.createOscillator(); lfo.frequency.value = 0.08; const lfoG = ctx.createGain(); lfoG.gain.value = 200; lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start(at);
+      const oscs = [lfo];
+      CH[i].pad.forEach((f) => {
+        [-7, 7].forEach((cents) => { const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f; o.detune.value = cents; o.connect(lp); o.start(at); oscs.push(o); });
+      });
+      const sub = ctx.createOscillator(); sub.type = 'sine'; sub.frequency.value = CH[i].pad[0] / 2; const sg = ctx.createGain(); sg.gain.value = 0.5; sub.connect(sg); sg.connect(lp); sub.start(at); oscs.push(sub);
+      // shimmer: chord 5th in octave 5 at -14 dB relative to the chord tones, 0.3 Hz multiplicative tremolo depth 0.4
+      const sh = ctx.createOscillator(); sh.type = 'sine'; sh.frequency.value = CH[i].shimmer; const shg = ctx.createGain(); shg.gain.value = dB(-14);
+      const trem = amStage(0.3, 0.4, at, at + 60);
+      sh.connect(shg); shg.connect(trem); trem.connect(lp); sh.start(at); sh.stop(at + 60); oscs.push(sh);
+      lp.connect(g); g.connect(musicBus);
+      padVoices.push({ g, oscs });
+    }
+    function bass(i, at) { osc(musicBus, { type: 'sine', freq: CH[i].bass, at, a: 0.02, d: 1.6, gain: dB(-20) }); }
+    function pluck(f, at) {
+      osc(musicBus, { type: 'triangle', freq: f, at, a: 0.003, d: 0.32, gain: dB(-22), filter: { type: 'lowpass', freq: 2400 } });
+      osc(musicBus, { type: 'sine', freq: f * 2, at, a: 0.003, d: 0.12, gain: dB(-32) });
+    }
+    function scheduleBeat(b, at) {
+      const bar = Math.floor(b / 4) % BARS, beat = b % 4, chord = chordAt(b);
+      if (bar % 2 === 0 && beat === 0) padChord(chord, at);
+      if (beat === 0 || beat === 2) bass(chord, at);
+      if (mode === 'play') {
+        const resting = bar % 8 >= 6;                    // bars 7-8 of each 8-bar phrase breathe
+        for (let e = 0; e < 2; e++) {                   // two 8th notes per beat
+          const p = resting ? 0.08 : (beat === 0 ? 0.5 : 0.3);
+          if (rng() < p) {
+            const pool = CH[chord].pool; let f = pool[Math.floor(rng() * pool.length)];
+            if (f === lastPluck) f = pool[(pool.indexOf(f) + 1) % pool.length];
+            lastPluck = f; pluck(f, at + e * BEAT / 2);
+          }
+        }
+      }
+    }
+    function tick() {
+      const now = ctx.currentTime;
+      if (nextBeat < now - 0.25) {                       // catch-up clamp: skip missed beats instead of stacking them
+        const skipped = Math.ceil((now - nextBeat) / BEAT); beatIndex += skipped; nextBeat += skipped * BEAT;
+        if (chordAt(beatIndex) !== padChordIdx) padChord(chordAt(beatIndex), now);
+      }
+      while (nextBeat < now + look) { scheduleBeat(beatIndex, nextBeat); beatIndex++; nextBeat += BEAT; }
+    }
+    function startTimer() { if (timer) clearInterval(timer); timer = setInterval(tick, intervalMs); }
+    /** Always records wantedMode; actually starts only when running + music enabled. unlock()/onRunning retries it. */
+    function start(m) {
+      if (m) mode = m; wantedMode = mode;
+      if (!ready() || !settings.music || timer) return;
+      nextBeat = ctx.currentTime + 0.05; beatIndex = 0; padChordIdx = -1; startTimer(); tick();
+    }
+    function halt(fadeSec) {
+      if (!timer) return; clearInterval(timer); timer = null;
+      const at = ctx.currentTime; padVoices.forEach((v) => { holdAt(v.g.gain, at, PAD_GAIN); v.g.gain.linearRampToValueAtTime(0.0001, at + fadeSec); v.oscs.forEach((o) => o.stop(at + fadeSec + 0.1)); }); padVoices = []; padChordIdx = -1;
+    }
+    function stop() { wantedMode = null; halt(1.0); }
+    /** 'title' | 'play'. Does not restart the scheduler (the bed is continuous from Title into the first hole). */
+    function setMode(m) { mode = m; if (wantedMode) wantedMode = m; else start(m); }
+    /** Hidden tabs: 2.5 s lookahead on a 1 s interval (Chrome throttles timers to >= 1/s; after 5 min hidden to 1/min and the bed will gap). */
+    function setBackground(h) { hidden = !!h; look = hidden ? LOOK_BG : LOOK_FG; intervalMs = hidden ? INT_BG : INT_FG; if (timer) { startTimer(); tick(); } }
+    return { start, stop, halt, setMode, setBackground, get playing() { return !!timer; }, get mode() { return mode; }, get wantedMode() { return wantedMode; }, get hidden() { return hidden; } };
+  })();
+
+  // ---------- settings (audio.ts owns persistence; App seeds its `muted` state from audio.settings) ----------
+  function setMuted(b) { settings.muted = !!b; saveSetting(STORAGE.muted, b ? '1' : '0'); applyGains(false); }
+  function isMuted() { return settings.muted; }
+  function setMusic(b) { settings.music = !!b; saveSetting(STORAGE.music, b ? '1' : '0'); applyGains(false); if (b) music.start(); else music.halt(0.6); }
+  function setVolume(v) { settings.volume = clamp01(v); saveSetting(STORAGE.volume, String(settings.volume)); applyGains(false); }
+  function setBusDb(sfxDb, musDb) { if (typeof sfxDb === 'number') sfxBusDb = sfxDb; if (typeof musDb === 'number') musicBusDb = musDb; applyGains(false); }
+
+  // ---------- sim event router ----------
+  /**
+   * handleEvents(events: readonly SimEvent[], delaySec = 0). Field names are the real SimEventBody ones.
+   * Events from a multi-tick frame are scheduled at base + (tick - firstTick) * DT (capped at 250 ms) so two balls
+   * acting on different ticks keep their spacing and simultaneous bounces do not phase-sum. delaySec lets GameClient
+   * align sounds with CLIENT_RENDER_DELAY_MS.
+   */
+  function handleEvents(events, delaySec) {
+    if (!events || events.length === 0) return;
+    // Phase tracking runs even before unlock so introVisible is right when sound arrives.
+    for (const ev of events) { if (ev.type === 'levelStart') introVisible = true; else if (ev.type === 'playStart') introVisible = false; }
+    if (!ready()) return;
+    const base = ctx.currentTime + (delaySec || 0); const t0 = events[0].tick;
+    const completeTicks = new Set(); let campaignTick = -1;
+    for (const ev of events) { if (ev.type === 'levelComplete') completeTicks.add(ev.tick); if (ev.type === 'campaignComplete') campaignTick = ev.tick; }
+    for (const ev of events) {
+      const at = base + Math.min(0.25, (ev.tick - t0) * DT); const pid = ev.playerId; const o = { at, playerId: pid };
+      switch (ev.type) {
+        case 'playStart': music.setMode('play'); break;
+        case 'ballHit': sfx.ballHit(ev.power / MAX_POWER, o); break;
+        case 'bounce': sfx.bounce(ev.strength, ev.surface, o); break;
+        case 'enterSand': sfx.enterSand(o); break;
+        case 'ballRest': sfx.rollStop(o); break;
+        case 'spring': sfx.spring(o); break;
+        case 'bumper': sfx.bumper(o); break;
+        case 'fan': sfx.fanEnter(o); break;                       // the loop is state-driven: setFan() per frame
+        case 'hazardBlock': sfx.hazardBlock(o); break;
+        case 'gatePass': sfx.gatePass(o); break;
+        case 'switchOn': sfx.switchOn({ at }); break;
+        case 'switchOff': sfx.switchOff({ at }); break;
+        case 'bridgeToggle': sfx.bridgeToggle(!!ev.active, { at, playerId: ev.rectId }); break;   // keyed per rect: two bridges on one switch both sound
+        case 'fellOffWorld': sfx.fellOffWorld(o); break;
+        case 'nearCup': sfx.nearCup(o); break;
+        case 'lipOut': sfx.lipOut(o); break;
+        case 'gimme': lastGimmeAt[pid] = at; sfx.gimme(o); break;
+        case 'sink': {
+          const afterGimme = at - lastGimmeAt[pid] < 0.6;        // the gimme arpeggio already resolved; plonk only
+          const withJingle = completeTicks.has(ev.tick) || campaignTick === ev.tick;   // the jingle resolves it
+          sfx.sink({ at, playerId: pid, chime: !afterGimme && !withJingle }); break;
+        }
+        case 'turnStart': if (!introVisible) sfx.turnStart(pid, { at, sameAsBefore: !!ev.sameAsBefore }); break;
+        case 'levelComplete': music.setMode('title'); if (campaignTick !== ev.tick) sfx.levelComplete(ev.result.medal, { at: at + 0.35 }); break;   // let the sink plonk finish first
+        case 'campaignComplete': music.setMode('title'); sfx.campaignComplete({ at: at + 0.35 }); break;
+        case 'levelRestart': sfx.uiBack({ at }); break;
+        case 'commandRejected': if (ev.reason !== 'turnDelay') sfx.uiInvalid({ at }); break;   // eager Space during the hand-off is expected, not an error
+        default: break;
+      }
+    }
+  }
+
+  /** Stops timers and loops, removes listeners, disconnects master. Never closes the context (create once per page). */
+  function dispose() {
+    music.halt(0.2); if (fan.running) fan.stop(); detachGesture();
+    listeners.splice(0).forEach(([tgt, type, fn, capture]) => tgt.removeEventListener(type, fn, capture));
+    readyCbs.length = 0;
+    if (master) { try { master.disconnect(); } catch (_) {} }
+  }
+
+  return {
+    // ARCH.md 1.10 AudioSystem
+    unlock, handleEvents, play, setMuted, isMuted, setMusic, dispose,
+    // additions (AUDIO.md section 1)
+    attachUnlock, onReady, setVolume, setFan, settings, sfx, fan, music,
+    get ready() { return ready(); },
+    // debug only
+    setBusDb, get context() { return ctx; },
+  };
+}
+// ===================================== END PORT BOUNDARY =====================================
+
+// ---------- demo wiring (stays in this page) ----------
+const audio = createAudio();
+audio.attachUnlock(window);
+const $ = (id) => document.getElementById(id);
+const log = (m) => { const el = $('log'); el.textContent = `${new Date().toLocaleTimeString()}  ${m}\n` + el.textContent; };
+$('musicOn').checked = audio.settings.music; $('vol').value = Math.round(audio.settings.volume * 100);
+$('musicOn').addEventListener('change', (e) => { audio.setMusic(e.target.checked); log('music=' + e.target.checked); });
+$('vol').addEventListener('input', (e) => audio.setVolume(Number(e.target.value) / 100));
+$('sfxDb').addEventListener('input', (e) => { audio.setBusDb(Number(e.target.value), undefined); $('sfxDbV').textContent = e.target.value + ' dB'; });
+$('musDb').addEventListener('input', (e) => { audio.setBusDb(undefined, Number(e.target.value)); $('musDbV').textContent = e.target.value + ' dB'; });
+
+// HUD mute button: three states. The click acts on the state the player SAW (data-state), never on audio.ready at
+// click time, because the capture-phase unlock listener has already flipped ready by the time click fires.
+const ICON = {
+  locked: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 5l2 2M21 3l-1 2M19 9h3" stroke-linecap="round"/></svg><span>Tap for sound</span>',
+  on: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" stroke-linecap="round"/></svg><span>Mute (M)</span>',
+  muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9l5 6M21 9l-5 6" stroke-linecap="round"/></svg><span>Unmute (M)</span>',
+};
+function renderHud() {
+  const st = !audio.ready ? 'locked' : (audio.isMuted() ? 'muted' : 'on');
+  const b = $('hudMute'); b.dataset.state = st; b.innerHTML = ICON[st];
+  b.setAttribute('aria-label', st === 'locked' ? 'Enable sound' : st === 'muted' ? 'Unmute' : 'Mute');
+  b.title = st === 'locked' ? 'Tap for sound' : st === 'muted' ? 'Unmute (M)' : 'Mute (M)';
+  const s = $('status'); if (audio.ready) { s.textContent = 'audio running (' + audio.context.sampleRate + ' Hz)'; s.className = 'status ok'; }
+}
+$('hudMute').addEventListener('click', () => {
+  const wasLocked = $('hudMute').dataset.state === 'locked';
+  if (wasLocked) { audio.unlock(); audio.sfx.uiClick(); log('HUD: unlock only (no mute toggle)'); }
+  else { audio.setMuted(!audio.isMuted()); log('HUD: muted=' + audio.isMuted()); }
+  renderHud();
+});
+window.addEventListener('keydown', (e) => { if (e.code === 'KeyM' && audio.ready && !e.repeat) { audio.setMuted(!audio.isMuted()); renderHud(); } });
+audio.onReady(renderHud); renderHud();
+window.addEventListener('pointerdown', () => setTimeout(renderHud, 50), true);
+window.addEventListener('keydown', () => setTimeout(renderHud, 50), true);
+
+document.querySelectorAll('button[data-sfx]').forEach((b) => {
+  b.addEventListener('click', () => {
+    audio.unlock(); renderHud();
+    const name = b.dataset.sfx; const raw = b.dataset.arg; const arg = raw === undefined ? undefined : JSON.parse(raw);
+    if (Array.isArray(arg)) audio.sfx[name](...arg); else if (arg === undefined) audio.sfx[name](); else audio.sfx[name](arg);
+    log(name + (raw ? '(' + raw + ')' : '()'));
+  });
+});
+// Hover: mouse only (pointerenter precedes every tap on touch); keyboard focus variant only when :focus-visible.
+document.querySelectorAll('button').forEach((b) => {
+  b.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse' && audio.ready) audio.sfx.uiHover(); });
+  b.addEventListener('focus', (e) => { if (audio.ready && e.target.matches(':focus-visible')) audio.sfx.uiHover(); });
+});
+
+// Router sequences with real SimEvent shapes.
+const SEQ = {
+  gimmeHoleOut() {
+    audio.handleEvents([{ type: 'gimme', tick: 100, playerId: 0, pos: { x: 0, y: 0 }, strokes: 3 }]);
+    setTimeout(() => audio.handleEvents([{ type: 'sink', tick: 121, playerId: 0, pos: { x: 0, y: 0 }, strokes: 3, speed: 0 }]), 350);
+    return 'gimme(P1) then sink(P1) 350 ms later: sink plays plonk only';
+  },
+  sinkComplete() {
+    audio.handleEvents([
+      { type: 'sink', tick: 200, playerId: 1, pos: { x: 0, y: 0 }, strokes: 2, speed: 180 },
+      { type: 'levelComplete', tick: 200, result: { levelId: 'w1-01', par: 6, strokes: [3, 2], medal: 'gold' }, teamStrokes: 5, isLastLevel: false },
+    ]);
+    return 'sink + levelComplete same tick: sink skips its chime, gold jingle at +350 ms';
+  },
+  twoFall() {
+    audio.handleEvents([
+      { type: 'fellOffWorld', tick: 300, playerId: 0, pos: { x: 0, y: 900 }, respawnPos: { x: 0, y: 0 }, strokes: 4 },
+      { type: 'fellOffWorld', tick: 300, playerId: 1, pos: { x: 0, y: 900 }, respawnPos: { x: 0, y: 0 }, strokes: 4 },
+    ]);
+    return 'two fellOffWorld on one tick: both whistles play (keyed per player)';
+  },
+  twoBounce() {
+    audio.handleEvents([
+      { type: 'bounce', tick: 400, playerId: 0, pos: { x: 0, y: 0 }, normal: { x: 0, y: -1 }, strength: 0.6, surface: 'grass' },
+      { type: 'bounce', tick: 402, playerId: 1, pos: { x: 0, y: 0 }, normal: { x: 0, y: -1 }, strength: 0.6, surface: 'dirtWall' },
+    ]);
+    return 'bounces on ticks 400 and 402: second scheduled +33 ms';
+  },
+  rejected() {
+    audio.handleEvents([
+      { type: 'commandRejected', tick: 500, command: 'shoot', playerId: 0, reason: 'turnDelay' },
+      { type: 'commandRejected', tick: 500, command: 'shoot', playerId: 0, reason: 'wrongPhase' },
+    ]);
+    return 'turnDelay rejection silent; wrongPhase plays uiInvalid';
+  },
+};
+document.querySelectorAll('button[data-seq]').forEach((b) => b.addEventListener('click', () => { audio.unlock(); renderHud(); log(SEQ[b.dataset.seq]()); }));
+
+$('fanBtn').addEventListener('click', () => { audio.unlock(); const on = !audio.fan.running; audio.setFan(on, Number($('fanInt').value) / 100); $('fanBtn').classList.toggle('on', on); log('setFan(' + on + ')'); });
+$('fanInt').addEventListener('input', (e) => { if (audio.fan.running) audio.setFan(true, Number(e.target.value) / 100); });
+$('musTitle').addEventListener('click', () => { audio.unlock(); audio.setMusic(true); $('musicOn').checked = true; audio.music.start('title'); log('music title mode'); });
+$('musPlay').addEventListener('click', () => { audio.unlock(); audio.setMusic(true); $('musicOn').checked = true; audio.music.start('play'); log('music play mode'); });
+$('musStop').addEventListener('click', () => { audio.music.stop(); log('music stop'); });
+$('duckTest').addEventListener('click', () => { audio.unlock(); audio.setMusic(true); $('musicOn').checked = true; audio.music.start('play'); audio.sfx.levelComplete('gold'); log('levelComplete(gold) over music: bus ducks -4 dB for 1.3 s'); });
+$('bgToggle').addEventListener('click', () => { const h = !audio.music.hidden; audio.music.setBackground(h); $('bgToggle').classList.toggle('on', h); log('music background mode=' + h + ' (lookahead ' + (h ? '2.5 s / 1000 ms' : '0.15 s / 50 ms') + ')'); });
+</script>
+</body>
+</html>

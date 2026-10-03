@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="470" viewBox="0 0 1960 720">
+<rect width="1960" height="720" fill="#9ad7ff"/>
+<polygon points="0,624 120,616 220,630 320,630 350,620 400,640 470,640 520,620 520,720 0,720" fill="#8b5528" stroke="#2f5d1c" stroke-width="6"/>
+<polyline points="0,624 120,616 220,630 320,630 350,620 400,640 470,640 520,620" fill="none" stroke="#5cb838" stroke-width="12"/>
+<polygon points="1240,620 1256,620 1272,628 1540,628 1560,620 1700,616 1760,590 1800,584 1920,584 1960,590 1960,720 1240,720" fill="#8b5528" stroke="#2f5d1c" stroke-width="6"/>
+<polyline points="1240,620 1256,620 1272,628 1540,628 1560,620 1700,616 1760,590 1800,584 1920,584 1960,590" fill="none" stroke="#5cb838" stroke-width="12"/>
+<rect x="520" y="621.8" width="720" height="18" fill="#7ed38a" stroke="#222" stroke-width="3" opacity="1"/>
+<text x="880" y="613.8" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">BRIDGE [near:on]</text>
+<rect x="520" y="621.8" width="720" height="18" fill="#7ed38a" stroke="#222" stroke-width="3" opacity="1"/>
+<text x="880" y="613.8" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">BRIDGE [far:on]</text>
+<rect x="520" y="621.8" width="720" height="18" fill="#7ed38a" stroke="#222" stroke-width="3" opacity="1"/>
+<text x="880" y="613.8" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">BRIDGE [deck:on]</text>
+<rect x="400" y="638" width="70" height="12" fill="#f5e56b" stroke="#604b2d" stroke-width="3"/>
+<text x="435" y="630" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">SWITCH near</text>
+<rect x="1272" y="626" width="268" height="12" fill="#f5e56b" stroke="#604b2d" stroke-width="3"/>
+<text x="1406" y="618" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">SWITCH far</text>
+<rect x="544" y="619.8" width="672" height="12" fill="#f5e56b" stroke="#604b2d" stroke-width="3"/>
+<text x="880" y="611.8" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">SWITCH deck</text>
+<ellipse cx="1860" cy="584" rx="16" ry="6" fill="#111"/>
+<line x1="1864" y1="584" x2="1864" y2="514" stroke="#fff" stroke-width="4"/>
+<polygon points="1866,514 1910,526 1866,538" fill="#ff4040"/>
+<circle cx="250" cy="618" r="12" fill="#ff5d73" stroke="#222" stroke-width="3"/>
+<circle cx="290" cy="618" r="12" fill="#50b7ff" stroke="#222" stroke-width="3"/>
+<text x="20" y="40" font-size="30" font-family="sans-serif" font-weight="bold" fill="#123">Plate & Bridge — 1960×720, wind 0</text>
+</svg>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flash Golf HUD layout check</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ---- tokens (names are the contract; values from the visual track) ---- */
+  :root{
+    --ink:#241b33; --paper:#fff8e7; --paper-sh:#e9dcc0; --grass:#6ad636; --grass-sh:#45b02a;
+    --sun:#ffd93b; --sun-sh:#e0a800; --mint:#44d67a; --mint-sh:#2aa85a; --p1:#ff5d73; --p1-sh:#d63d55;
+    --p2:#50b7ff; --p2-sh:#2f8fd6; --warn:#ff9f1c; --bad:#e23b4f; --letterbox:#10263d;
+    --stage-scale:1; --hud-scale:1;
+    --font:"Fredoka","Arial Rounded MT Bold","Arial Black",sans-serif;
+  }
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--letterbox);font-family:var(--font);color:var(--ink)}
+  #root{position:fixed;inset:0}
+  /* absolute + translate(-50%,-50%) so an overflowing stage still centres (a grid track would grow and push it to the start) */
+  .stage{position:absolute;left:50%;top:50%;width:1280px;height:720px;transform:translate(-50%,-50%) scale(var(--stage-scale));transform-origin:center;overflow:hidden;outline:4px solid #1b1612;border-radius:6px}
+  canvas{position:absolute;inset:0}
+  .hud{position:absolute;inset:0;pointer-events:none}
+  /* ---- six anchored clusters; each scales from its own anchor corner ---- */
+  .cl{position:absolute;display:flex;align-items:center;gap:8px;pointer-events:none}
+  .cl>*{pointer-events:auto}
+  .tl{left:16px;top:12px;transform:scale(var(--hud-scale));transform-origin:top left}
+  .tc{left:50%;top:12px;transform:translateX(-50%) scale(var(--hud-scale));transform-origin:top center}
+  .tr{right:16px;top:12px;transform:scale(var(--hud-scale));transform-origin:top right}
+  .bl{left:16px;bottom:12px;gap:12px;transform:scale(var(--hud-scale));transform-origin:bottom left}
+  .br{right:16px;bottom:12px;transform:scale(var(--hud-scale));transform-origin:bottom right}
+  .banner{position:absolute;left:50%;width:500px;height:56px;transform:translateX(-50%) scale(var(--hud-scale));transform-origin:top center;
+    top:calc(12px + 48px * var(--hud-scale) + 8px + 12px);background:var(--p2);border:4px solid var(--ink);border-radius:16px;
+    box-shadow:0 5px 0 var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;
+    font-weight:700;font-size:28px;letter-spacing:.04em;paint-order:stroke fill;-webkit-text-stroke:2px var(--ink)}
+  .banner small{font-size:15px;font-weight:600;-webkit-text-stroke:0;color:#fff;letter-spacing:0}
+  .toast{position:absolute;left:50%;width:400px;height:40px;transform:translateX(-50%) scale(var(--hud-scale));transform-origin:bottom center;
+    bottom:calc(12px + 48px * var(--hud-scale) + 8px + 8px);background:var(--ink);color:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600}
+  .card{background:var(--paper);border:4px solid var(--ink);border-radius:16px;box-shadow:0 5px 0 var(--ink);height:48px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 12px;white-space:nowrap}
+  .lvl{font-weight:700;font-size:20px;text-transform:uppercase}
+  .pill{background:var(--p2-sh);color:#fff;border-radius:999px;padding:2px 10px;font-size:15px;font-weight:700}
+  .team{justify-content:center;gap:10px;width:280px}
+  .team .lab{font-size:15px;font-weight:600;letter-spacing:.08em}
+  .team .big{font-size:28px;font-weight:700}
+  .team .par{font-size:16px;font-weight:600}
+  .delta{background:var(--mint);color:#fff;border-radius:999px;padding:2px 10px;font-size:16px;font-weight:700;-webkit-text-stroke:1px var(--ink);paint-order:stroke fill}
+  .chip{width:160px;justify-content:flex-start;opacity:.72}
+  .chip.active{opacity:1;background:var(--p2);color:#fff;transform:translateY(-2px);box-shadow:0 7px 0 var(--ink)}
+  .chip.red.active{background:var(--p1)}
+  .dot{width:18px;height:18px;border-radius:50%;border:3px solid var(--ink);flex:none}
+  .red .dot{background:var(--p1)} .blue .dot{background:var(--p2)}
+  .chip .col{display:flex;flex-direction:column;align-items:flex-start;line-height:1.05;gap:1px}
+  .chip .name{font-weight:700;font-size:18px}
+  .chip .sub{font-size:15px;font-weight:600;letter-spacing:.06em;opacity:.9}
+  .chip .cnt{margin-left:auto;font-size:22px;font-weight:700}
+  .icon{width:48px;height:48px;padding:0;justify-content:center;border-radius:50%;font-size:22px;font-weight:700}
+  .meter{width:300px;gap:8px}
+  .meter .lab{font-size:15px;font-weight:700;letter-spacing:.08em}
+  .meter .bar{flex:1;height:18px;border:3px solid var(--ink);border-radius:9px;background:#fff;overflow:hidden}
+  .meter .fill{height:100%;width:62%;background:linear-gradient(90deg,var(--grass),var(--sun),var(--p1))}
+  .meter .num{font-size:22px;font-weight:700;min-width:36px;text-align:right}
+  .meter .deg{font-size:15px;font-weight:600;opacity:.8}
+  .hint{height:40px;max-width:560px;background:rgba(36,27,51,.78);color:#fff;border-radius:999px;padding:0 16px;display:flex;align-items:center;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .net{height:28px;width:110px;background:var(--paper);border:3px solid var(--ink);border-radius:999px;display:flex;align-items:center;gap:6px;padding:0 10px;box-sizing:border-box;font-size:15px;font-weight:700}
+  .net i{width:10px;height:10px;border-radius:50%;background:var(--mint)}
+  /* ---- compact variants (stageScale < 0.85) ---- */
+  .compact .lvl-name,.compact .mute,.compact .deg,.compact .chip .name{display:none}
+  .compact .chip .sub{font-size:15px}
+  .compact .team{width:200px}
+  .compact .chip{width:auto;min-width:64px;gap:6px;padding:0 10px}
+  .compact .chip .col{flex-direction:row;align-items:center}
+  .compact .chip.partner .sub{display:none}
+  .compact .chip .cnt{margin-left:0}
+  .compact .meter{width:220px;height:44px}
+  .compact .hint{max-width:300px}
+  .compact.touch .meter{display:none}
+  .chip .col{display:flex;align-items:center;gap:8px}
+  .ruler{position:absolute;left:0;right:0;height:0;border-top:2px dashed rgba(255,255,255,.6);font-size:14px;color:#fff;font-weight:700;padding-left:8px;pointer-events:none}
+  .note{position:fixed;left:8px;top:8px;background:#fff;color:#000;font:600 13px/1.3 system-ui;padding:6px 8px;border-radius:6px;z-index:9}
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="stage" id="stage">
+    <canvas id="world" width="1280" height="720"></canvas>
+    <div class="hud" id="hud">
+      <div class="cl tl"><div class="card"><span class="lvl">Hole 2/4 <span class="lvl-name">· Plate &amp; Bridge</span></span><span class="pill">PAR 9</span></div></div>
+      <div class="cl tc"><div class="card team"><span class="lab">TEAM</span><span class="big">5</span><span class="par">/ PAR 9</span><span class="delta">−1</span></div></div>
+      <div class="cl tr">
+        <div class="card chip red"><span class="dot"></span><span class="col"><span class="name">RED</span><span class="sub">YOU</span></span><span class="cnt">3</span></div>
+        <div class="card chip blue active partner"><span class="dot"></span><span class="col"><span class="name">BLUE</span><span class="sub">PARTNER</span></span><span class="cnt">2</span></div>
+        <button class="card icon mute" aria-label="Mute (M)">🔊</button>
+        <button class="card icon" aria-label="Pause (Esc)">⏸</button>
+      </div>
+      <div class="cl bl">
+        <div class="card meter"><span class="lab">POWER</span><div class="bar"><div class="fill"></div></div><span class="num">62</span><span class="deg">45°</span></div>
+        <div class="hint" id="hint">Blue is lining up a shot…</div>
+      </div>
+      <div class="cl br"><div class="net"><i></i>48 ms</div><button class="card icon" aria-label="Overview (Tab)">▣</button></div>
+      <div class="banner">BLUE'S TURN<small>your partner</small></div>
+      <div class="toast">Red teed off</div>
+      <div class="ruler" id="rTop"></div><div class="ruler" id="rBot"></div>
+    </div>
+  </div>
+</div>
+<div class="note" id="note"></div>
+<script>
+  // ---- stage scale + hud scale exactly as the spec defines them ----
+  const root=document.documentElement, stage=document.getElementById('stage'), hud=document.getElementById('hud');
+  function layout(){
+    const vw=innerWidth, vh=innerHeight;
+    const ss=Math.min(vw/1280, vh/720);
+    const hs=Math.min(1.7, Math.max(1, 0.9/ss));
+    root.style.setProperty('--stage-scale', ss.toFixed(4));
+    root.style.setProperty('--hud-scale', hs.toFixed(4));
+    const compact = ss < 0.85;
+    hud.classList.toggle('compact', compact);
+    const touch = compact; // the check page assumes touch when compact (meter hidden for touch)
+    hud.classList.toggle('touch', touch);
+    const band = 12 + 48*hs + 8;
+    document.getElementById('rTop').style.top = band+'px';
+    document.getElementById('rTop').textContent = `top HUD band ${band.toFixed(0)} px · viewport ${vw}x${vh} · stageScale ${ss.toFixed(3)} · hud-scale ${hs.toFixed(2)} · ${compact?'COMPACT':'normal'} · 48px button = ${(48*hs*ss).toFixed(1)} CSS px · 15px text = ${(15*hs*ss).toFixed(1)} CSS px`;
+    document.getElementById('rBot').style.top = (720-band)+'px';
+    document.getElementById('rBot').textContent = 'bottom HUD band '+band.toFixed(0)+' px';
+    document.getElementById('note')?.remove();
+    draw(band);
+  }
+  function draw(band){
+    const c=document.getElementById('world').getContext('2d');
+    const g=c.createLinearGradient(0,0,0,560); g.addColorStop(0,'#3fb6ff'); g.addColorStop(1,'#c9f1ff');
+    c.fillStyle=g; c.fillRect(0,0,1280,720);
+    // sun + clouds
+    c.fillStyle='#ffd93b'; c.strokeStyle='#241b33'; c.lineWidth=4; c.beginPath(); c.arc(1040,124,44,0,7); c.fill(); c.stroke();
+    for(const [x,y] of [[180,120],[640,90],[980,200]]){ c.fillStyle='#fff'; c.strokeStyle='#3f6f9c'; c.lineWidth=3; c.beginPath();
+      for(const [dx,dy,r] of [[0,0,34],[36,-10,42],[76,0,30],[40,14,30]]) c.moveTo(x+dx+r,y+dy), c.arc(x+dx,y+dy,r,0,7); c.fill(); c.stroke(); }
+    // hills
+    c.fillStyle='#a9e3b7'; c.beginPath(); c.moveTo(0,470); for(let x=0;x<=1280;x+=20) c.lineTo(x,470-60*Math.sin(x/160)); c.lineTo(1280,720); c.lineTo(0,720); c.fill();
+    c.fillStyle='#6fcb73'; c.strokeStyle='#2f7a4b'; c.beginPath(); c.moveTo(0,520); for(let x=0;x<=1280;x+=20) c.lineTo(x,520-40*Math.sin(x/90+1)); c.lineTo(1280,720); c.lineTo(0,720); c.fill(); c.stroke();
+    // terrain (dirt + grass cap) with a gap and bridge
+    const ground=(x)=> x<760? 556 : 556;
+    c.lineWidth=4; c.strokeStyle='#241b33';
+    for(const [x1,x2] of [[0,560],[780,1280]]){ c.fillStyle='#c97f3d'; c.beginPath(); c.rect(x1,556,x2-x1,164); c.fill(); c.stroke();
+      c.fillStyle='#6ad636'; c.beginPath(); c.rect(x1,556,x2-x1,24); c.fill(); c.stroke(); }
+    c.fillStyle='#d89a4b'; c.beginPath(); c.rect(560,556,220,18); c.fill(); c.stroke();
+    // switch plate + sticker
+    c.fillStyle='#b57bee'; c.beginPath(); c.rect(380,542,40,14); c.fill(); c.stroke();
+    sticker(c,400,500,'SWITCH 1','#b57bee'); sticker(c,670,500,'BRIDGE 1','#b57bee');
+    // cup + flag
+    c.fillStyle='#241b33'; c.beginPath(); c.ellipse(1140,556,17,6,0,0,7); c.fill();
+    c.fillStyle='#fff'; c.beginPath(); c.rect(1137,478,6,78); c.fill(); c.stroke();
+    c.fillStyle='#ff5d73'; c.beginPath(); c.rect(1143,478,34,24); c.fill(); c.stroke();
+    // golfers + balls
+    golfer(c,340,556,'#ff5d73'); golfer(c,860,556,'#50b7ff');
+    ball(c,400,544,'#ff5d73'); ball(c,920,544,'#50b7ff');
+    // partner's live arc (blue, 55% alpha) + "BLUE AIMING" world tag
+    c.globalAlpha=.55; c.fillStyle='#50b7ff'; let vx=5.2,vy=-7.2,px=920,py=544;
+    for(let i=0;i<22;i++){ px+=vx*3; py+=vy*3; vy+=0.62*3*0.3; if(py>544) break; c.beginPath(); c.arc(px,py,5-i*0.15,0,7); c.fill(); }
+    c.globalAlpha=1; worldTag(c,920,500,'BLUE AIMING','#50b7ff'); worldTag(c,400,500,'YOU','#ff5d73');
+    // grab ring around the active ball is NOT shown here (not our turn); dashed ring example on red for reference
+  }
+  function sticker(c,x,y,t,acc){ c.save(); c.translate(x,y); c.rotate(-0.04); c.font='700 15px Fredoka, Arial Black'; const w=c.measureText(t).width+28;
+    c.fillStyle='#fff8e7'; c.strokeStyle='#241b33'; c.lineWidth=3; c.beginPath(); c.roundRect(-w/2,-14,w,28,8); c.fill(); c.stroke();
+    c.fillStyle=acc; c.beginPath(); c.arc(-w/2+12,0,4,0,7); c.fill(); c.fillStyle='#241b33'; c.textBaseline='middle'; c.fillText(t,-w/2+22,1); c.restore(); }
+  function worldTag(c,x,y,t,col){ c.save(); c.font='700 18px Fredoka, Arial Black'; const w=c.measureText(t).width+20; c.fillStyle=col; c.strokeStyle='#241b33'; c.lineWidth=3;
+    c.beginPath(); c.roundRect(x-w/2,y-40,w,26,8); c.fill(); c.stroke(); c.fillStyle='#fff'; c.textAlign='center'; c.textBaseline='middle'; c.fillText(t,x,y-27); c.restore(); }
+  function golfer(c,x,gy,col){ c.lineWidth=4; c.strokeStyle='#241b33'; c.fillStyle='#ffcf9e';
+    for(const dx of [-9,3]){ c.beginPath(); c.roundRect(x+dx,gy-20,10,18,4); c.fill(); c.stroke(); }
+    c.fillStyle='#3f3a5a'; c.beginPath(); c.roundRect(x-16,gy-32,32,16,6); c.fill(); c.stroke();
+    c.fillStyle=col; c.beginPath(); c.roundRect(x-19,gy-58,38,30,10); c.fill(); c.stroke();
+    c.fillStyle='#ffcf9e'; c.beginPath(); c.arc(x,gy-76,19,0,7); c.fill(); c.stroke();
+    c.fillStyle=col; c.beginPath(); c.arc(x,gy-78,19,Math.PI,0); c.fill(); c.stroke();
+    c.beginPath(); c.roundRect(x,gy-88,26,9,4); c.fill(); c.stroke();
+    c.fillStyle='#241b33'; c.beginPath(); c.arc(x+5,gy-73,2.8,0,7); c.arc(x+13,gy-73,2.8,0,7); c.fill(); }
+  function ball(c,x,y,col){ c.fillStyle='rgba(36,27,51,.28)'; c.beginPath(); c.ellipse(x,y+12,12,4,0,0,7); c.fill();
+    c.fillStyle=col; c.strokeStyle='#241b33'; c.lineWidth=4; c.beginPath(); c.arc(x,y,13,0,7); c.fill(); c.stroke();
+    c.fillStyle='#fff'; c.beginPath(); c.ellipse(x-4,y-5,4,2.6,-0.6,0,7); c.fill(); }
+  addEventListener('resize',layout); document.fonts?.ready.then(layout); layout();
+</script>
+</body>
+</html>

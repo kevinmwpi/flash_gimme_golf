@@ -1,0 +1,217 @@
+[
+  {
+    "index": 0,
+    "name": "Tutorial Hills",
+    "size": "1680x720",
+    "wind": 6,
+    "switches": [],
+    "rects": [
+      "spring:spring",
+      "sand:sand",
+      "bumper:boing"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 4,
+      "perPlayer": [
+        2,
+        2
+      ],
+      "path": [
+        "P1 a=19° p=94",
+        "P2 a=19° p=83",
+        "P1 a=72° p=83 SINK",
+        "P2 a=72° p=27 SINK"
+      ],
+      "touched": [
+        "bumper:boing",
+        "spring:spring"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1668,
+        "path": [
+          "P1 a=19° p=94",
+          "P1 a=72° p=83 SINK"
+        ]
+      },
+      {
+        "player": 2,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1668,
+        "path": [
+          "P2 a=19° p=83",
+          "P2 a=72° p=27 SINK"
+        ]
+      }
+    ],
+    "seconds": 1.1
+  },
+  {
+    "index": 1,
+    "name": "Switch Bridge",
+    "size": "1880x760",
+    "wind": -10,
+    "switches": [
+      "bridge"
+    ],
+    "rects": [
+      "bridge:bridge[bridge]",
+      "spring:spring"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 4,
+      "perPlayer": [
+        2,
+        2
+      ],
+      "path": [
+        "P1 a=157° p=94",
+        "P2 a=8° p=94",
+        "P1 a=51° p=83 SINK",
+        "P2 a=167° p=16 SINK"
+      ],
+      "touched": [
+        "bridge:bridge",
+        "spring:spring"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1868,
+        "path": [
+          "P1 a=40° p=94",
+          "P1 a=61° p=49 SINK"
+        ]
+      },
+      {
+        "player": 2,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1858,
+        "path": [
+          "P2 a=29° p=94",
+          "P2 a=104° p=61 SINK"
+        ]
+      }
+    ],
+    "seconds": 1
+  },
+  {
+    "index": 2,
+    "name": "Hazard Cavern",
+    "size": "2100x800",
+    "wind": 14,
+    "switches": [
+      "gate"
+    ],
+    "rects": [
+      "hazard:red",
+      "hazard:blue",
+      "sand:sand",
+      "spring:spring",
+      "fan:fan",
+      "bridge:gate[gate]"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 4,
+      "perPlayer": [
+        2,
+        2
+      ],
+      "path": [
+        "P1 a=29° p=94",
+        "P2 a=40° p=94",
+        "P1 a=51° p=38 SINK",
+        "P2 a=61° p=49 SINK"
+      ],
+      "touched": [
+        "hazard:blue",
+        "fan:fan"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 2088,
+        "path": [
+          "P1 a=29° p=94",
+          "P1 a=51° p=38 SINK"
+        ]
+      },
+      {
+        "player": 2,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 2088,
+        "path": [
+          "P2 a=40° p=94",
+          "P2 a=61° p=49 SINK"
+        ]
+      }
+    ],
+    "seconds": 1.6
+  },
+  {
+    "index": 3,
+    "name": "Ricochet Heights",
+    "size": "1900x740",
+    "wind": 0,
+    "switches": [],
+    "rects": [
+      "bumper:launch"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 4,
+      "perPlayer": [
+        2,
+        2
+      ],
+      "path": [
+        "P1 a=61° p=94",
+        "P2 a=29° p=94",
+        "P1 a=72° p=83 SINK",
+        "P2 a=167° p=38 SINK"
+      ],
+      "touched": [
+        "bumper:launch"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1874,
+        "path": [
+          "P1 a=61° p=94",
+          "P1 a=72° p=83 SINK"
+        ]
+      },
+      {
+        "player": 2,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1888,
+        "path": [
+          "P2 a=29° p=94",
+          "P2 a=167° p=38 SINK"
+        ]
+      }
+    ],
+    "seconds": 1.1
+  }
+]

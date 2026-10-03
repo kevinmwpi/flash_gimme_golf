@@ -1,0 +1,16 @@
+[
+  {"shot": "t1-lobby"},
+  {"click": "text=Play locally"},
+  {"wait": 300},
+  {"press": "2"},
+  {"wait": 500},
+  {"shot": "t2-aiming"},
+  {"hold": ["ArrowUp", 500]},
+  {"press": "Space"},
+  {"wait": 1200},
+  {"shot": "t3-flight"},
+  {"eval": "document.title"},
+  {"viewport": [844, 390]},
+  {"wait": 300},
+  {"shot": "t4-phone"}
+]
