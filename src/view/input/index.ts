@@ -103,9 +103,13 @@ function sameAim(a: Aim, b: Aim): boolean {
   return a.angle === b.angle && a.power === b.power;
 }
 
-/** UX §1.6 initial guess: touch when the device has touch points and no fine pointer. */
+/**
+ * UX §1.6 initial guess: touch when the device has touch points and no fine pointer. Outside a browser it
+ * is always 'pointer': Node 21+ defines a global `navigator` without `maxTouchPoints` and has no `window`.
+ */
 function detectInitialDevice(): InputDevice {
-  if (typeof navigator === 'undefined' || navigator.maxTouchPoints === 0) return 'pointer';
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'pointer';
+  if (!(navigator.maxTouchPoints > 0)) return 'pointer';
   const fine = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches;
   return fine ? 'pointer' : 'touch';
 }
