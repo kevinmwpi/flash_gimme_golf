@@ -1,15 +1,16 @@
-# Flash Golf rebuild — status and next steps (2026-10-03)
+# Flash Golf rebuild — status and next steps (2026-10-04)
 
 ## State
 
-The polished rebuild is complete on branch `redesign/polished-v1` and has not been pushed. Everything below was
-verified on the final code.
+The polished rebuild was merged into `main` in PR #16 (merge commit `e3b89b7`) on 2026-10-04 and is live: the client
+on Vercel at https://flash-golf.vercel.app and the server on Fly at `wss://flash-gimme-golf.fly.dev/ws`. A two-browser
+online game against production ran with no errors. Everything below was verified before the merge.
 
 | Check | Result |
 |---|---|
 | `npm run typecheck` (app, server, test configs) | clean |
 | `npm run lint` (`--max-warnings 0`) | clean |
-| `npm test` | 25 files, 392 tests passing |
+| `npm test` | 26 files, 393 tests passing |
 | `npm run test:levels` (slow solver suite, about 8 min) | 40 passed, 16 skipped (mechanics absent in World 1) |
 | `npm run build` and `npm run build:server` | clean |
 | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities |
@@ -37,10 +38,9 @@ cover copy wording, focus order and doc drift.
 
 ## Shipping
 
-1. Push the branch and open a PR to `main`; CI runs typecheck, lint, tests, both builds and the audit.
-2. Protocol v3 is incompatible with the live server and client. Merging deploys the client on Vercel right away and
-   the server on Fly after CI passes, so for a few minutes new clients cannot reach the old server. Merge at a quiet time.
-3. Close PR #14 (letterboxing); the rebuild supersedes it.
+Done. CI on `main` passed, the Fly deploy workflow redeployed the server, and Vercel production serves the new
+client. Future server changes deploy the same way: Vercel deploys the client on merge, Fly after CI passes, so a
+protocol bump still opens a short window where online play cannot connect. PR #14 (letterboxing) is superseded.
 
 ## Open owner decisions
 
