@@ -63,7 +63,7 @@ These were considered and explicitly rejected for v1.0. They can be revisited *o
 
 Each phase has a hard exit condition. **Do not advance without it.** If a phase reveals the project shouldn't continue, stopping is a valid outcome.
 
-> **Current status (2026-10-02).** Phase 1 is complete. The Phase 2 online-validation slice is **live**: the client is deployed at https://flash-golf.vercel.app and the WebSocket server at `wss://flash-gimme-golf.fly.dev/ws` (Fly.io, redeployed from `main` by `.github/workflows/fly-deploy.yml` after CI passes). The one remaining Phase 2 blocker is recruiting playtesters, which is not a coding task. The polished rebuild of the existing game (same 4 levels, same three modes, nothing from the §4 cut list) lives on branch `redesign/polished-v1`; its binding specs are under `design/` and the one-page code map is `ARCHITECTURE.md`. This pointer is a status note only; the plan below is unchanged and remains source-of-truth.
+> **Current status (2026-10-04).** Phase 1 is complete. The Phase 2 online-validation slice is **live**: the client is deployed at https://flash-golf.vercel.app and the WebSocket server at `wss://flash-gimme-golf.fly.dev/ws` (Fly.io, redeployed from `main` by `.github/workflows/fly-deploy.yml` after CI passes). The one remaining Phase 2 blocker is recruiting playtesters, which is not a coding task. The polished rebuild of the existing game (same 4 levels, same three modes, nothing from the §4 cut list) was merged in PR #16 and is the live build; its binding specs are under `design/` and the one-page code map is `ARCHITECTURE.md`. This pointer is a status note only; the plan below is unchanged and remains source-of-truth.
 
 ### Phase 1 — Make `main` real (2 weeks)
 
