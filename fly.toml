@@ -1,22 +1,23 @@
-# Fly.io deploy config for the Flash Golf game server.
+# Fly.io deploy config for the Flash Golf game server (live: wss://flash-gimme-golf.fly.dev/ws).
 #
-# First-time setup (run from repo root):
-#   fly launch --no-deploy   # accept defaults, keep app name or change it
-#   fly deploy
+# The image is built from ./Dockerfile (multi-stage esbuild bundle on node:22-alpine). Deploys run
+# from .github/workflows/fly-deploy.yml after CI succeeds on main. The Vercel frontend points here
+# through VITE_WS_URL = wss://flash-gimme-golf.fly.dev/ws.
 #
-# After the first deploy, set on Vercel:
-#   VITE_WS_URL = wss://<your-app-name>.fly.dev/ws
-# then redeploy the frontend so the client points here.
+# ONE MACHINE ONLY. Rooms live in the memory of a single server process, so a second machine would
+# receive joins and reconnects for rooms it does not hold (ROOM_NOT_FOUND). Fly's first deploy
+# creates two machines for HA; the deploy workflow passes --ha=false and then runs
+# `flyctl scale count 1 --yes`, and a manual setup must do the same (`fly scale count 1`).
 #
-# auto_stop_machines + min_machines_running=0 keeps the server inside
-# Fly's free allowance by sleeping when idle. Cold-start adds ~1-2s the
-# first time a player creates a room after a quiet period. Bump
-# min_machines_running to 1 if that becomes noticeable in playtests.
+# auto_stop_machines + min_machines_running=0 keeps the server inside Fly's free allowance by
+# sleeping when idle (cold start ~3-4 s on the first room). Bump min_machines_running to 1 if that
+# becomes noticeable in playtests.
 
 app = "flash-gimme-golf"
 primary_region = "yyz"
 
 [build]
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "8080"
@@ -28,6 +29,23 @@ primary_region = "yyz"
   auto_start_machines = true
   min_machines_running = 0
   processes = ["app"]
+
+  # Each player holds one long-lived WebSocket. Without this block Fly caps a machine at 25
+  # connections (about 12 rooms). The limits sit above LIMITS.maxRooms * 2 (src/net/protocol.ts),
+  # leaving headroom for sockets that have not said hello yet and for reconnect overlap, so a full
+  # server answers with its own SERVER_FULL error rather than the proxy queueing the socket.
+  # server/__tests__/deploy-config.test.ts keeps these in step with LIMITS.maxRooms.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 600
+    hard_limit = 700
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/"
 
 [[vm]]
   size = "shared-cpu-1x"

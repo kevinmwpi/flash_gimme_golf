@@ -1,11 +1,23 @@
+# dependencies
 node_modules
+
+# build output
 dist
-.DS_Store
+dist-server
+coverage
+*.tsbuildinfo
+
+# environment (never commit secrets; VITE_WS_URL / ALLOWED_ORIGINS are set in Vercel / Fly)
+.env*
+
+# tool caches
+.vite
+.vercel
+.eslintcache
 *.log
+
+# editors / OS
 .vscode
 .idea
-.env
-.env.local
-.vercel
-.vite
-coverage
+.DS_Store
+Thumbs.db

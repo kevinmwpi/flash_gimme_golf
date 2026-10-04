@@ -57,7 +57,7 @@
   .meter{width:300px;gap:8px}
   .meter .lab{font-size:15px;font-weight:700;letter-spacing:.08em}
   .meter .bar{flex:1;height:18px;border:3px solid var(--ink);border-radius:9px;background:#fff;overflow:hidden}
-  .meter .fill{height:100%;width:62%;background:linear-gradient(90deg,var(--grass),var(--sun),var(--p1))}
+  .meter .fill{height:100%;width:62%;background:var(--p2);box-shadow:inset 0 -6px 0 var(--p2-sh)} /* active player's colour + Sh band (VISUAL.md §11) */
   .meter .num{font-size:22px;font-weight:700;min-width:36px;text-align:right}
   .meter .deg{font-size:15px;font-weight:600;opacity:.8}
   .hint{height:40px;max-width:560px;background:rgba(36,27,51,.78);color:#fff;border-radius:999px;padding:0 16px;display:flex;align-items:center;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

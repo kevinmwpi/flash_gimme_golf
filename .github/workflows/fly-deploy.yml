@@ -1,18 +1,78 @@
-# See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
-
+# Deploys the game server to Fly.io after CI succeeded on main, when a server-relevant file changed
+# since the commit that is LIVE on Fly (docs-only commits never redeploy; audit #53).
+#
+# The live commit is the head SHA of the newest successful run of this workflow whose "flyctl deploy"
+# step succeeded (looked up through the Actions API). Diffing against it, rather than HEAD^, keeps a
+# server change from being lost when GitHub replaces a pending CI or deploy run with a newer one
+# (a concurrency group holds one running and one pending run, whatever cancel-in-progress says).
+# A commit that is already contained in the live one is never deployed, so a CI run that finishes
+# out of order cannot roll the server back. When the lookup fails, the workflow deploys.
+# The step name "flyctl deploy" is what the lookup matches: keep it.
 name: Fly Deploy
+
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    name: Deploy app
+    name: Deploy server
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    concurrency: deploy-group    # optional: ensure only one action runs at a time
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Detect server-relevant changes since the live deploy
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          decide() { echo "changed=$1" >> "$GITHUB_OUTPUT"; echo "changed=$1: $2"; exit 0; }
+
+          LIVE=""
+          RUNS="$(gh api "repos/${REPO}/actions/workflows/fly-deploy.yml/runs?branch=main&status=success&per_page=50" \
+            --jq '.workflow_runs[] | "\(.id):\(.head_sha)"')" || decide true "run lookup failed"
+          for RUN in $RUNS; do
+            DEPLOYED="$(gh api "repos/${REPO}/actions/runs/${RUN%%:*}/jobs" \
+              --jq '[.jobs[].steps[]? | select((.name | contains("flyctl deploy")) and .conclusion == "success")] | length')" \
+              || decide true "job lookup failed"
+            if [ "$DEPLOYED" != "0" ]; then LIVE="${RUN#*:}"; break; fi
+          done
+
+          if [ -z "$LIVE" ] || ! git cat-file -e "${LIVE}^{commit}" 2>/dev/null; then decide true "no known live commit"; fi
+          if [ "$LIVE" = "$HEAD" ]; then decide false "this commit is already live"; fi
+          if git merge-base --is-ancestor "$HEAD" "$LIVE"; then decide false "newer commit ${LIVE} is already live"; fi
+          if ! git merge-base --is-ancestor "$LIVE" "$HEAD"; then decide true "history diverged from live ${LIVE}"; fi
+          if git diff --quiet "$LIVE" "$HEAD" -- server src/sim src/net/protocol.ts package.json package-lock.json Dockerfile fly.toml tsconfig.json tsconfig.server.json .dockerignore; then
+            decide false "no server-relevant change since live ${LIVE}"
+          fi
+          decide true "server-relevant change since live ${LIVE}"
+      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
+        if: steps.changes.outputs.changed == 'true'
+      - name: flyctl deploy
+        if: steps.changes.outputs.changed == 'true'
+        run: flyctl deploy --remote-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # Rooms live in one process's memory (fly.toml header): never leave a second machine running.
+      - name: Keep a single machine
+        if: steps.changes.outputs.changed == 'true'
+        run: flyctl scale count 1 --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

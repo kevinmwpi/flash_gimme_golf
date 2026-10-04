@@ -114,7 +114,7 @@ bronze (par + 2) absorbs one duff per ball. Re-derive after the physics retune (
 | Door / window | blocker gate (`activeWhen: false`): solid until its plate is held. Door = bottom 100 px of a wall (floor-100 .. floor+20), window = 170 px (350-520) above it. **Ejection rule:** a ball resting inside a doorway when its gate closes is pushed out toward the side it came from. |
 | Colour field | hazard rect, player colour, whole upper part of the wall (200-520); passes the matching ball at any height, bounces the other with restitution ≤ 1 and emits `hazardBlock{color}` so the HUD can say "blue field - red bounces". |
 | Bridge | floor segment that exists while ANY of `switchIds` is held (OR semantics; this file uses three coincident rects because the current type holds one switchId). Top 1 px below both lips. A parked ball whose bridge vanishes falls. |
-| Deck plate | a plate strip along the bridge, inset 24 px from each lip, drawn as a yellow pressure strip on the deck only while the bridge exists; a ball fully on the bridge and at rest keeps it up. A moving ball presses nothing, so a lone ball never crosses. |
+| Deck plate | a plate strip along the bridge, inset 24 px from each lip, drawn as a yellow pressure strip on the deck only while the bridge exists; a ball fully on the bridge and at rest keeps it up. A moving ball presses nothing, so a lone deck ball with nobody else holding must FLY all the way to the far lip (a 45° lob at power 80+ from the deck centre); every roll drops it into the chasm (solver `deck-lone-roll-falls`). |
 | Sand | flush surface zone: kills bounce and roll (drawn embedded; 1 px proud here only for the current physics). |
 | Respawn | after a fall: last rest position on PERMANENT terrain (never on a bridge or inside a doorway), +1 stroke, on-screen callout. |
 | `cupHoldsSwitch` | **adopted rule for the early-sink strand:** a sunk ball counts as resting on the cup, and a level may wire the cup to one switch. L2 → `window`, L3 → `door2`, L4 → `far`. The first ball home then holds the partner's way open ("P1 is holding the WINDOW from the cup"), so sinking early is a finale, not a restart. The solver verification above does NOT use this rule; it only removes the one restart-only failure every proposal had. |
@@ -143,6 +143,11 @@ mechanicsIntroduced, mechanicsPresent, firstPlayer, cupHoldsSwitch?, axes, verif
   distinct 1 · new 1 · sequencing 1 | puzzles 0 · simultaneity 1 · communication 1 | hazard 1 · softlock 1.
 - **Walkthrough:** drive over the hill (a full drive runs into the bunker and stops: the sand lesson; a ¾ swing
   stops at 600-860), pitch 250-400 px onto the green, putt or gimme. 3 + 3.
+- **Re-verification amendment (build, `src/sim/levels/README.md`):** the straight 540 → 840 downslope is steeper
+  everywhere than the real sim's friction-equivalent slope (tan 0.114), so nothing could rest on it; it became an
+  18 px drop onto a flat shelf 580-810 whose lip falls into the bunker, now 800-1010 (the lip is sand so a full
+  drive cannot skip over it). A back bunker 1240-1280 behind the cup (and 1740-1800 / 1800-1860 / 1910-1960 on
+  L2-L4) stops an overhit approach instead of the level edge banking it into the hole.
 
 ## Level 2 — Two Doors (`w1-two-doors`) — 1800×720
 

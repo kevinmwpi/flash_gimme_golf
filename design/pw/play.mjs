@@ -11,9 +11,12 @@
 //   {"type": "ABCDE"}                           type text into the focused element
 //   {"fill": ["<selector>", "text"]}            fill an input
 //   {"drag": [x1, y1, x2, y2, steps?]}          mouse drag with the primary button (default 12 intermediate moves)
+//   {"mouseDown": [x, y]} / {"mouseMove": [x, y, steps?]} / {"mouseUp": true}   split drag for mid-drag shots
 //   {"wait": 500}                               wait N ms
 //   {"waitFor": "<selector>"}                   wait for selector (10 s timeout)
 //   {"shot": "name"}                            screenshot -> <outDir>/<name>.png
+//   {"clip": ["name", x, y, w, h]}              clipped screenshot of a page region
+//   {"saveText": ["<selector>", "file.txt"]}     write the element text to <outDir>/file.txt immediately
 //   {"eval": "<js expression>"}                 evaluate in page; result recorded in the report
 //   {"viewport": [w, h]}                        resize viewport
 //   {"touch": true}                             (set at start only) emulate a touch device with hasTouch
@@ -64,8 +67,13 @@ try {
         for (let i = 1; i <= n; i += 1) { await page.mouse.move(x1 + ((x2 - x1) * i) / n, y1 + ((y2 - y1) * i) / n); await page.waitForTimeout(16); }
         await page.mouse.up();
       }
+      else if (step.mouseDown) { await page.mouse.move(step.mouseDown[0], step.mouseDown[1]); await page.mouse.down(); }
+      else if (step.mouseMove) { const [x, y, n = 8] = step.mouseMove; await page.mouse.move(x, y, { steps: n }); }
+      else if (step.mouseUp) await page.mouse.up();
       else if (step.wait) await page.waitForTimeout(step.wait);
       else if (step.waitFor) await page.locator(step.waitFor).first().waitFor({ timeout: 10000 });
+      else if (step.clip) { const [name, x, y, w, h] = step.clip; const file = path.join(outDir, name + '.png'); await page.screenshot({ path: file, clip: { x, y, width: w, height: h }, scale: 'device' }); rec(step, { file }); continue; }
+      else if (step.saveText) { const text = await page.locator(step.saveText[0]).first().textContent({ timeout: 8000 }); writeFileSync(path.join(outDir, step.saveText[1]), text ?? ''); rec(step, { text }); continue; }
       else if (step.shot) { const file = path.join(outDir, step.shot + '.png'); await page.screenshot({ path: file }); rec(step, { file }); continue; }
       else if (step.eval) { const result = await page.evaluate(step.eval); rec(step, { result }); continue; }
       else if (step.viewport) await page.setViewportSize({ width: step.viewport[0], height: step.viewport[1] });

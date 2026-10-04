@@ -98,7 +98,8 @@ Rules the module obeys:
 - No sound before `ready()`. `ready() = ctx.state === 'running' || performance.now() < pendingUntil`; `pendingUntil` is
   set to now + 1000 ms by `unlock()` while `resume()` is pending, because Web Audio accepts scheduling on a suspended
   context (nodes start when it resumes) and Safari only flips `state` when `resume()` resolves. Events before unlock
-  are dropped, never queued. Phase tracking (`levelStart`/`playStart` -> `introVisible`) runs even before unlock.
+  are dropped, never queued. Music-bed tracking (`trackBed`: `playStart`/`turnStart`/`ballHit` -> play,
+  `levelComplete`/`campaignComplete` -> title) runs even before unlock, so the bed opens in the right mode.
 - One shared 2 s white-noise `AudioBuffer`; every noise voice is a looping `AudioBufferSource` with a random offset.
 - Every voice is a fresh node graph (`osc()` / `noise()` / `note()`) that stops itself. Nothing is pooled.
 - Polyphony in `admit(name, key, at)`: per-name `max` simultaneous voices, per-key `minMs` retrigger spacing where
@@ -158,7 +159,7 @@ volume 0.8 through the full chain (section 4).
 | **gimme** `{strokes}` | Square arpeggio C5 523 / E5 659 / G5 784 Hz at 0/70/140 ms, each A2 D60 S40 % hold 70 R80, LP 3 kHz, -9 dB. | none | 2 / 500, player | -15.0 / -22.8 |
 | **sink** `{strokes, speed}`, rolled in | Plonk: sine 420 to 180 Hz over 90 ms D90 -5 dB; noise lowpass 1.5 kHz D20 -12 dB; rattle: square 1400/1200/1000 Hz at +30/+75/+110 ms D12 at -16/-19/-22 dB (LP 3 kHz). Chime: `note` G5 at +160 ms len 90 -9 dB, `note` C6 at +260 ms len 200 R250 -7 dB. | none | 2 / 200, player | -15.4 / -21.9 |
 | sink after a gimme or on a levelComplete tick (`chime: false`) | Plonk + rattle only. | none | shared | -24.1 / -36.5 |
-| **turnStart** `{playerId, sameAsBefore:false}` | Triangle C5 (P1) or G5 (P2), LP 2.5 kHz, A2 D140, `TUNE.turnDing` = -6 dB; walk whoosh: noise lowpass 1.2 kHz sweeping to 400 Hz over 200 ms, A30 D80 S30 % hold 120 R100, -26 dB. Skipped while `introVisible`. | none | 1 / 300, name | -27.8 / -37.1 |
+| **turnStart** `{playerId, sameAsBefore:false}` | Triangle C5 (P1) or G5 (P2), LP 2.5 kHz, A2 D140, `TUNE.turnDing` = -6 dB; walk whoosh: noise lowpass 1.2 kHz sweeping to 400 Hz over 200 ms, A30 D80 S30 % hold 120 R100, -26 dB. Never gated: the sim emits no `turnStart` while the intro card is up, and the first one after a restart / resume / join is the only hand-off cue. | none | 1 / 300, name | -27.8 / -37.1 |
 | turnStart `{sameAsBefore:true}` (same player continues) | Whoosh only. | none | shared | -48.2 / -57.4 |
 | **levelComplete** `{result.medal}` | All `note` at -4 dB (none: -8 dB), scheduled at event + 350 ms. gold: C5 E5 G5 C6 E6 at 0/100/200/300/450 ms, last note 600 ms with vibrato + sparkle noise highpass 6 kHz A20 D300 -22 dB at +450 ms. silver: C5 E5 G5 C6 at 0/110/220/330, last 450 ms. bronze: C5 E5 G5 at 0/120/240, last 450 ms. none: G4 392 Hz then C5 at 0/150, last 450 ms. Ducks music 4 dB for 1.3 s; suppresses bounces 1 s; `music.setMode('title')`. Skipped when `campaignComplete` is on the same tick. | none | 1 / 1000 | -11.7 / -17.8 gold, -12.3 / -18.2 silver, -12.7 / -18.5 bronze, -16.4 / -22.6 none |
 | **campaignComplete** `{medal, totalStrokes}` | Chord stabs (triangle `note`, no sub, -14 dB, len 180 ms) at 0/220/440/660 ms: C4 E4 G4; F4 A4 C5; G4 B4 D5; C4 E4 G4. Melody `note` -5 dB: E5 at 900, G5 1020, C6 1140, G6 1568 Hz at 1300 ms held 700 ms with vibrato; sparkle noise highpass 6 kHz at 1300 ms D400 -20 dB. 2.4 s voice (last release ends 2.4 s). At event + 350 ms. Ducks music 2.4 s. | none | 1 / 2000 | -12.3 / -18.4 |
@@ -182,9 +183,15 @@ Router rules (`handleEvents(events, delaySec = 0)`, 50 lines in the demo):
 - `base = ctx.currentTime + delaySec`; each event is scheduled at `base + min(0.25, (ev.tick - events[0].tick) * DT)`.
   Two balls acting on different ticks of one frame keep their spacing; two on the same tick are both admitted because
   the retrigger key includes `playerId` (demo button "both balls fellOffWorld": two whistles).
-- `levelStart` -> `introVisible = true`; `playStart` -> `introVisible = false` and `music.setMode('play')`;
-  `turnStart` is skipped while `introVisible` (the intro card's dismiss button has its own uiClick) and plays the whoosh
-  only when `sameAsBefore` (partner sank, same player continues).
+- Bed mode is derived from what the sim actually emits, not from an intro flag: `playStart`, `turnStart` and
+  `ballHit` all switch the bed to `play` (idempotent); `levelComplete` / `campaignComplete` switch it to `title`.
+  `playStart` is emitted only when the intro card is dismissed - `restartLevel` (results-card Retry, pause-menu
+  Restart) emits `levelRestart, levelStart{restarted:true}, turnStart` and goes straight to `aiming`, and a `?state=`
+  resume or an online join mid-hole starts from a synthetic `levelStart` - so the first `turnStart`/`ballHit` after any
+  of those must reopen play on its own. `levelStart` itself is silent. `turnStart` always dings (no `turnStart` is ever
+  emitted while the intro card is up; its dismiss button has its own uiClick) and plays the whoosh only when
+  `sameAsBefore` (partner sank, same player continues). Regression: `audio.test.ts` "audio follows the real sim
+  through a hole restart".
 - Hole-out de-duplication: `gimme` records `lastGimmeAt[playerId]`; a `sink` for the same player within 600 ms plays
   plonk + rattle only; a `sink` on the same tick as `levelComplete` or `campaignComplete` also skips its chime (the
   jingle resolves it). The full plonk + chime is reserved for a genuine rolled-in sink. `levelComplete` is skipped when
@@ -344,7 +351,8 @@ Specification (`music` object in the demo):
   burst. `hidden` (background mode, clock stepped 1 s per ~1 s): every second between -29.5 and -34.3, no gaps.
 
 Who calls what: `App.tsx` calls `audio.music.start('title')` on mount and whenever it shows Title, Lobby, LevelResults
-or CampaignResults; `handleEvents` switches to `play` on `playStart` and back to `title` on `levelComplete` /
+or CampaignResults; `handleEvents` switches to `play` on `playStart`, `turnStart` or `ballHit` (the sim emits no
+`playStart` after a restart, `?state=` resume or online join) and back to `title` on `levelComplete` /
 `campaignComplete`; `setMusic(false)` halts (0.6 s fade) but keeps `wantedMode` so `setMusic(true)` resumes in the right
 mode; `unlock()` / visibility resume start the bed if it is wanted and not playing. Nothing else needs to call `music.*`.
 
@@ -391,7 +399,7 @@ Alternative if the owner prefers SFX-only: delete the `music` object, `duck()` a
 
 | Required change | Done | Evidence |
 |---|---|---|
-| Adopt ARCH `AudioSystem` surface | `unlock/handleEvents/play/setMuted/isMuted/setMusic/dispose` exported verbatim; `onSimEvents` + `EventInfo` removed; `introVisible` derived from `levelStart`/`playStart`; power normalised by `MAX_POWER` | `audio_types_probe.ts` compiles; `audio_check2.mjs` |
+| Adopt ARCH `AudioSystem` surface | `unlock/handleEvents/play/setMuted/isMuted/setMusic/dispose` exported verbatim; `onSimEvents` + `EventInfo` removed; the demo's `introVisible` gate dropped (it silenced every hand-off after a restart, resume or join - the sim emits no `playStart` there), bed mode derived from `playStart`/`turnStart`/`ballHit`; power normalised by `MAX_POWER` | `audio_types_probe.ts` compiles; `audio_check2.mjs` |
 | Align router with real `SimEventBody` | `ev.result.medal`; `BounceSurface` mapping (dirtWall/levelEdge/ceiling woody, blocker clang, bridge tok); `fan` = one-shot `fanEnter`, loop via `setFan(active, k)`; `lipOut`, `gatePass`, `commandRejected` (not `turnDelay`), `sameAsBefore` whoosh-only, `levelRestart -> uiBack` | section 2; demo sequences |
 | Fix the additive AM | `amStage()` multiplicative, in series before the envelope; fan loop uses it with a separate fade gain; hazardBlock/fellOffWorld/fan re-tuned (-7 / -12 / -21..-15) | leakage -85 / -96 / -94 dBFS (v1 -17 / -19) |
 | Music never started in the app flow | `start()` always records `wantedMode`; `unlock()` -> `resume().then(onRunning)` starts it; same on visibility/focus; `pendingUntil` 1 s window; `focus` listener added; section 7 "who calls what" | `audio_firstclick2.mjs`: playing false before gesture, true after |

@@ -1,0 +1,33 @@
+# Dependencies are exact-pinned (CLAUDE.md Phase 1); Dependabot bumps the pins. npm weekly in two
+# grouped PRs (runtime vs tooling) so the live server's `ws` never lingers on an advisory release
+# (audit #51); GitHub Actions and the Docker base image monthly. Node majors are never proposed: the
+# server runs on the Node 22 line (`engines`, `.nvmrc`, `--target=node22`, the replay golden), so a
+# `node:24-alpine` or `@types/node@24` bump must be a deliberate change, not a Dependabot merge.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    groups:
+      runtime:
+        dependency-type: production
+      tooling:
+        dependency-type: development
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']

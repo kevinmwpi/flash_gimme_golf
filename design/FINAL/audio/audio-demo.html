@@ -245,7 +245,6 @@ function createAudio(opts = {}) {
   const jitterCents = (cents) => Math.pow(2, rand(-cents, cents) / 1200);
   let suppressUntil = 0;  // while a jingle plays, suppress bounces until this ctx time
   let pendingUntil = 0;   // performance.now() deadline during which a suspended ctx is still schedulable (unlock gesture)
-  let introVisible = false;               // levelStart .. playStart (router skips turnStart dings)
   const lastGimmeAt = [-Infinity, -Infinity]; // per player, ctx seconds
   const readyCbs = [];
   const listeners = [];   // [target, type, fn, capture] for dispose()
@@ -813,8 +812,12 @@ function createAudio(opts = {}) {
    */
   function handleEvents(events, delaySec) {
     if (!events || events.length === 0) return;
-    // Phase tracking runs even before unlock so introVisible is right when sound arrives.
-    for (const ev of events) { if (ev.type === 'levelStart') introVisible = true; else if (ev.type === 'playStart') introVisible = false; }
+    // Bed tracking runs even before unlock so the mode is right when sound arrives. The sim emits no playStart after
+    // restartLevel, a ?state= resume or an online join, so turnStart / ballHit also open play.
+    for (const ev of events) {
+      if (ev.type === 'playStart' || ev.type === 'turnStart' || ev.type === 'ballHit') { if (music.mode !== 'play') music.setMode('play'); }
+      else if (ev.type === 'levelComplete' || ev.type === 'campaignComplete') { if (music.mode !== 'title') music.setMode('title'); }
+    }
     if (!ready()) return;
     const base = ctx.currentTime + (delaySec || 0); const t0 = events[0].tick;
     const completeTicks = new Set(); let campaignTick = -1;
@@ -822,7 +825,6 @@ function createAudio(opts = {}) {
     for (const ev of events) {
       const at = base + Math.min(0.25, (ev.tick - t0) * DT); const pid = ev.playerId; const o = { at, playerId: pid };
       switch (ev.type) {
-        case 'playStart': music.setMode('play'); break;
         case 'ballHit': sfx.ballHit(ev.power / MAX_POWER, o); break;
         case 'bounce': sfx.bounce(ev.strength, ev.surface, o); break;
         case 'enterSand': sfx.enterSand(o); break;
@@ -844,9 +846,9 @@ function createAudio(opts = {}) {
           const withJingle = completeTicks.has(ev.tick) || campaignTick === ev.tick;   // the jingle resolves it
           sfx.sink({ at, playerId: pid, chime: !afterGimme && !withJingle }); break;
         }
-        case 'turnStart': if (!introVisible) sfx.turnStart(pid, { at, sameAsBefore: !!ev.sameAsBefore }); break;
-        case 'levelComplete': music.setMode('title'); if (campaignTick !== ev.tick) sfx.levelComplete(ev.result.medal, { at: at + 0.35 }); break;   // let the sink plonk finish first
-        case 'campaignComplete': music.setMode('title'); sfx.campaignComplete({ at: at + 0.35 }); break;
+        case 'turnStart': sfx.turnStart(pid, { at, sameAsBefore: !!ev.sameAsBefore }); break;   // never emitted while the intro card is up
+        case 'levelComplete': if (campaignTick !== ev.tick) sfx.levelComplete(ev.result.medal, { at: at + 0.35 }); break;   // let the sink plonk finish first
+        case 'campaignComplete': sfx.campaignComplete({ at: at + 0.35 }); break;
         case 'levelRestart': sfx.uiBack({ at }); break;
         case 'commandRejected': if (ev.reason !== 'turnDelay') sfx.uiInvalid({ at }); break;   // eager Space during the hand-off is expected, not an error
         default: break;

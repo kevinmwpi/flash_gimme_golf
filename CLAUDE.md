@@ -63,7 +63,7 @@ These were considered and explicitly rejected for v1.0. They can be revisited *o
 
 Each phase has a hard exit condition. **Do not advance without it.** If a phase reveals the project shouldn't continue, stopping is a valid outcome.
 
-> **Current status (2026-05-19).** Phase 1 is complete. The Phase 2 online-validation-slice **code** is built — room codes, invite URLs, server-authoritative sim — and runs locally via `npm run dev:all`. The remaining concrete blockers before Phase 2 playtests can start are (a) deploying the WebSocket server to a public host and wiring `VITE_WS_URL` on the Vercel build, and (b) recruiting playtesters. Neither is a coding task. This pointer is a status note only; the plan below is unchanged and remains source-of-truth.
+> **Current status (2026-10-02).** Phase 1 is complete. The Phase 2 online-validation slice is **live**: the client is deployed at https://flash-golf.vercel.app and the WebSocket server at `wss://flash-gimme-golf.fly.dev/ws` (Fly.io, redeployed from `main` by `.github/workflows/fly-deploy.yml` after CI passes). The one remaining Phase 2 blocker is recruiting playtesters, which is not a coding task. The polished rebuild of the existing game (same 4 levels, same three modes, nothing from the §4 cut list) lives on branch `redesign/polished-v1`; its binding specs are under `design/` and the one-page code map is `ARCHITECTURE.md`. This pointer is a status note only; the plan below is unchanged and remains source-of-truth.
 
 ### Phase 1 — Make `main` real (2 weeks)
 
@@ -244,3 +244,5 @@ It is not a comprehensive multi-mode platform. It is not a showcase of one perso
 - **[LEVEL_DESIGN.md](./LEVEL_DESIGN.md)** — design vocabulary and difficulty axes for the 12 hand-crafted levels authored in Phase 3. A working tool, not strategy.
 - **[IDEAS.md](./IDEAS.md)** — graveyard for thoughts that came up during planning but were not committed to. Explicitly **not** a roadmap and **not** a deferred-feature list. Items there require Phase 4 data (and a high bar) before being promoted anywhere else. Do not propose moving anything out of IDEAS.md without that.
 - **[README.md](./README.md)** — public-facing entry point.
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — one-page map of the rebuilt code: layers and the dependency rule, the game loop, determinism rules, netcode summary and the test map. Kept consistent with the code, not a plan.
+- **[design/](./design/)** — the redesign package for the `redesign/polished-v1` rebuild: `LEAD_BRIEF.md` (locked decisions), `FINAL/BUILD_DECISIONS.md` (binding reconciliation; wins over every other design doc), `FINAL/architecture/ARCH.md` (module contracts, loop, test plan) and the visual, levels, UX and audio specs, plus `AUDIT_FINDINGS.json` (verified defects of the previous code that the rebuild must not reproduce). Working documents for that rebuild; they do not change this plan.

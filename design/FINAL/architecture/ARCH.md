@@ -164,7 +164,10 @@ Rules implemented by `stepSim` (in this order each tick; `phaseAtStart = state.p
      `strokes += 1`, phase `flying`, emits `ballHit{angle, power, speed}`.
    - `continue`: intro -> aiming (`playStart`, `turnStart{readyInTicks: 0, sameAsBefore: false}`, `turnDelayTicks = 0`);
      levelResults -> next level's intro (`levelStart`) or `campaignResults` (+ `campaignComplete`). A second `continue`
-     arriving in the new phase is a harmless `wrongPhase` rejection (idempotent "first wins").
+     arriving in the new phase is a harmless `wrongPhase` rejection (idempotent "first wins"). Because levelResults ->
+     intro would otherwise accept a second `continue` (or a host `restartLevel`) on the NEW level, the UI stamps both
+     meta commands with the optional additive `MetaScreen` (`levelIndex`, and `phase` for the intro/results cards);
+     the sim rejects a stamp that no longer matches the state as `wrongPhase` (pause-menu Retry stamps `levelIndex` only).
    - `restartLevel`: allowed in intro/aiming/flying/levelResults; rebuilds the level state (balls at starts per
      physics-notes §6, switches all false, strokes 0, aims `DEFAULT_AIM`, `activePlayer = levelIndex % 2`), phase
      `aiming` with `turnDelayTicks = TURN_DELAY_TICKS`; emits `levelRestart` + `levelStart{restarted:true}` +
@@ -727,12 +730,13 @@ Tab `toggleCamera`; M `toggleMute`. `preventDefault` only when `document.activeE
 cleared on `blur`/`visibilitychange`. Modifier combos (Ctrl/Meta/Alt) ignored. A `shoot` pressed while
 `turnDelayTicks > 0` is held as `pendingShoot` and emitted on the first frame `isShotReady` (max 0.6 s).
 
-**Pointer** (Pointer Events; `touch-action: none` on the canvas): press within `DRAG_GRAB_RADIUS_PX` (56 logical px)
-of the active ball's screen position — OR anywhere on the lower half of the canvas on touch devices when it is your
-turn (big target) — starts a drag. Drag vector `d = press - current` (slingshot: pull back, shoot forward):
+**Pointer** (Pointer Events; `touch-action: none` on the canvas): press within `DRAG_GRAB_RADIUS_PX` (48 logical px;
+`DRAG_GRAB_RADIUS_TOUCH_PX` 80 when `pointerType === 'touch'`) of the active ball's screen position starts a drag —
+nowhere else (UX.md §5.2: stray taps and swipes never cost a stroke; BUILD_DECISIONS D1 radii). Drag vector
+`d = press - current` (slingshot: pull back, shoot forward):
 `angle = quantize4(clamp(atan2(d.y, d.x), AIM_ANGLE_MIN, AIM_ANGLE_MAX))`,
 `power = quantize1(clamp(MIN_POWER + |d| / DRAG_FULL_POWER_PX * (MAX_POWER - MIN_POWER), MIN_POWER, MAX_POWER))`
-(110 px ⇒ 55). Below `DRAG_DEAD_ZONE_PX` nothing is emitted; moving back within `DRAG_CANCEL_RADIUS_PX` of the press
+(`DRAG_FULL_POWER_PX` 240: 120 px ⇒ 55). Below `DRAG_DEAD_ZONE_PX` nothing is emitted; moving back within `DRAG_CANCEL_RADIUS_PX` of the press
 point shows the "cancel" state and releasing there cancels. Release outside ⇒ final `setAim` then `shoot` (same
 frame, that order). Pointer→logical mapping: `(clientX - rect.left) * 1280/rect.width`.
 

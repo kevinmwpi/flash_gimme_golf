@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The two-tone team ball mark (VISUAL.md §16): left red, right blue, ink outline, one highlight. -->
+  <rect width="64" height="64" rx="14" fill="#3fb6ff"/>
+  <rect y="50" width="64" height="14" fill="#6ad636"/>
+  <rect y="50" width="64" height="4" fill="#241b33"/>
+  <clipPath id="b"><circle cx="32" cy="29" r="20"/></clipPath>
+  <g clip-path="url(#b)">
+    <rect x="12" y="9" width="20" height="40" fill="#ff5d73"/>
+    <rect x="32" y="9" width="20" height="40" fill="#50b7ff"/>
+  </g>
+  <circle cx="32" cy="29" r="20" fill="none" stroke="#241b33" stroke-width="4.5"/>
+  <ellipse cx="24.5" cy="21" rx="5" ry="3" fill="#fff" fill-opacity=".9" transform="rotate(-30 24.5 21)"/>
+</svg>

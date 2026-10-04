@@ -2,18 +2,35 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'redesign/**']
   pull_request:
 
+permissions:
+  contents: read
+
+# Superseded runs are cancelled on branches and PRs. Each run on main gets its own group (keyed by
+# commit) so a newer push never cancels or replaces it: a concurrency group holds one running and one
+# pending run, and GitHub drops the pending one when a third arrives, whatever cancel-in-progress says.
+# fly-deploy.yml does not depend on this: it diffs against the commit that is live on Fly.
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
-  build:
+  verify:
+    name: typecheck + lint + test + build + audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version-file: .nvmrc
+          cache: npm
       - run: npm ci
-      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
+      - run: npm run build
+      - run: npm run build:server
+      - run: npm audit --omit=dev --audit-level=high

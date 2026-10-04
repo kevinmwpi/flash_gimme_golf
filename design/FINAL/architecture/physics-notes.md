@@ -72,8 +72,9 @@ export function hasSupport(level, switches, ball, playerId): boolean;   // g !==
 - A ball on a stacked pillar: the pillar top is above the covered fairway surface and satisfies the bound, so it
   wins (smallest y). The fairway under the pillar is never chosen because the pillar's walls stop the ball
   ever being there.
-- `evaluateSwitches` uses `groundAt(...)` too: pressed when `ball.grounded && x in [sw.x, sw.x + sw.w] &&
-  |pos.y + R - sw.surfaceY| <= SWITCH_CONTACT_TOLERANCE && g.source === 'piece'` (a ball parked on a blocker
+- `evaluateSwitches` uses `groundAt(...)` too: pressed when `ball.asleep && x in [sw.x, sw.x + sw.w] &&
+  |pos.y + R - sw.surfaceY| <= SWITCH_CONTACT_TOLERANCE && g.source === 'piece'` (a RESTING ball holds a plate,
+  LEVELS.md plate rule; a ball rolling or bouncing across one never presses it; a ball parked on a blocker
   above a plate does not press it).
 - `restsOnPermanentGround(level, switches, pos, playerId)` = `groundAt(...)?.permanent === true`.
 
@@ -241,7 +242,10 @@ bounce chain beyond `maxTicks` (hint, not oracle). Cost: 150 steps × 2 balls ×
 recomputed only when the memo key changes: `angle|power|switchMask|balls[0].x|y|balls[1].x|y`.
 
 ### 4.8 Switch semantics (#47, #23)
-Held means held. The plate releases the tick the ball leaves contact; no latch and no timer. Co-op works because
+Held means held: a plate is pressed only by a RESTING (`asleep`) ball and releases the tick its holder starts
+moving (`shoot` and every wake clear `asleep` before the switches are evaluated); no latch and no timer. A ball
+rolling or bouncing across a plate never presses it, so a landing presses exactly once, on its `ballRest` tick,
+however hard it hits (a `grounded`/height test chattered the door through every bounce hop). Co-op works because
 levels have two plates / two routes (level agent's job) and because a resting ball keeps pressing while the OTHER ball
 shoots. Solo plays both balls so the same levels work. `restartLevel`/`createSim` set every switch to `false`;
 the first stepped tick recomputes them from the fresh ball positions (never stale, fixes the URL-load case).
@@ -252,11 +256,16 @@ Each tick, after step 10, with `h = level.hole`:
 near    = |pos.y + R - h.rimY| <= 8 && (grounded || groundAt(...)?.y - (pos.y + R) <= 8)
 crossed = (startX - h.x) * (pos.x - h.x) <= 0          // x-span of this tick straddles the cup
 over    = |pos.x - h.x| <= h.radius - SINK_INSET        // 12 px window
-if near && (over || crossed):
-   if len(vel) <= SINK_MAX_SPEED (240): sunk = true; pos = {h.x, h.rimY + SUNK_BALL_DROP}; vel = {0,0}; asleep = true; emit sink{speed}; return 0
-   else if crossed: vel = {x: vel.x * LIP_OUT_DAMP, y: vel.y}; emit lipOut (at most once per tick)
+wasOver = |startX - h.x| <= h.radius - SINK_INSET
+if near && (over || wasOver || crossed):
+   if len(vel) <= SINK_MAX_SPEED (240) && (over || crossed): sunk = true; pos = {h.x, h.rimY + SUNK_BALL_DROP}; vel = {0,0}; asleep = true; emit sink{speed}; return 0
+   else if !over: vel = {x: vel.x * LIP_OUT_DAMP, y: vel.y}; emit lipOut   // leaving (or jumping) the window: once per crossing
 ```
 `crossed` uses the tick's full x-span, so even at 1100 px/s (18 px/tick) the 12 px window cannot be stepped over.
+The lip-out fires on the tick the ball LEAVES the window, never while it is still over the cup: damping it there
+brought the speed under `SINK_MAX_SPEED` a tick later with the ball still inside the window, and one crossing
+reported `lipOut` and then `sink`. A ball can only have been over the cup without dropping because it was too
+fast there, so every crossing that does not sink lips out exactly once.
 
 ### 4.10 Other audit items touched by physics
 - #21 camera: gone from the sim. #25 per-player aim: `players[i].aim`. #27: every failure now emits an event

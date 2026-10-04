@@ -44,7 +44,7 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
 ## D3. Contract requests accepted (owners must implement them)
 - UX CD-1, CD-2, CD-3: already in ARCH (continue from either seat online; host restartLevel in levelResults; setLevel/lobbyState).
 - UX CD-4: constants stay in types.ts with the UX values (D1). Audio owns its persistence (see D4).
-- UX CD-5: NO tee >= 280 assertion. Instead the follow camera OVERSCANS: while the active player is aiming and the
+- UX CD-5: **SUPERSEDED by D7 (no overscan).** Original text, kept for history: NO tee >= 280 assertion. Instead the follow camera OVERSCANS: while the active player is aiming and the
   active ball's screen x would be < 320, `cameraFor` lets camera.x go negative down to -220 (and symmetrically past
   the right edge for leftward shots) so a full-power drag always has room; the renderer paints sky everywhere and
   extends the dirt/grass of the first/last terrain piece horizontally beyond the level bounds (flat continuation).
@@ -77,3 +77,34 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
 ## D5. Explicit deviations from the brief (recorded, intentional)
 - No `start` PlayerCommand (ARCH R1): starting is a UI action locally and the `start` protocol message online.
 - Who goes first is per level (`firstPlayer`), not strictly alternating.
+
+## D6. Online never auto-advances (resolves the ARCH #30 vs UX §3.4 conflict; lead decision 2026-10-03)
+- The server sends NO synthetic `continue`: intro and results cards wait for a `continue` from EITHER seat (first
+  wins, CD-1), so nobody can stall the partner and a first-time pair never loses the hole hint mid-read.
+- `INTRO_AUTO_CONTINUE_MS` / `RESULTS_AUTO_CONTINUE_MS` stay exported from the frozen protocol.ts but are unused.
+- The cards show no countdown ring; the caption is the device hint ("or press Space" / "or tap anywhere").
+- Implemented by the lead in server/rooms.ts (+ rooms.test.ts), App.tsx, LevelIntro.tsx, LevelResults.tsx, copy.ts,
+  styles.css, ARCHITECTURE.md. Do not reintroduce a timer.
+
+## D7. The follow camera never overscans (supersedes D3 CD-5; lead decision 2026-10-03)
+- `cameraFor(level, state, 'follow')` is always clamped to `[0, level.width - 1280]`: one-screen holes (First
+  Fairway) never scroll, so the cup is visible while aiming from the tee, and tee shots no longer jump 220 px.
+- Pull room near a stage edge comes from the pointer adapter: the drag length that reads full power shrinks to the
+  room available along the pull (`fullPowerPx`, never below `DRAG_MIN_FULL_POWER_PX`), so every scripted line stays
+  reachable. `src/view/__tests__/input-reach.test.ts` now presses from the ball as the REAL follow camera shows it.
+- The renderer still extends the outer terrain pieces past the level bounds for the overview camera; that is
+  drawing, not camera overscan.
+
+## D8. Accepted as-is (reviewers: do not re-report these as defects)
+- Default `ALLOWED_ORIGINS` includes `https://flash-golf-*.vercel.app` so Vercel preview builds can play online.
+  Origin checks are not a security boundary (any non-browser client can send any Origin); the server validates
+  every message, rate-limits and caps rooms regardless. README documents the trade-off.
+- A door that closes on a parked ball ejects it through the nearest face (D2), even when that face is the tee side.
+- `.claude/settings.json` (third-party plugin marketplace) is the owner's call; leave it untouched.
+- The slow solver suite (`npm run test:levels`, ~12 min) runs in its own workflow, not in `npm test`.
+- `CLAUDE.md` edits are limited to the dated status note in §5 and the §11 companion list; both are sanctioned.
+
+## D9. Pars are final: 6 / 7 / 8 / 7 (course par 28)
+- Colour Keys keeps par 8 with its documented slack exception (`PAR_SLACK_BY_ORDER = { 3: 3 }` in scripts/solver.ts):
+  its structural solver minimum is 5, but the human line needs 7-8 strokes.
+- Change a par only together with fresh `npm run solve -- all` evidence and the matching golden/test updates.
