@@ -1,0 +1,48 @@
+# Runs the slow level-solver suite (src/sim/__tests__/levels-solver.test.ts, ~13 min on a laptop) so a
+# physics or level change that opens a solo bypass or breaks co-op solvability is gated in CI, not only
+# by the CONTRIBUTING recipe. It is a separate workflow because it does not fit the 15-minute CI job,
+# and it runs only when the sim, the levels or the solver itself changed (or by hand).
+name: Levels
+
+on:
+  push:
+    branches: [main, 'redesign/**']
+    paths:
+      - 'src/sim/**'
+      - 'scripts/solver.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
+      - '.github/workflows/levels.yml'
+  pull_request:
+    paths:
+      - 'src/sim/**'
+      - 'scripts/solver.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
+      - '.github/workflows/levels.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: levels-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  solve:
+    name: level solver suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run test:levels

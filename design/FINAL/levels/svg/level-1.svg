@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#9ad7ff"/>
+<polygon points="0,590 200,590 320,578 440,552 540,538 640,554 760,580 840,590 1020,590 1060,578 1120,562 1280,562 1280,720 0,720" fill="#8b5528" stroke="#2f5d1c" stroke-width="6"/>
+<polyline points="0,590 200,590 320,578 440,552 540,538 640,554 760,580 840,590 1020,590 1060,578 1120,562 1280,562" fill="none" stroke="#5cb838" stroke-width="12"/>
+<rect x="870" y="589" width="140" height="19" fill="#e8c779" stroke="#222" stroke-width="3" opacity="1"/>
+<text x="940" y="581" font-size="22" text-anchor="middle" font-family="sans-serif" font-weight="bold" fill="#222">SAND</text>
+<ellipse cx="1190" cy="562" rx="16" ry="6" fill="#111"/>
+<line x1="1194" y1="562" x2="1194" y2="492" stroke="#fff" stroke-width="4"/>
+<polygon points="1196,492 1240,504 1196,516" fill="#ff4040"/>
+<circle cx="90" cy="578" r="12" fill="#ff5d73" stroke="#222" stroke-width="3"/>
+<circle cx="130" cy="578" r="12" fill="#50b7ff" stroke="#222" stroke-width="3"/>
+<text x="20" y="40" font-size="30" font-family="sans-serif" font-weight="bold" fill="#123">First Fairway — 1280×720, wind 0</text>
+</svg>

@@ -1,0 +1,88 @@
+=== L4 Plate & Bridge: red holds plate A, blue rests mid-deck (x=880); red stall-taps ===
+red tap 90deg/10
+  switches before: near=1 far=0 deck=1 | after: near=1 far=0 deck=1 | bridge-down ticks: 0
+  shooter rests at x=435 after 16 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+red tap 90deg/15
+  switches before: near=1 far=0 deck=1 | after: near=1 far=0 deck=1 | bridge-down ticks: 0
+  shooter rests at x=435 after 24 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+red tap 80deg/20
+  switches before: near=1 far=0 deck=1 | after: near=1 far=0 deck=1 | bridge-down ticks: 0
+  shooter rests at x=447 after 35 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+red tap 100deg/15
+  switches before: near=1 far=0 deck=1 | after: near=1 far=0 deck=1 | bridge-down ticks: 0
+  shooter rests at x=429 after 24 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+red leaves A and crosses (40deg/94)
+  switches before: near=1 far=0 deck=1 | after: near=0 far=1 deck=1 | bridge-down ticks: 0
+  shooter rests at x=1366 after 203 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+
+=== L4: blue on plate B, red parked on the deck; blue putts away ===
+blue B -> cup (29deg/61)
+  switches before: near=0 far=1 deck=1 | after: near=0 far=0 deck=1 | bridge-down ticks: 0
+  shooter rests at x=1722 after 75 ticks; partner (880,610) -> (880,610) maxDrop=0 px, FELL=false
+
+=== L4: lone ball on plate A (partner at tee): can it use the deck to cross? ===
+lone blue from A 29deg/49
+  switches before: near=1 far=0 deck=0 | after: near=0 far=0 deck=0 | bridge-down ticks: 90
+  shooter rests at x=290 after 90 ticks; partner (250,618) -> (250,618) maxDrop=0 px, FELL=false
+lone blue from A 40deg/94
+  switches before: near=1 far=0 deck=0 | after: near=0 far=0 deck=0 | bridge-down ticks: 107
+  shooter rests at x=290 after 107 ticks; partner (250,618) -> (250,618) maxDrop=0 px, FELL=false
+lone blue from A 20deg/100
+  switches before: near=1 far=0 deck=0 | after: near=0 far=0 deck=0 | bridge-down ticks: 83
+  shooter rests at x=290 after 83 ticks; partner (250,618) -> (250,618) maxDrop=0 px, FELL=false
+lone blue from A 45deg/100
+  switches before: near=1 far=0 deck=0 | after: near=0 far=0 deck=0 | bridge-down ticks: 117
+  shooter rests at x=290 after 117 ticks; partner (250,618) -> (250,618) maxDrop=0 px, FELL=false
+
+=== L4: ball on the deck, NOBODY else holding (partner on far side off plate): shot from the deck ===
+deck ball 90deg/15
+  switches before: near=0 far=0 deck=1 | after: near=0 far=0 deck=0 | bridge-down ticks: 70
+  shooter rests at x=290 after 70 ticks; partner (1600,607) -> (1600,607) maxDrop=0 px, FELL=false
+deck ball 10deg/40
+  switches before: near=0 far=0 deck=1 | after: near=0 far=0 deck=0 | bridge-down ticks: 65
+  shooter rests at x=290 after 65 ticks; partner (1600,607) -> (1600,607) maxDrop=0 px, FELL=false
+deck ball 29deg/61
+  switches before: near=0 far=0 deck=1 | after: near=0 far=0 deck=0 | bridge-down ticks: 81
+  shooter rests at x=290 after 81 ticks; partner (1600,607) -> (1600,607) maxDrop=0 px, FELL=false
+deck ball 51deg/72
+  switches before: near=0 far=0 deck=1 | after: near=0 far=0 deck=0 | bridge-down ticks: 105
+  shooter rests at x=290 after 105 ticks; partner (1600,607) -> (1599,607) maxDrop=0 px, FELL=false
+deck ball 61deg/83
+  switches before: near=0 far=0 deck=1 | after: near=0 far=1 deck=0 | bridge-down ticks: 172
+  shooter rests at x=1443 after 173 ticks; partner (1600,607) -> (1599,607) maxDrop=0 px, FELL=false
+
+=== L2: blue holds DOOR plate (dish), red waits at 600; blue stall-taps ===
+blue tap 90deg/10
+  switches before: door=1 window=0 | after: door=1 window=0 | bridge-down ticks: 0
+  shooter rests at x=795 after 16 ticks; partner (600,608) -> (600,608) maxDrop=0 px, FELL=false
+blue tap 90deg/15
+  switches before: door=1 window=0 | after: door=1 window=0 | bridge-down ticks: 0
+  shooter rests at x=795 after 24 ticks; partner (600,608) -> (600,608) maxDrop=0 px, FELL=false
+blue tap 80deg/20
+  switches before: door=1 window=0 | after: door=1 window=0 | bridge-down ticks: 0
+  shooter rests at x=807 after 35 ticks; partner (600,608) -> (600,608) maxDrop=0 px, FELL=false
+blue tap 100deg/15
+  switches before: door=1 window=0 | after: door=1 window=0 | bridge-down ticks: 0
+  shooter rests at x=789 after 24 ticks; partner (600,608) -> (600,608) maxDrop=0 px, FELL=false
+
+=== L3: red holds DOOR 2 plate (bowl behind wall 2), blue waits at 1050; red stall-taps ===
+red tap 90deg/10
+  switches before: door1=0 door2=1 | after: door1=0 door2=1 | bridge-down ticks: 0
+  shooter rests at x=1415 after 16 ticks; partner (1050,608) -> (1050,608) maxDrop=0 px, FELL=false
+red tap 90deg/15
+  switches before: door1=0 door2=1 | after: door1=0 door2=1 | bridge-down ticks: 0
+  shooter rests at x=1415 after 24 ticks; partner (1050,608) -> (1050,608) maxDrop=0 px, FELL=false
+red tap 80deg/20
+  switches before: door1=0 door2=1 | after: door1=0 door2=1 | bridge-down ticks: 0
+  shooter rests at x=1427 after 35 ticks; partner (1050,608) -> (1050,608) maxDrop=0 px, FELL=false
+
+=== L3: blue holds DOOR 1 plate (dish behind wall 1), red waits at 400; blue stall-taps ===
+blue tap 90deg/10
+  switches before: door1=1 door2=0 | after: door1=1 door2=0 | bridge-down ticks: 0
+  shooter rests at x=850 after 16 ticks; partner (300,608) -> (300,608) maxDrop=0 px, FELL=false
+blue tap 90deg/15
+  switches before: door1=1 door2=0 | after: door1=1 door2=0 | bridge-down ticks: 0
+  shooter rests at x=850 after 24 ticks; partner (300,608) -> (300,608) maxDrop=0 px, FELL=false
+blue tap 80deg/20
+  switches before: door1=1 door2=0 | after: door1=1 door2=0 | bridge-down ticks: 0
+  shooter rests at x=862 after 35 ticks; partner (300,608) -> (300,608) maxDrop=0 px, FELL=false

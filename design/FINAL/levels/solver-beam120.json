@@ -1,0 +1,213 @@
+[
+  {
+    "index": 0,
+    "name": "First Fairway",
+    "size": "1280x720",
+    "wind": 0,
+    "shotSpeed": 6.5,
+    "switches": [],
+    "rects": [
+      "sand:sand"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 4,
+      "perPlayer": [
+        2,
+        2
+      ],
+      "path": [
+        "P1 a=29° p=94",
+        "P2 a=40° p=94",
+        "P1 a=83° p=94 SINK",
+        "P2 a=83° p=94 SINK"
+      ],
+      "touched": [
+        "sand:sand"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1268,
+        "path": [
+          "P1 a=29° p=94",
+          "P1 a=83° p=94 SINK"
+        ]
+      },
+      {
+        "player": 2,
+        "solved": true,
+        "minStrokes": 2,
+        "reachableX": 1268,
+        "path": [
+          "P2 a=40° p=94",
+          "P2 a=83° p=94 SINK"
+        ]
+      }
+    ],
+    "seconds": 11.3
+  },
+  {
+    "index": 1,
+    "name": "Two Doors",
+    "size": "1800x720",
+    "wind": 0,
+    "shotSpeed": 6.5,
+    "switches": [
+      "door",
+      "window"
+    ],
+    "rects": [
+      "gate:wall",
+      "gate:window[window]",
+      "gate:door[door]"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 5,
+      "perPlayer": [
+        3,
+        2
+      ],
+      "path": [
+        "P1 a=29° p=94",
+        "P2 a=40° p=94",
+        "P1 a=61° p=94",
+        "P2 a=61° p=83 SINK",
+        "P1 a=83° p=94 SINK"
+      ],
+      "touched": [
+        "gate:door"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 888,
+        "path": null
+      },
+      {
+        "player": 2,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 888,
+        "path": null
+      }
+    ],
+    "seconds": 27.8
+  },
+  {
+    "index": 2,
+    "name": "Colour Keys",
+    "size": "1860x720",
+    "wind": 0,
+    "shotSpeed": 6.5,
+    "switches": [
+      "door1",
+      "door2"
+    ],
+    "rects": [
+      "hazard:blue",
+      "gate:door 1[door1]",
+      "hazard:red",
+      "gate:door 2[door2]"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 7,
+      "perPlayer": [
+        4,
+        3
+      ],
+      "path": [
+        "P1 a=136° p=94",
+        "P2 a=51° p=83",
+        "P1 a=40° p=94",
+        "P2 a=29° p=61",
+        "P1 a=72° p=94",
+        "P2 a=19° p=83 SINK",
+        "P1 a=72° p=61 SINK"
+      ],
+      "touched": [
+        "hazard:blue",
+        "gate:door 1",
+        "gate:door 2",
+        "hazard:red"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 428,
+        "path": null
+      },
+      {
+        "player": 2,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 1148,
+        "path": null
+      }
+    ],
+    "seconds": 34
+  },
+  {
+    "index": 3,
+    "name": "Plate & Bridge",
+    "size": "1960x720",
+    "wind": 0,
+    "shotSpeed": 6.5,
+    "switches": [
+      "near",
+      "far",
+      "deck"
+    ],
+    "rects": [
+      "bridge:BRIDGE[near]",
+      "bridge:BRIDGE[far]",
+      "bridge:BRIDGE[deck]"
+    ],
+    "coop": {
+      "solved": true,
+      "minTotalStrokes": 5,
+      "perPlayer": [
+        3,
+        2
+      ],
+      "path": [
+        "P1 a=29° p=49",
+        "P2 a=40° p=94",
+        "P1 a=40° p=94",
+        "P2 a=40° p=94 SINK",
+        "P1 a=61° p=83 SINK"
+      ],
+      "touched": [
+        "bridge:BRIDGE"
+      ]
+    },
+    "solo": [
+      {
+        "player": 1,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 521,
+        "path": null
+      },
+      {
+        "player": 2,
+        "solved": false,
+        "minStrokes": null,
+        "reachableX": 519,
+        "path": null
+      }
+    ],
+    "seconds": 17
+  }
+]

@@ -1,0 +1,59 @@
+
+=== First Fairway: BOTH SUNK strokes P1=3 P2=3 total=6
+  P1 a=61deg p=94 -> (847,578) []  (5/128 grid shots satisfy) : drive over the hill, short of the bunker (600-860)
+  P2 a=61deg p=83 -> (848,578) []  (5/128 grid shots satisfy) : drive over the hill, short of the bunker (600-860)
+  P1 a=72deg p=94 -> (1253,550) []  (15/128 grid shots satisfy) : pitch over the sand onto the green (x>1120) or sink
+  P2 a=72deg p=94 -> (1252,550) []  (15/128 grid shots satisfy) : pitch over the sand onto the green (x>1120) or sink
+  P1 a=167deg p=27 -> (1190,582) SINK []  (28/128 grid shots satisfy) : putt / gimme
+  P2 a=167deg p=27 -> (1190,582) SINK []  (27/128 grid shots satisfy) : putt / gimme
+
+=== First Fairway (sand line): BOTH SUNK strokes P1=3 P2=2 total=5
+  P1 a=51deg p=94 -> (901,577) [sand]  (3/128 grid shots satisfy) : full drive runs into the bunker and stops dead (rests in 870-1010)
+  P2 a=61deg p=94 -> (878,577) [sand]  (6/128 grid shots satisfy) : full drive runs into the bunker and stops dead
+  P1 a=72deg p=83 -> (1267,550) []  (20/128 grid shots satisfy) : pitch out of the sand onto the green or sink
+  P2 a=72deg p=72 -> (1190,582) SINK []  (21/128 grid shots satisfy) : pitch out of the sand onto the green or sink
+  P1 a=167deg p=27 -> (1190,582) SINK []  (31/128 grid shots satisfy) : putt / gimme
+  P2 already sunk, skip "putt / gimme"
+
+=== Two Doors: BOTH SUNK strokes P1=4 P2=4 total=8
+  P1 a=61deg p=83 -> (612,608) [] door=0,window=0 (6/128 grid shots satisfy) : position in front of the wall (450-690)
+  P2 a=72deg p=94 -> (806,628) [] door=1,window=0 (11/128 grid shots satisfy) : park on the DOOR plate (dish 690-900) -> door opens
+  P1 a=51deg p=61 -> (1050,628) [] door=1,window=1 (7/128 grid shots satisfy) : roll/skip through the open door and stop on the WINDOW plate (dish 940-1230)
+  P2 a=83deg p=83 -> (1113,628) [door] door=0,window=1 (6/128 grid shots satisfy) : lob through the open window (land past the wall)
+  P1 a=61deg p=94 -> (1642,588) [] door=0,window=1 (12/128 grid shots satisfy) : approach the cup (within 160 px) or sink
+  P2 a=72deg p=94 -> (1628,588) [] door=0,window=0 (17/128 grid shots satisfy) : approach the cup (within 160 px) or sink
+  P1 a=83deg p=38 -> (1680,620) SINK [] door=0,window=0 (21/128 grid shots satisfy) : sink
+  P2 a=93deg p=61 -> (1680,620) SINK [] door=0,window=0 (21/128 grid shots satisfy) : sink
+
+=== Colour Keys: BOTH SUNK strokes P1=4 P2=5 total=9
+  P2 a=72deg p=94 -> (741,628) [blue door 1] door1=1,door2=0 (4/128 grid shots satisfy) : blue: lob through the BLUE field from the tee, rest on the DOOR 1 plate (bowl 650-1050) -> door 1 opens
+  P1 a=29deg p=94 -> (1006,624) [] door1=1,door2=0 (1/128 grid shots satisfy) : red: roll through the open door 1, finish close to wall 2 (900-1150)
+  P2 a=72deg p=72 -> (1008,624) [] door1=1,door2=0 (20/128 grid shots satisfy) : blue: move up in front of wall 2 (1000-1150)
+  P1 a=72deg p=83 -> (1479,628) [red door 2] door1=1,door2=1 (4/128 grid shots satisfy) : red: lob through the RED field, rest on the DOOR 2 plate (bowl 1220-1610) -> door 2 opens
+  P2 a=83deg p=94 -> (1200,608) [] door1=0,door2=1 (22/128 grid shots satisfy) : blue: roll through the open door 2 (x>1200)
+  P1 a=83deg p=72 -> (1608,608) [] door1=0,door2=0 (33/128 grid shots satisfy) : red: approach/sink
+  P2 a=72deg p=94 -> (1622,602) [] door1=0,door2=0 (20/128 grid shots satisfy) : blue: approach/sink
+  P1 a=72deg p=61 -> (1740,616) SINK [] door1=0,door2=0 (11/128 grid shots satisfy) : sink
+  P2 a=72deg p=49 -> (1740,616) SINK [] door1=0,door2=0 (14/128 grid shots satisfy) : sink
+
+=== Plate & Bridge: BOTH SUNK strokes P1=5 P2=4 total=9
+  P1 a=51deg p=38 -> (440,628) [] near=1,far=0,deck=0 (7/128 grid shots satisfy) : red: chip onto plate A (dish 350-520) -> bridge appears
+  P2 a=83deg p=83 -> (572,610) [BRIDGE] near=1,far=0,deck=1 (26/128 grid shots satisfy) : blue: full swing from the tee across the bridge, rest on the deck or plate B
+  P1 a=93deg p=94 -> (548,610) [BRIDGE] near=0,far=0,deck=1 (42/128 grid shots satisfy) : red: full swing from plate A, rest on plate B (or the deck)
+  P2 a=61deg p=94 -> (1312,616) [BRIDGE] near=0,far=1,deck=1 (7/128 grid shots satisfy) : blue: on to the far side (x>1240) or sink
+  P1 a=61deg p=94 -> (1302,616) [BRIDGE] near=0,far=1,deck=0 (5/128 grid shots satisfy) : red: on to the far side or sink
+  P2 a=72deg p=83 -> (1713,597) [] near=0,far=1,deck=0 (15/128 grid shots satisfy) : blue: approach/sink
+  P1 a=72deg p=94 -> (1715,596) [] near=0,far=0,deck=0 (15/128 grid shots satisfy) : red: approach/sink
+  P2 a=72deg p=61 -> (1860,604) SINK [] near=0,far=0,deck=0 (11/128 grid shots satisfy) : sink
+  P1 a=83deg p=61 -> (1860,604) SINK [] near=0,far=0,deck=0 (12/128 grid shots satisfy) : sink
+
+=== Plate & Bridge (deck line): BOTH SUNK strokes P1=5 P2=4 total=9
+  P1 a=51deg p=38 -> (440,628) [] near=1,far=0,deck=0 (7/128 grid shots satisfy) : chip onto plate A -> bridge appears
+  P2 a=83deg p=83 -> (572,610) [BRIDGE] near=1,far=0,deck=1 (26/128 grid shots satisfy) : cross from the tee and rest ON THE BRIDGE DECK (544-1216)
+  P1 a=167deg p=16 -> (403,628) [] near=1,far=0,deck=1 (36/128 grid shots satisfy) : stall tap: stay on plate A (partner on the deck must not fall)
+  P2 a=61deg p=94 -> (1312,616) [BRIDGE] near=1,far=1,deck=0 (7/128 grid shots satisfy) : from the deck onto plate B
+  P1 a=40deg p=94 -> (1308,616) [BRIDGE] near=0,far=1,deck=0 (1/128 grid shots satisfy) : cross the bridge (held by B)
+  P2 a=72deg p=83 -> (1713,597) [] near=0,far=1,deck=0 (15/128 grid shots satisfy) : approach/sink
+  P1 a=72deg p=94 -> (1722,593) [] near=0,far=0,deck=0 (16/128 grid shots satisfy) : approach/sink
+  P2 a=72deg p=61 -> (1860,604) SINK [] near=0,far=0,deck=0 (11/128 grid shots satisfy) : sink
+  P1 a=83deg p=83 -> (1860,604) SINK [] near=0,far=0,deck=0 (11/128 grid shots satisfy) : sink

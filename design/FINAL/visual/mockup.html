@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Flash Golf — FINAL visual mockup (gameplay, local 2P, pointer drag in progress)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  /* tokens: generated from src/view/render/palette.ts — the same hex values the canvas uses */
+  :root{
+    --ink:#241b33; --paper:#fff8e7; --paper-sh:#e9dcc0;
+    --p1:#ff5d73; --p1-sh:#d63d55; --p2:#50b7ff; --p2-sh:#2f8fd6;
+    --sun:#ffd93b; --sun-sh:#e0a800; --mint:#44d67a; --mint-sh:#2aa85a; --warn:#ff9f1c; --warn-sh:#e07a00;
+    --grass:#6ad636; --letterbox:#10263d;
+  }
+  html,body{margin:0;background:var(--letterbox);}
+  body{font-family:Fredoka,'Arial Rounded MT Bold','Trebuchet MS',system-ui,sans-serif;color:var(--ink);font-variant-numeric:tabular-nums;}
+  #stage{position:relative;width:1280px;height:720px;overflow:hidden;background:#c9f1ff;}
+  canvas{position:absolute;left:0;top:0;width:1280px;height:720px;}
+  .hud{position:absolute;inset:0;pointer-events:none;}
+  /* six anchored clusters (UX final layout); every element is a paper card */
+  .cl{position:absolute;display:flex;align-items:center;gap:8px;}
+  .tl{left:16px;top:12px;} .tc{left:50%;top:12px;transform:translateX(-50%);} .tr{right:16px;top:12px;}
+  .bl{left:16px;bottom:12px;gap:12px;} .br{right:16px;bottom:12px;}
+  .card{background:var(--paper);border:4px solid var(--ink);border-radius:16px;box-shadow:0 5px 0 var(--ink);height:48px;box-sizing:border-box;
+        display:flex;align-items:center;gap:8px;padding:0 12px;white-space:nowrap;font-weight:700;letter-spacing:.02em;}
+  .badge{background:var(--ink);color:#fff;border-radius:9px;padding:3px 8px;font-size:14px;line-height:1;}
+  .lvl .name{font-size:22px;text-transform:uppercase;}
+  .pill{background:var(--p2-sh);color:#fff;border-radius:999px;padding:2px 10px;font-size:15px;}
+  .team{justify-content:center;gap:10px;}
+  .team .lab{font-size:13px;letter-spacing:.08em;color:#6b5f80;}
+  .team .big{font-size:28px;line-height:1;}
+  .team .delta{background:var(--mint);color:#fff;border:3px solid var(--ink);border-radius:10px;padding:2px 8px;font-size:14px;line-height:1;letter-spacing:.04em;}
+  /* player chips: name row + 13 px status row (doodle graft) */
+  .chip{min-width:150px;justify-content:flex-start;opacity:.72;padding:0 12px 0 10px;}
+  .chip .dot{width:18px;height:18px;border-radius:50%;border:3px solid var(--ink);box-sizing:border-box;flex:none;}
+  .chip.red .dot{background:var(--p1);} .chip.blue .dot{background:var(--p2);}
+  .chip .col{display:flex;flex-direction:column;align-items:flex-start;line-height:1.02;gap:2px;}
+  .chip .name{font-size:18px;}
+  .chip .sub{font-size:12px;font-weight:600;letter-spacing:.06em;opacity:.8;}
+  .chip .cnt{margin-left:auto;font-size:16px;background:var(--ink);color:#fff;border-radius:8px;padding:2px 7px;line-height:1;}
+  .chip.active{opacity:1;color:#fff;transform:translateY(-3px) scale(1.06);box-shadow:0 8px 0 var(--ink);}
+  .chip.active .sub{opacity:.92;}
+  .chip.blue.active{background:var(--p2);} .chip.red.active{background:var(--p1);}
+  .chip.active .dot{border-color:#fff;}
+  .chip.active .cnt{background:#fff;color:var(--p2-sh);}
+  .chip.red.active .cnt{color:var(--p1-sh);}
+  .chip.active:before{content:"▶";font-size:12px;margin-right:-2px;}
+  .icon{width:48px;padding:0;justify-content:center;border-radius:50%;}
+  .icon svg{width:22px;height:22px;display:block;}
+  /* power meter (DOM, bottom-left; ARCH says the power bar lives in React) */
+  .meter{width:300px;gap:8px;}
+  .meter .lab{font-size:13px;letter-spacing:.08em;color:#6b5f80;}
+  .meter .bar{flex:1;height:18px;border:3px solid var(--ink);border-radius:9px;background:#fff;overflow:hidden;position:relative;}
+  .meter .fill{height:100%;width:76%;background:var(--p2);box-shadow:inset 0 -6px 0 var(--p2-sh);}
+  .meter .tick{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);opacity:.35;}
+  .meter .num{font-size:22px;min-width:34px;text-align:right;}
+  .meter .deg{font-size:14px;font-weight:600;opacity:.8;}
+  /* hint pill: paper, never dark */
+  .hint{height:40px;background:rgba(255,248,231,.92);border-radius:999px;padding:0 16px;display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;
+        box-shadow:0 4px 0 var(--ink);white-space:nowrap;}
+  .hint kbd{display:inline-block;min-width:16px;padding:1px 6px;border:3px solid var(--ink);border-radius:7px;background:#fff;font:700 13px Fredoka,system-ui;line-height:1.1;box-shadow:0 2px 0 var(--ink);margin:0 1px;}
+  .sep{opacity:.45;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="1280" height="720"></canvas>
+
+  <div class="hud">
+    <div class="cl tl"><div class="card lvl"><span class="badge">HOLE 2/4</span><span class="name">Plate &amp; Bridge</span><span class="pill">PAR 9</span></div></div>
+    <div class="cl tc"><div class="card team"><span class="lab">TEAM</span><span class="big">5</span><span class="lab">/ PAR 9</span><span class="delta">4 TO SPARE</span></div></div>
+    <div class="cl tr">
+      <div class="card chip red"><span class="dot"></span><span class="col"><span class="name">RED</span><span class="sub">HOLDS SWITCH A</span></span><span class="cnt">3</span></div>
+      <div class="card chip blue active"><span class="dot"></span><span class="col"><span class="name">BLUE</span><span class="sub">AIMING</span></span><span class="cnt">2</span></div>
+      <div class="card icon" title="Mute (M)"><svg viewBox="0 0 24 24" fill="none" stroke="#241b33" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="#241b33"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6a8 8 0 0 1 0 12"/></svg></div>
+      <div class="card icon" title="Menu (Esc)"><svg viewBox="0 0 24 24" fill="#241b33"><rect x="5" y="4" width="5" height="16" rx="2"/><rect x="14" y="4" width="5" height="16" rx="2"/></svg></div>
+    </div>
+    <div class="cl bl">
+      <div class="card meter"><span class="lab">POWER</span><div class="bar"><div class="fill"></div><i class="tick" style="left:25%"></i><i class="tick" style="left:50%"></i><i class="tick" style="left:75%"></i></div><span class="num">76</span><span class="deg">58°</span></div>
+      <div class="hint">Drag back from your ball to aim <span class="sep">·</span> release to shoot <span class="sep">·</span> drag onto the ball to cancel</div>
+    </div>
+    <div class="cl br"><div class="card icon" title="Overview (Tab)"><svg viewBox="0 0 24 24" fill="none" stroke="#241b33" stroke-width="3" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><rect x="8" y="9" width="8" height="6" rx="2" fill="#241b33"/></svg></div></div>
+  </div>
+</div>
+
+<script>
+(function(){
+const C = document.getElementById('c');
+const ctx = C.getContext('2d');
+const INK = '#241b33', LW = 4;
+/* palette.ts — every colour in the game. X = flat fill, XSh = its single shade. */
+const P = {
+  sky1:'#3fb6ff', sky2:'#c9f1ff', sun:'#ffd93b', sunSh:'#e0a800',
+  cloud:'#ffffff', cloudSh:'#d4e9f8', cloudInk:'#3f6f9c',
+  hillFar:'#a9e3b7', hillMid:'#6fcb73', hillMidInk:'#2f7a4b', tree:'#3f9f4c', treeInk:'#2f7a4b',
+  grass:'#6ad636', grassSh:'#45b02a', dirt:'#c97f3d', dirtSh:'#a3602a',
+  pitTop:'#4a2d18', pitBot:'#1a0d05', rock:'#3b2516',
+  sand:'#f5d98a', sandSh:'#d9b35c', sandLine:'#fff1b0',
+  spring:'#ffd93b', springSh:'#e0a800', coil:'#d6dcea',
+  bump:'#ff9f1c', bumpSh:'#e07a00',
+  fan:'#8d93a8', fanSh:'#6a7088', wind:'rgba(140,230,255,.40)', windLine:'rgba(255,255,255,.9)', windAccent:'#7fe7ff',
+  sw:'#b57bee', swSh:'#8f55cc', plate:'#8d93a8', plateSh:'#6a7088',
+  plank:'#d89a4b', plankSh:'#b97a33',
+  mint:'#44d67a', mintSh:'#2aa85a', mintHalo:'rgba(68,214,122,.35)',
+  p1:'#ff5d73', p1Sh:'#d63d55', p2:'#50b7ff', p2Sh:'#2f8fd6',
+  skin:'#ffcf9e', shorts:'#3f3a5a', shortsSh:'#2d2944', paper:'#fff8e7', paperSh:'#e9dcc0', tongue:'#ff8aa8',
+  shadow:'rgba(36,27,51,.28)',
+};
+const PLAYER = [ {col:P.p1, sh:P.p1Sh, name:'RED'}, {col:P.p2, sh:P.p2Sh, name:'BLUE'} ];
+const FONT = (w, s) => `${w} ${s}px Fredoka, "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif`;
+/* sim constants mirrored from src/sim/types.ts (the real port imports them) */
+const BALL_RADIUS = 12, GRAVITY = 620, SHOT_SPEED_PER_POWER = 6.8, GIMME_RADIUS = 34, DRAG_FULL_POWER_PX = 220, MIN_POWER = 10, MAX_POWER = 100;
+
+/* ---------- primitives ---------- */
+function fs(fill, lw = LW, stroke = INK){ ctx.fillStyle = fill; ctx.fill(); if (lw > 0){ ctx.lineWidth = lw; ctx.strokeStyle = stroke; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke(); } }
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function circ(x, y, r){ ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+function line(ax, ay, bx, by, lw, col){ ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineWidth = lw; ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(); }
+function inkLine(ax, ay, bx, by, lw, col){ line(ax, ay, bx, by, lw + 5, INK); line(ax, ay, bx, by, lw, col); }
+function appendRounded(pts, r, move){
+  if (move) ctx.moveTo(pts[0][0], pts[0][1]); else ctx.lineTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length - 1; i++){
+    const a = pts[i-1], v = pts[i], b = pts[i+1];
+    const la = Math.hypot(a[0]-v[0], a[1]-v[1]), lb = Math.hypot(b[0]-v[0], b[1]-v[1]);
+    const ra = Math.min(r, la/2), rb = Math.min(r, lb/2);
+    ctx.lineTo(v[0] + (a[0]-v[0])/la*ra, v[1] + (a[1]-v[1])/la*ra);
+    ctx.quadraticCurveTo(v[0], v[1], v[0] + (b[0]-v[0])/lb*rb, v[1] + (b[1]-v[1])/lb*rb);
+  }
+  const l = pts[pts.length-1]; ctx.lineTo(l[0], l[1]);
+}
+
+/* ---------- level data (world == screen in this frame; cam.x = 0, scale 1) ---------- */
+const pieces = [
+  { surface: [[0,520],[120,520],[180,510],[230,500],[330,500],[400,520],[480,520]], base: 720 },
+  { surface: [[660,520],[760,520],[820,548],[870,560],[1080,560],[1110,540],[1150,500],[1170,490],[1280,490]], base: 720 },
+];
+const GAP = { x1: 480, x2: 660 };
+const BRIDGE = { x1: 480, x2: 660, y: 520, h: 18, active: true, letter: 'A' };
+function surfaceY(x){
+  for (const p of pieces){
+    const s = p.surface;
+    if (x < s[0][0] || x > s[s.length-1][0]) continue;
+    for (let i = 0; i < s.length - 1; i++){
+      const a = s[i], b = s[i+1];
+      if (x >= a[0] && x <= b[0]){ const t = (x - a[0]) / (b[0] - a[0] || 1); return a[1] + (b[1] - a[1]) * t; }
+    }
+  }
+  if (BRIDGE.active && x >= BRIDGE.x1 && x <= BRIDGE.x2) return BRIDGE.y;
+  return null;
+}
+
+/* ---------- background ---------- */
+function drawSky(){
+  const g = ctx.createLinearGradient(0, 0, 0, 560);               // the ONLY gradient besides the pit
+  g.addColorStop(0, P.sky1); g.addColorStop(1, P.sky2);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 1280, 720);
+  // sun: rule y >= 100 and x <= 900 so it never sits under the chips, the mute/pause buttons or a turn tag
+  circ(868, 128, 62); ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill();
+  circ(868, 128, 44); fs(P.sun, LW);
+  circ(868, 128, 44); ctx.save(); ctx.clip(); ctx.fillStyle = P.sunSh; ctx.fillRect(824, 154, 90, 20); ctx.restore();
+}
+function cloud(x, y, s){
+  const blobs = [[0,0,30],[28,-10,24],[52,2,22],[-26,6,20],[14,10,22]];
+  const bp = () => { ctx.beginPath(); for (const b of blobs){ ctx.moveTo(x + (b[0]+b[2])*s, y + b[1]*s); ctx.arc(x + b[0]*s, y + b[1]*s, b[2]*s, 0, Math.PI*2); } };
+  bp(); ctx.lineWidth = 7; ctx.strokeStyle = P.cloudInk; ctx.stroke();      // union outline: thick stroke, then fill over it
+  bp(); ctx.fillStyle = P.cloud; ctx.fill();
+  ctx.save(); bp(); ctx.clip(); ctx.fillStyle = P.cloudSh; ctx.fillRect(x - 60*s, y + 11*s, 160*s, 40*s); ctx.restore();
+}
+function hills(){
+  ctx.beginPath(); ctx.moveTo(0, 520);
+  appendRounded([[0,470],[120,420],[260,450],[420,400],[560,440],[700,395],[860,430],[1000,380],[1140,420],[1280,400]], 70, false);
+  ctx.lineTo(1280, 560); ctx.lineTo(0, 560); ctx.closePath(); ctx.fillStyle = P.hillFar; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, 560);
+  appendRounded([[0,520],[90,480],[200,505],[330,470],[470,500],[600,462],[760,498],[900,455],[1060,492],[1200,462],[1280,480]], 60, false);
+  ctx.lineTo(1280, 580); ctx.lineTo(0, 580); ctx.closePath(); fs(P.hillMid, 3, P.hillMidInk);
+  for (const [tx, ty, r] of [[150,486,14],[612,468,12],[905,459,15],[1210,466,12],[560,480,9]]){
+    line(tx, ty + r, tx, ty + r + 14, 4, P.treeInk);
+    circ(tx, ty, r); fs(P.tree, 3, P.treeInk);
+  }
+}
+/* chasm = dark pit (doodle graft), drawn before terrain so the terrain outline caps it */
+function drawPit(g){
+  const grad = ctx.createLinearGradient(0, 540, 0, 720);
+  grad.addColorStop(0, P.pitTop); grad.addColorStop(1, P.pitBot);
+  ctx.fillStyle = grad; ctx.fillRect(g.x1 - 6, 540, g.x2 - g.x1 + 12, 180);
+  // jagged rock silhouette at the bottom
+  ctx.beginPath(); ctx.moveTo(g.x1 - 6, 720);
+  const w = g.x2 - g.x1 + 12; let x = g.x1 - 6, up = true;
+  while (x < g.x2 + 6){ x += 18 + ((x * 7) % 11); ctx.lineTo(Math.min(x, g.x2 + 6), up ? 690 - ((x * 3) % 14) : 712); up = !up; }
+  ctx.lineTo(g.x2 + 6, 720); ctx.closePath(); ctx.fillStyle = P.rock; ctx.fill();
+}
+
+/* ---------- terrain (cached per level in the port) ---------- */
+function drawPiece(p){
+  const s = p.surface, x0 = s[0][0], x1 = s[s.length-1][0];
+  const body = () => { ctx.beginPath(); appendRounded(s, 18, true); ctx.lineTo(x1, p.base); ctx.lineTo(x0, p.base); ctx.closePath(); };
+  body(); fs(P.dirt, LW);
+  ctx.save(); body(); ctx.clip();
+  ctx.fillStyle = P.dirtSh;
+  ctx.beginPath(); appendRounded(s.map(q => [q[0], q[1] + 24]), 18, true); appendRounded(s.map(q => [q[0], q[1] + 36]).reverse(), 18, false); ctx.closePath(); ctx.fill();
+  let seed = x0 + 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  for (let i = 0; i < 11; i++){ const rx = x0 + 20 + rnd() * (x1 - x0 - 40), ry = surfaceY(rx) + 70 + rnd() * 100, rw = 16 + rnd() * 18; rr(rx, ry, rw, rw * 0.72, rw * 0.36); ctx.fill(); }
+  ctx.restore();
+  const band = () => { ctx.beginPath(); appendRounded(s, 18, true); appendRounded(s.map(q => [q[0], q[1] + 24]).reverse(), 18, false); ctx.closePath(); };
+  band(); fs(P.grass, LW);
+  ctx.save(); band(); ctx.clip();
+  ctx.beginPath(); appendRounded(s.map(q => [q[0], q[1] + 15]), 18, true); appendRounded(s.map(q => [q[0], q[1] + 30]).reverse(), 18, false); ctx.closePath(); ctx.fillStyle = P.grassSh; ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = 3; ctx.strokeStyle = P.grassSh; ctx.lineCap = 'round';
+  for (let tx = x0 + 34; tx < x1 - 20; tx += 74){
+    const ty = surfaceY(tx); if (ty == null) continue;
+    ctx.beginPath(); ctx.moveTo(tx, ty + 8); ctx.lineTo(tx - 4, ty + 1); ctx.moveTo(tx + 1, ty + 9); ctx.lineTo(tx + 2, ty); ctx.moveTo(tx + 3, ty + 8); ctx.lineTo(tx + 8, ty + 2); ctx.stroke();
+  }
+}
+
+/* ---------- sticker: paper label, constant SCREEN scale (drawn after resetting the camera transform) ---------- */
+function sticker(x, y, text, opts = {}){
+  const size = opts.size || 15, accent = opts.accent, rot = opts.rot == null ? -0.03 : opts.rot;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = opts.alpha == null ? 1 : opts.alpha;
+  ctx.font = FONT(700, size); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width + (accent ? 18 : 0);
+  const w = tw + 18, h = size + 12;
+  rr(-w/2, -h/2 + 3, w, h, 8); ctx.fillStyle = INK; ctx.fill();            // hard shadow (0,3)
+  rr(-w/2, -h/2, w, h, 8); fs(opts.fill || P.paper, 3);
+  if (accent){ circ(-w/2 + 12, 0, 6); fs(accent, 2.5); }
+  ctx.fillStyle = opts.color || INK; ctx.fillText(text, accent ? 9 : 0, 1);
+  ctx.restore();
+  return w;
+}
+
+/* ---------- mechanics (all flush with the surface) ---------- */
+function drawSand(x1, x2){
+  // sunken band 16 px deep following the surface polyline (glossy graft) — NOT a pad on the grass
+  const n = 8, top = [];
+  for (let i = 0; i <= n; i++){ const x = x1 + (x2 - x1) * i / n; top.push([x, surfaceY(x)]); }
+  const path = (d0, d1) => { ctx.beginPath(); ctx.moveTo(top[0][0], top[0][1] + d0); for (const p of top) ctx.lineTo(p[0], p[1] + d0); for (let i = top.length - 1; i >= 0; i--) ctx.lineTo(top[i][0], top[i][1] + d1); ctx.closePath(); };
+  path(0, 16); fs(P.sand, LW);
+  ctx.save(); path(0, 16); ctx.clip();
+  path(10, 16); ctx.fillStyle = P.sandSh; ctx.fill();                           // one shade band, lower 6 px
+  ctx.beginPath(); ctx.moveTo(top[0][0], top[0][1] + 4); for (const p of top) ctx.lineTo(p[0], p[1] + 4);
+  ctx.lineWidth = 2.5; ctx.strokeStyle = P.sandLine; ctx.stroke();               // pale scallop line 4 px under the surface
+  ctx.fillStyle = P.sandSh; for (let x = x1 + 10, k = 0; x < x2 - 6; x += 12, k++){ circ(x, surfaceY(x) + 8 + (k % 2 ? 3 : -1), 1.8); ctx.fill(); }
+  ctx.restore();
+}
+function drawSpring(x){
+  const y = surfaceY(x);
+  rr(x - 20, y - 2, 40, 32, 6); ctx.fillStyle = INK; ctx.fill();               // ink slot cut into the dirt
+  ctx.beginPath(); ctx.moveTo(x - 12, y + 24);
+  for (let i = 0; i < 5; i++) ctx.lineTo(x + (i % 2 ? -12 : 12), y + 20 - i * 4.5);
+  ctx.lineTo(x, y + 2); ctx.lineWidth = 3.5; ctx.strokeStyle = P.coil; ctx.lineJoin = 'round'; ctx.stroke();
+  rr(x - 28, y - 6, 56, 14, 5); fs(P.spring, LW);                               // plate 56x14, 6 px proud
+  ctx.save(); rr(x - 28, y - 6, 56, 14, 5); ctx.clip(); ctx.fillStyle = INK;
+  for (let i = -3; i < 6; i++){ ctx.beginPath(); ctx.moveTo(x - 28 + i * 12, y + 8); ctx.lineTo(x - 28 + i * 12 + 8, y - 6); ctx.lineTo(x - 28 + i * 12 + 14, y - 6); ctx.lineTo(x - 28 + i * 12 + 6, y + 8); ctx.closePath(); ctx.fill(); }
+  ctx.fillStyle = P.springSh; ctx.fillRect(x - 28, y + 4, 56, 4);
+  ctx.restore();
+  for (const cy of [y - 16, y - 28]){                                           // two stacked white up-chevrons: "launches UP"
+    ctx.beginPath(); ctx.moveTo(x - 9, cy + 6); ctx.lineTo(x, cy - 2); ctx.lineTo(x + 9, cy + 6); ctx.lineWidth = 8; ctx.strokeStyle = INK; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+  }
+}
+function drawBumper(x){
+  const y = surfaceY(x);
+  ctx.beginPath(); ctx.ellipse(x, y + 1, 27, 6, 0, 0, Math.PI * 2); fs(P.dirtSh, 3);   // socket: embedded, not a pad
+  const dome = () => { ctx.beginPath(); ctx.arc(x, y, 22, Math.PI, 0); ctx.closePath(); };
+  dome(); fs(P.bump, LW);
+  ctx.save(); dome(); ctx.clip();
+  ctx.fillStyle = P.bumpSh; ctx.fillRect(x - 22, y - 7, 44, 7);                 // one shade band, lower third of the dome
+  circ(x, y - 4, 10); ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke(); // pinball ring
+  circ(x, y - 4, 5.5); ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+  for (const a of [-135, -90, -45]){                                           // three spark ticks (white over ink)
+    const r = a * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+    inkLine(x + c * 27, y + s * 27, x + c * 35, y + s * 35, 3, '#fff');
+  }
+}
+function drawFan(x, top){
+  const y = surfaceY(x);
+  ctx.fillStyle = P.wind; rr(x - 24, top, 48, y - 8 - top, 14); ctx.fill();
+  ctx.setLineDash([8, 7]); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,.95)'; rr(x - 24, top, 48, y - 8 - top, 14); ctx.stroke(); ctx.setLineDash([]);
+  ctx.lineWidth = 4; ctx.strokeStyle = P.windLine; ctx.lineCap = 'round';
+  for (let cy = y - 30; cy > top + 16; cy -= 34){ ctx.beginPath(); ctx.moveTo(x - 11, cy + 8); ctx.lineTo(x, cy - 2); ctx.lineTo(x + 11, cy + 8); ctx.stroke(); }
+  rr(x - 28, y - 8, 56, 30, 8); fs(P.fan, LW);
+  ctx.save(); rr(x - 28, y - 8, 56, 30, 8); ctx.clip(); ctx.fillStyle = P.fanSh; ctx.fillRect(x - 28, y + 10, 56, 14); ctx.restore();
+  circ(x, y + 7, 11); fs(INK, 0);
+  ctx.strokeStyle = P.coil; ctx.lineWidth = 3;
+  for (let i = 0; i < 4; i++){ const a = i * Math.PI / 2 + 0.5; ctx.beginPath(); ctx.moveTo(x, y + 7); ctx.lineTo(x + Math.cos(a) * 9, y + 7 + Math.sin(a) * 9); ctx.stroke(); }
+  circ(x, y + 7, 2.5); ctx.fillStyle = P.coil; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.beginPath(); ctx.moveTo(x - 24, y - 2); ctx.lineTo(x - 15, y - 2); ctx.moveTo(x + 15, y - 2); ctx.lineTo(x + 24, y - 2); ctx.stroke();
+}
+function drawSwitch(x, pressed, letter){
+  const y = surfaceY(x);
+  rr(x - 32, y - 4, 64, 14, 6); fs(P.plate, LW);                                // base 64x14, 4 px proud
+  ctx.save(); rr(x - 32, y - 4, 64, 14, 6); ctx.clip(); ctx.fillStyle = P.plateSh; ctx.fillRect(x - 32, y + 4, 64, 8); ctx.restore();
+  const capH = pressed ? 6 : 14;                                                // pressed = 8 px drop; a parked ball visibly sits lower
+  rr(x - 26, y - 4 - capH, 52, capH + 6, 6); fs(P.sw, LW);
+  ctx.save(); rr(x - 26, y - 4 - capH, 52, capH + 6, 6); ctx.clip(); ctx.fillStyle = P.swSh; ctx.fillRect(x - 26, y - 4 - capH + Math.max(4, capH - 4), 52, 12); ctx.restore();
+  circ(x - 26, y + 3, 8); fs(P.sw, 2.5);                                        // letter tag (left end)
+  ctx.fillStyle = '#fff'; ctx.font = FONT(700, 11); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(letter, x - 26, y + 3.5);
+  if (pressed){ circ(x + 26, y + 3, 11); ctx.fillStyle = P.mintHalo; ctx.fill(); }    // lamp (right end): plateSh off / mint on + flat 35 % halo
+  circ(x + 26, y + 3, 6); fs(pressed ? P.mint : P.plateSh, 2.5);
+  if (pressed){ ctx.lineWidth = 3; ctx.strokeStyle = INK; for (const d of [-1, 1]){ ctx.beginPath(); ctx.moveTo(x + d * 32, y - 14); ctx.lineTo(x + d * 37, y - 20); ctx.moveTo(x + d * 34, y - 7); ctx.lineTo(x + d * 41, y - 9); ctx.stroke(); } }
+}
+function drawWire(from, to, lit){
+  ctx.setLineDash([2, 7]); ctx.lineWidth = 4; ctx.strokeStyle = lit ? P.sw : P.plateSh; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(from[0], from[1]); ctx.lineTo(from[0], from[1] + 46); ctx.lineTo(to[0], from[1] + 46); ctx.lineTo(to[0], to[1]); ctx.stroke(); ctx.setLineDash([]);
+}
+function drawBridge(b){
+  if (!b.active){ ctx.setLineDash([10, 8]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(36,27,51,.45)'; rr(b.x1, b.y, b.x2 - b.x1, b.h, 4); ctx.stroke(); ctx.setLineDash([]); }
+  else {
+    rr(b.x1, b.y, b.x2 - b.x1, b.h, 4); fs(P.plank, LW);
+    ctx.save(); rr(b.x1, b.y, b.x2 - b.x1, b.h, 4); ctx.clip();
+    ctx.fillStyle = P.plankSh; ctx.fillRect(b.x1, b.y + b.h - 6, b.x2 - b.x1, 6);
+    ctx.fillStyle = INK; for (let px = b.x1 + 26; px < b.x2 - 10; px += 26) ctx.fillRect(px - 1.5, b.y, 3, b.h);
+    ctx.restore();
+  }
+  for (const px of [b.x1 + 8, b.x2 - 8]){                                       // posts + lamps (same lamp language as the switch)
+    rr(px - 5, b.y - 24, 10, 26, 3); fs(P.plate, 3);
+    if (b.active){ circ(px, b.y - 28, 11); ctx.fillStyle = P.mintHalo; ctx.fill(); }
+    circ(px, b.y - 28, 6); fs(b.active ? P.mint : P.plateSh, 2.5);
+  }
+}
+function drawGate(x, h, owner){
+  const col = PLAYER[owner].col, colSh = PLAYER[owner].sh, other = PLAYER[1 - owner].col;
+  const y = surfaceY(x), top = y - h;
+  ctx.save(); rr(x - 10, top + 6, 20, h - 12, 4); ctx.clip();
+  ctx.fillStyle = col; ctx.globalAlpha = 0.42; ctx.fillRect(x - 10, top, 20, h); ctx.globalAlpha = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 4;
+  for (let sy = top - 10; sy < y + 20; sy += 16){ ctx.beginPath(); ctx.moveTo(x - 12, sy + 12); ctx.lineTo(x + 12, sy - 12); ctx.stroke(); }
+  ctx.restore();
+  ctx.lineWidth = 3; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(x - 10, top + 8); ctx.lineTo(x - 10, y - 8); ctx.moveTo(x + 10, top + 8); ctx.lineTo(x + 10, y - 8); ctx.stroke();
+  for (const ey of [top - 6, y - 14]){
+    rr(x - 16, ey, 32, 20, 7); fs(col, LW);
+    ctx.save(); rr(x - 16, ey, 32, 20, 7); ctx.clip(); ctx.fillStyle = colSh; ctx.fillRect(x - 16, ey + 12, 32, 8); ctx.restore();
+    rr(x - 6, ey + 5, 12, 6, 3); ctx.fillStyle = '#fff'; ctx.fill();
+  }
+  // BOTH outcomes on one badge (doodle graft): [owner ball + mint check] [other ball + ink cross]
+  const by = top + h / 2;
+  rr(x - 38, by - 11, 76, 28, 8); ctx.fillStyle = INK; ctx.fill();
+  rr(x - 38, by - 14, 76, 28, 8); fs(P.paper, 3);
+  drawBall(x - 24, by, 7, col, false);
+  ctx.beginPath(); ctx.moveTo(x - 14, by); ctx.lineTo(x - 9, by + 5); ctx.lineTo(x - 2, by - 6); ctx.lineWidth = 7; ctx.strokeStyle = INK; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(); ctx.lineWidth = 3.5; ctx.strokeStyle = P.mint; ctx.stroke();
+  drawBall(x + 10, by, 7, other, false);
+  line(x + 21, by - 5, x + 31, by + 5, 3.5, INK); line(x + 31, by - 5, x + 21, by + 5, 3.5, INK);
+}
+function drawCup(x){
+  const y = surfaceY(x);
+  ctx.beginPath(); ctx.ellipse(x, y + 1, GIMME_RADIUS, 8, 0, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill();   // gimme ring = GIMME_RADIUS exactly
+  ctx.setLineDash([6, 5]); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.ellipse(x, y, 17, 6, 0, 0, Math.PI*2); fs(INK, 3);
+  rr(x - 3, y - 76, 6, 78, 3); fs('#fff', 3);
+  rr(x + 3, y - 80, 34, 24, 4); fs('#fff', 3);
+  ctx.save(); rr(x + 3, y - 80, 34, 24, 4); ctx.clip(); ctx.fillStyle = INK;
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) if ((i + j) % 2 === 0) ctx.fillRect(x + 3 + i * 8.5, y - 80 + j * 8, 8.5, 8);
+  ctx.restore();
+  rr(x + 3, y - 80, 34, 24, 4); ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+}
+
+/* ---------- ball: drawn at BALL_RADIUS, outline straddles the physics edge ---------- */
+function drawBall(x, y, r, color, shadow = true){
+  if (shadow){ const gy = surfaceY(x); if (gy != null){ ctx.beginPath(); ctx.ellipse(x, gy + 2, r * 0.9, r * 0.32, 0, 0, Math.PI*2); ctx.fillStyle = P.shadow; ctx.fill(); } }
+  circ(x, y, r); fs(color, r > 10 ? LW : 2.5);
+  ctx.beginPath(); ctx.ellipse(x - r * 0.32, y - r * 0.36, r * 0.3, r * 0.2, -0.6, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fill();
+}
+
+/* ---------- golfer: 98 px chibi, faces: smile | focus | wow | grin | sad ---------- */
+function drawFace(x, hy, f, face, power){
+  ctx.fillStyle = INK;
+  if (face === 'focus'){
+    circ(x + f * 5, hy + 3, 2.8); ctx.fill();                                   // back eye open
+    line(x + f * 10, hy + 3, x + f * 16, hy + 3, 3, INK);                       // front eye squints
+    line(x + f * 9, hy - 4, x + f * 17, hy - 6, 2.5, INK);                      // raised brow
+    ctx.beginPath(); ctx.arc(x + f * 9, hy + 8, 4, 0.15 * Math.PI, 0.85 * Math.PI); ctx.lineWidth = 2.5; ctx.strokeStyle = INK; ctx.stroke();
+    if (power > 0.6){ rr(x + f * 10 - 4, hy + 9, 8, 9, 4); fs(P.tongue, 2.5); } // tongue out above 60 % power
+  } else if (face === 'wow'){
+    circ(x + f * 5, hy + 2, 3.2); ctx.fill(); circ(x + f * 13, hy + 2, 3.2); ctx.fill();
+    circ(x + f * 9, hy + 9, 4); fs(INK, 0);
+  } else if (face === 'grin'){
+    circ(x + f * 5, hy + 3, 2.8); ctx.fill(); circ(x + f * 13, hy + 3, 2.8); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + f * 9, hy + 7, 6, 0, Math.PI); ctx.closePath(); fs('#fff', 2.5);
+  } else if (face === 'sad'){
+    circ(x + f * 5, hy + 3, 2.8); ctx.fill(); circ(x + f * 13, hy + 3, 2.8); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + f * 9, hy + 12, 4.5, 1.15 * Math.PI, 1.85 * Math.PI); ctx.lineWidth = 2.5; ctx.strokeStyle = INK; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(x + f * 15, hy + 9, 2, 3, 0, 0, Math.PI*2); fs(P.p2, 1.5);   // one tear
+  } else {
+    circ(x + f * 5, hy + 3, 2.8); ctx.fill(); circ(x + f * 13, hy + 3, 2.8); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + f * 9, hy + 8, 4.5, 0.15 * Math.PI, 0.85 * Math.PI); ctx.lineWidth = 2.5; ctx.strokeStyle = INK; ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(255,93,115,.35)'; circ(x - f * 6, hy + 8, 4); ctx.fill();  // cheek
+}
+function drawGolfer(x, gy, pl, facing, pose, face, power){
+  const f = facing, color = PLAYER[pl].col, colorSh = PLAYER[pl].sh;
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(x, gy + 2, 22, 6, 0, 0, Math.PI*2); ctx.fillStyle = 'rgba(36,27,51,.25)'; ctx.fill();
+  for (const lx of [x - 9, x + 3]){ rr(lx, gy - 20, 10, 18, 4); fs(P.skin, 3); }
+  for (const sx of [x - 11, x + 1]){ rr(sx, gy - 8, 16, 9, 4); fs('#fff', 3); }
+  rr(x - 16, gy - 32, 32, 16, 6); fs(P.shorts, LW);
+  ctx.save(); rr(x - 16, gy - 32, 32, 16, 6); ctx.clip(); ctx.fillStyle = P.shortsSh; ctx.fillRect(x - 16, gy - 22, 32, 8); ctx.restore();
+  rr(x - 19, gy - 58, 38, 30, 10); fs(color, LW);
+  ctx.save(); rr(x - 19, gy - 58, 38, 30, 10); ctx.clip(); ctx.fillStyle = colorSh; ctx.fillRect(x - 19 + (f > 0 ? 28 : 0), gy - 58, 10, 30); ctx.restore();
+  rr(x - 8, gy - 60, 16, 8, 3); fs('#fff', 3);
+  const hy = gy - 76;
+  circ(x, hy, 19); fs(P.skin, LW);
+  ctx.beginPath(); ctx.arc(x, hy - 2, 19, Math.PI, 0); ctx.closePath(); fs(color, LW);
+  rr(x + (f > 0 ? 6 : -32), hy - 8, 26, 9, 4); fs(color, 3);
+  ctx.save(); ctx.beginPath(); ctx.arc(x, hy - 2, 19, Math.PI, 0); ctx.closePath(); ctx.clip(); ctx.fillStyle = colorSh; ctx.fillRect(x + (f > 0 ? 8 : -20), hy - 24, 12, 24); ctx.restore();
+  circ(x, hy - 20, 4.5); fs(color, 3);
+  drawFace(x, hy, f, face, power || 0);
+  const sh = [x + f * 12, gy - 52];
+  let hand, clubEnd;
+  if (pose === 'backswing'){ hand = [x - f * 18, gy - 66]; clubEnd = [x - f * 34, gy - 114]; }
+  else if (pose === 'swing'){ hand = [x + f * 26, gy - 34]; clubEnd = [x + f * 44, gy - 72]; }
+  else { hand = [x + f * 18, gy - 30]; clubEnd = [x + f * 30, gy - 1]; }
+  line(hand[0], hand[1], clubEnd[0], clubEnd[1], 7, INK); line(hand[0], hand[1], clubEnd[0], clubEnd[1], 3, P.coil);
+  rr(clubEnd[0] - 8, clubEnd[1] - 5, 16, 10, 4); fs(P.plate, 3);
+  line(sh[0], sh[1], hand[0], hand[1], 14, INK); line(sh[0], sh[1], hand[0], hand[1], 8, color);
+  circ(hand[0], hand[1], 6.5); fs('#fff', 3);
+  ctx.restore();
+}
+
+/* ---------- aim: preview dots (every 4th tick of the REAL sim in the port), X landing marker, drag rubber band ---------- */
+function predictMock(bx, by, angleDeg, power){
+  // stands in for sim.predictShot(): 1/60 steps, gravity 620, speed = power * 6.8; stops at first ground contact
+  const v = power * SHOT_SPEED_PER_POWER, a = angleDeg * Math.PI / 180;
+  let x = bx, y = by, vx = Math.cos(a) * v, vy = -Math.sin(a) * v; const pts = []; let landing = null;
+  for (let t = 1; t < 180; t++){
+    vy += GRAVITY / 60; x += vx / 60; y += vy / 60;
+    const sy = surfaceY(x);
+    if (sy != null && y > sy - BALL_RADIUS && vy > 0){ landing = [x, sy - BALL_RADIUS]; break; }
+    pts.push([x, y]);
+  }
+  return { points: pts, landing };
+}
+function drawAim(bx, by, angleDeg, power, pl, drag){
+  const col = PLAYER[pl].col, { points, landing } = predictMock(bx, by, angleDeg, power);
+  if (drag){                                                                    // pointer drag: dashed ink rubber band + ring at the pointer
+    ctx.setLineDash([6, 6]); line(bx, by, drag[0], drag[1], 4, INK); ctx.setLineDash([]);
+    circ(drag[0], drag[1], 12); fs('rgba(255,255,255,.85)', 3);
+  }
+  const dots = points.filter((_, i) => i % 4 === 3);
+  dots.forEach((p, i) => { const r = Math.max(2.5, 5 - i * 0.18); circ(p[0], p[1], r); fs(col, 2.5); });
+  if (landing){ const [lx, ly] = [landing[0], landing[1] + BALL_RADIUS]; inkLine(lx - 11, ly - 11, lx + 11, ly + 11, 3.5, col); inkLine(lx + 11, ly - 11, lx - 11, ly + 11, 3.5, col); }
+}
+function turnMarker(x, feetY, pl){
+  const y = feetY - 122, col = PLAYER[pl].col, sh = PLAYER[pl].sh;             // 24x16 triangle, bobs +-4 px at 6 rad/s in the port
+  ctx.beginPath(); ctx.moveTo(x - 12, y - 16); ctx.lineTo(x + 12, y - 16); ctx.lineTo(x, y); ctx.closePath(); fs(col, LW);
+  ctx.save(); ctx.clip(); ctx.fillStyle = sh; ctx.fillRect(x + 2, y - 20, 14, 24); ctx.restore();
+}
+
+/* ---------- compose frame ---------- */
+function draw(){
+  ctx.clearRect(0, 0, 1280, 720);
+  drawSky();
+  cloud(200, 118, 1.15); cloud(560, 92, 0.8); cloud(1090, 176, 0.9);
+  hills();
+  drawPit(GAP);
+  pieces.forEach(drawPiece);
+  drawWire([316, 510], [488, 500], true);
+  drawSand(876, 936);
+  drawSpring(710);
+  drawBumper(980);
+  drawFan(1050, 332);
+  drawSwitch(290, true, 'A');
+  drawBridge(BRIDGE);
+  drawGate(1178, 150, 0);
+  drawCup(1232);
+  // golfers stand ~42 px behind their own ball, facing it
+  drawGolfer(342, surfaceY(342), 0, -1, 'idle', 'smile');
+  drawGolfer(128, surfaceY(128), 1, 1, 'backswing', 'focus', 0.72);
+  drawBall(290, 500 - 8 - BALL_RADIUS, BALL_RADIUS, P.p1);                     // red parked on the pressed cap (8 px lower)
+  drawBall(170, surfaceY(170) - BALL_RADIUS, BALL_RADIUS, P.p2);
+  turnMarker(128, surfaceY(128), 1);
+  // blue is mid-drag: pull vector = (power-10)/90 * 220 px opposite to the shot direction
+  const ang = 58, pow = 76, len = (pow - MIN_POWER) / (MAX_POWER - MIN_POWER) * DRAG_FULL_POWER_PX;
+  const bx = 170, by = surfaceY(170) - BALL_RADIUS;
+  const drag = [bx - Math.cos(ang * Math.PI / 180) * len, by + Math.sin(ang * Math.PI / 180) * len];
+  drawAim(bx, by, ang, pow, 1, drag);
+  // stickers: one per mechanic, constant screen scale, state words on linked pairs
+  sticker(236, 452, 'SWITCH A · ON', { accent: P.sw });
+  sticker(570, 570, 'BRIDGE A · ON', { accent: P.sw, rot: 0.02 });            // 18 px BELOW the beam, never under the landing marker
+  sticker(570, 626, 'OUT OF BOUNDS · +1', { size: 13, rot: 0.06, accent: P.bump, alpha: .92 }); // teaches the fall penalty before it happens
+  sticker(710, 476, 'SPRING', { accent: P.spring });
+  sticker(906, 536, 'SAND', { accent: P.sandSh, rot: 0.02 });
+  sticker(980, 506, 'BUMPER', { accent: P.bump, rot: -0.04 });
+  sticker(1050, 606, 'FAN', { accent: P.windAccent });                        // under the housing so the column top stays clear
+  sticker(1178, 312, 'RED ONLY', { accent: P.p1, rot: 0.03 });
+}
+draw();
+if (document.fonts && document.fonts.load){ document.fonts.load('700 16px Fredoka').then(draw, draw); document.fonts.ready.then(draw); }
+})();
+</script>
+</body>
+</html>
