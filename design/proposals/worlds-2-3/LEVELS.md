@@ -1,6 +1,6 @@
 # Worlds 2 & 3: level design proposal (levels 5-12)
 
-> Status: DESIGN ONLY, not for implementation until the Phase 2 exit condition in CLAUDE.md §5 clears. Supersedes nothing; World 1 stays as built.
+> Status: DESIGN ONLY, approved by the owner on 2026-10-08 (see "Decisions for you"). Not for implementation until the Phase 2 exit condition in CLAUDE.md §5 clears. Supersedes nothing; World 1 stays as built.
 >
 > If Phase 2 forces a tutorial, co-op-clarity or turn-flow iteration, re-review this document before any World 2/3 work starts: the trap and the cannon both change turn flow (see "Decisions for you", item 2).
 >
@@ -36,6 +36,16 @@ World 1 taught one idea per hole on flat ground. World 2 opens the vertical axis
 **Progression.** Each new device first appears alone with light precision (L5-L7), then the World 2 exam combines them at the world's precision and co-op peak (L8). World 3 turns the devices into co-op tools: the trap as bait (L9), the cannon fired by a chain reaction (L10), colour roles around the cannon (L11), and a finale with a route choice (L12). The curve section shows each step changes at least one axis and no hole maxes all five.
 
 ## Decisions for you
+
+> **Owner review (2026-10-08).** The owner replied "the plan looks good, continue". That is recorded as approval of the progression and of the recommended answer to every decision below:
+> - 1: co-op lock traps
+> - 3: fixed-vector cannons fired by the partner
+> - 4: the fixed 720 px screen
+> - 5: no fans or bumpers
+> - 6: three new mechanics in World 2 and none in World 3
+> - 7: working names and pars, calibrated by the solver
+>
+> Decision 2 (skipped turns) stays provisional. It is re-reviewed against the Phase 2 playtest evidence before any World 2 build starts. The build itself stays gated on the Phase 2 exit condition.
 
 1. **Trap severity (your "lock your ball and make you restart").** Recommended: **C**.
 
