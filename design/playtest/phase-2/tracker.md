@@ -84,7 +84,7 @@ If failed, sessions per axis: TUT __  COOP __  TURN __   →  axis: ______
 2. If two axes tie, pick the one with more sessions where `holes_finished` is below 4. If they still tie, pick the one that showed up earliest in play.
 3. Make the smallest change you can on that axis only. No new holes, no new mechanics, nothing from the §4 cut list.
 4. Retest with **new** people, using the same line, the same rules and a fresh tracker. Don't merge while the round is running.
-5. **No World 2/3 work until a retest clears.** When one does, first re-review `design/proposals/worlds-2-3/LEVELS.md`. It lives on branch `claude/design-worlds-2-3`, not on main, and its line 5 requires this review. If several iterations fail, CLAUDE.md says to consider sunsetting, "a mature outcome, not a failure."
+5. **No World 2/3 work until a retest clears.** When one does, first re-review `design/proposals/worlds-2-3/LEVELS.md`. Its status note at the top requires this review. If several iterations fail, CLAUDE.md says to consider sunsetting, "a mature outcome, not a failure."
 
 ## If it clears
 
