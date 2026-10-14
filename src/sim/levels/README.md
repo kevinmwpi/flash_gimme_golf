@@ -127,7 +127,7 @@ Line: red parks on the DOOR plate → door opens → blue rolls through low (5�
 the WINDOW plate → window opens → red lobs through the window (50–60°, 90–100) → both approach and sink.
 Watch-outs: the first ball through plays on toward the cup instead of settling on the WINDOW plate (the
 holder is stuck until it comes back or sinks: `cupHoldsSwitch`); the holder must shoot before the partner is
-through → stall tap (straight up, low power), taught by the L2 holder toast (UX).
+through → stall tap (straight up, low power), taught by the holder tip (`src/ui/holderTip.ts`).
 
 ### 3 · Colour Keys (par 8, BLUE first, cup holds `door2`)
 

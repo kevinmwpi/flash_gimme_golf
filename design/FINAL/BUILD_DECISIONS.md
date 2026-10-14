@@ -38,7 +38,7 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
   shows stickers as `<LABEL> · ON|OFF` (switch) and `<LABEL> · OPEN|SHUT` (door/window) / `BRIDGE · ON|OFF`; with no
   label it falls back to `SWITCH <letter>` by index. HUD chip status: `HOLDS DOOR`, `AIMING`, `WAITING`, `IN THE CUP`.
 - Spring, bumper and fan are NOT used in World 1 but ARE implemented, rendered and unit-tested (SIM + VIEW).
-- No `wait` command. The "stall tap" is taught by the L2 holder toast (UX copy); levels are verified without it.
+- No `wait` command. The "stall tap" is taught by the holder tip (`src/ui/holderTip.ts`): at most once per hole (a restart re-arms it; online, each browser only for its own ball), at the start of a turn whose ball rests on a plate the partner still needs (never a deck plate or the cup-wired plate). Levels are verified without it.
 - Pars: 6 / 7 / 9 / 8 as authored; the LEVELS re-verification stage may adjust by +-1 with evidence.
 
 ## D3. Contract requests accepted (owners must implement them)
@@ -63,7 +63,7 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
   sticker words per D2; outline 4 px / labels 15 px; ball/mechanic callouts (GIMME! +1, IN THE HOLE!, OUT! +1,
   LOCKED!, BONK!, SAND…, LIFT!, SWITCH/DOOR HELD, BRIDGE OPEN/GONE, SO CLOSE) are CANVAS text anchored in the world
   (ViewState.callouts, VIEW owner). The React `Callouts.tsx` renders ONLY the turn banner ("RED'S TURN" / "YOUR TURN")
-  and toasts ("Blue teed off", "Red restarted the hole", "Blue is here!", "Red left", the L2 holder tip).
+  and toasts ("Blue teed off", "Red restarted the hole", "Blue is here!", "Red left", the holder tip).
 
 ## D4. Ownership clarifications
 - Mute/music/volume persistence: VIEW (audio.ts). Bests/onboarded/hint-device settings: UI (storage.ts, key `fg.v1.*`).
