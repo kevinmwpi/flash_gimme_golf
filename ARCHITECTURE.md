@@ -28,7 +28,7 @@ src/view/             client-only presentation; may use Math.random/performance;
   audio.ts            Web Audio synthesized SFX/music; owns flashgolf.audio.* persistence
   GameCanvas.tsx      the loop (below), canvas letterboxing by DPR, HUD CSS variables at 60 Hz
 src/ui/               React: Title, Lobby, Hud, Pause, LevelIntro/Results, CampaignResults, Settings,
-                      Callouts, OnboardingHint; copy.ts, storage.ts (fg.v1.*), url.ts, eventBus.ts
+                      Callouts, OnboardingHint; copy.ts, storage.ts (fg.v1.*), url.ts, eventBus.ts, holderTip.ts (when the stall-tap tip shows)
 src/App.tsx           screen state machine title -> lobby -> game; builds local/online sessions
 server/               index.ts (http + ws glue, origin allow-list, tick driver) and rooms.ts (RoomManager)
 scripts/solver.ts     beam search over runReplay/predictShot; proves holes are co-op-only solvable
@@ -174,6 +174,7 @@ version validation and show a "from an older version" card.
 | `src/view/__tests__/{input-keyboard,input-pointer,loop}.test.ts` | adapter maths (drag 120 px => power 55), persistent pending queue, coalescing, continue-after-pause |
 | `src/view/__tests__/{view,audio}.test.ts` | snap flags on teleports, no interpolation of sunk balls, SFX debounce |
 | `src/ui/__tests__/{copy,storage}.test.ts` | no competitive copy; `fg.v1.*` storage validates ids and survives blocked storage |
+| `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; shared plate, deck, bridge planks, doorway middle, own colour field and unknown spots never tip |
 
 ## Tooling
 

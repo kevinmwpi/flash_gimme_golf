@@ -237,7 +237,7 @@ Each cluster is `position:absolute; display:flex; gap:8px` and scales from its o
 | BL | left 16, bottom 12 | `<PowerMeter>` 300×48: "POWER" 15 px · 18 px bar (`--grass`→`--sun`→`--p1`), ticks 25/50/75 · "62" 22 px · "45°" 15 px → `<HintPill>` ≤ 560×40 (ink 78 %, white 16 px, ellipsis) | meter 220×44 without the angle readout, **hidden when device = touch** (the canvas band + floating power number carry it) → hint pill ≤ 300×40 |
 | BR | right 16, bottom 12 | `<NetPill>` 110×28 "● 48 ms" 15 px (online only; dot `--mint` < 120 ms, `--warn` < 300, `--bad` otherwise / no pong 3 s) → `<IconButton camera>` 48 | same |
 | banner | centre x 640, top `band + 12` | `<TurnBanner>` 500×56: fill = active player colour, 28 px white with 2 px ink stroke, sub-line 15 px; slides down 200 ms (fade only under reduced motion), holds 1.2 s, slides up. Also used for stage announcements (`tone:'info'`, `--paper` fill): "HOLE COMPLETE!" (1.2 s), "HOLE RESTARTED", "OUT OF BOUNDS · +1 STROKE" | same |
-| toasts | centre x 640, bottom `band + 8` | `<Toasts>` 400×40 ink pill 16 px white, 2.5 s, max 2 stacked | same |
+| toasts | centre x 640, bottom `band + 8` | `<Toasts>` 400×40 ink pill 16 px white, 2.5 s (holder tip 5 s), max 2 stacked | same |
 
 Collision proof at s = 1.7 (compact): TL 16–271 · TC 470–810 · TR ≈ 863–1264 (two local-2P chips: 849–1264) · BL ≤ 16–920 (meter + hint) · BR 982–1264. At s = 1.06 (normal, the largest normal scale): TL ≤ 16–368 · TC 492–788 · TR 798–1264 · BL ≤ 16–940 · BR 1088–1264. Screenshots in §13.
 
@@ -491,6 +491,7 @@ Hooks: `useHudSnapshot(frame, level, status, seat, mode, localAim)` (memo), `use
 | pause.leave.title / .body / .confirm | Leave the game? / {Colour} will be left waiting. / Leave |
 | toast.teedOff / .movedOn / .restarted / .controller / .soundOn / .reconnected / .back / .offline / .copied | {Colour} teed off / {Colour} moved on to the next hole / {Colour} restarted the hole / Controller connected / Sound is on — use the speaker button to mute / Reconnected / {Colour} is back! / You're offline / Copied! |
 | toast.notYourTurn / .notNow / .slowDown / .wrongPad | That move wasn't allowed (not your turn) / Not right now / Slow down a little / That's P{n}'s controller |
+| toast.holderTip | Stay on the {LABEL} plate for {Colour} — tap straight up at low power (one-letter label: Stay on plate {L} for {Colour} — …; `src/ui/holderTip.ts` decides when) |
 | results.hole / .team / .par | HOLE {n} COMPLETE / TEAM {strokes} / PAR {par} |
 | results.under / .even / .over | {k} UNDER PAR / PAR / {k} OVER PAR |
 | results.flavour.eagle / .birdie / .par / .bogey / .double / .none | Eagle territory! / Birdie! / Par — solid. / Bogey, still bronze. / Double bogey, bronze. / No medal — try again for bronze. |

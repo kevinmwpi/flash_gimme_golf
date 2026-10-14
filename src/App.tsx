@@ -29,6 +29,7 @@ import Settings from './ui/Settings';
 import Title, { type SharedCard } from './ui/Title';
 import { COPY, commandErrorToast, otherPlayer, switchLabel } from './ui/copy';
 import { createEventBus, type EventBus } from './ui/eventBus';
+import { HOLDER_TIP_MS, UNKNOWN_SPOTS, advanceSpots, holderTipSwitch, spotsOf, type Spots } from './ui/holderTip';
 import { tapSpeaker } from './ui/speaker';
 import { clearBests, loadBests, loadOnboarded, loadSettings, saveBest, saveOnboarded, saveSettings, type BestTable, type UiSettings } from './ui/storage';
 import { inviteUrlFor, isRoomCode } from './ui/url';
@@ -84,6 +85,9 @@ function randomSeed(): number {
   crypto.getRandomValues(buf);
   return buf[0] ?? 0;
 }
+
+/** Solo plays both balls from one seat, so both slots can get the holder tip. */
+const BOTH_SLOTS: readonly PlayerId[] = [0, 1];
 
 function seatsFor(mode: SimMode, seat: PlayerId | null): readonly PlayerId[] {
   if (mode === 'solo') return [0];
@@ -267,13 +271,15 @@ function useAimKeysHeld(active: boolean): boolean {
   return held;
 }
 
-function useToasts(): [Toast[], (text: string, tone?: Toast['tone']) => void, (id: number) => void] {
+function useToasts(): [Toast[], (text: string, tone?: Toast['tone'], ms?: number) => number, (id: number) => void] {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(1);
-  const push = useCallback((text: string, tone?: Toast['tone']) => {
+  const push = useCallback((text: string, tone?: Toast['tone'], ms?: number) => {
     const id = nextId.current;
     nextId.current += 1;
-    setToasts((list) => [...list.slice(-1), tone === undefined ? { id, text } : { id, text, tone }]);
+    const toast: Toast = { id, text, ...(tone === undefined ? {} : { tone }), ...(ms === undefined ? {} : { ms }) };
+    setToasts((list) => [...list.slice(-1), toast]);
+    return id;
   }, []);
   const pop = useCallback((id: number) => setToasts((list) => list.filter((t) => t.id !== id)), []);
   return [toasts, push, pop];
@@ -370,7 +376,8 @@ type GameScreenProps = {
   onBest(levelId: string, teamStrokes: number, medal: Medal): void;
   clientStatus: ClientStatus;
   toasts: Toast[];
-  pushToast(text: string, tone?: Toast['tone']): void;
+  /** Returns the toast's id (for popToast). */
+  pushToast(text: string, tone?: Toast['tone'], ms?: number): number;
   popToast(id: number): void;
   onToggleMute(): void;
   onOpenSettings(): void;
@@ -421,6 +428,7 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const seats = useMemo(() => (online ? seatsFor('online', session.seat) : session.seats), [online, session]);
   const isHost = !online || session.seat === 0;
   const mode = session.config.mode;
+  const tipSlots = mode === 'solo' ? BOTH_SLOTS : seats;
 
   const gameRef = useRef<HTMLDivElement>(null);
   /** GameCanvas writes the per-frame aim/ball custom properties here; every stage-space child inherits them. */
@@ -445,8 +453,18 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const [firstRun] = useState(() => !loadOnboarded());
   const localContinue = useRef(false);
   const holderTipShown = useRef<string | null>(null);
-  /** switchId -> slot, from switchOn/switchOff, for the holder-tip toast only (the chips read FrameSummary.holds). */
-  const holdsRef = useRef<Record<string, PlayerId>>({});
+  /**
+   * Where each ball last came to rest, from SimEvents, for the holder tip only. A local mount knows
+   * the state (shared links included); online starts unknown. `mount` also names the mount's own
+   * levelStart (createSim's, or sharedSession's synthetic one), which must not reset the spots to the
+   * tees if it ever reaches the subscription (today GameCanvas emits it before GameScreen subscribes).
+   */
+  const [mount] = useState<{ spots: Spots; levelId: string | null; tick: number }>(() =>
+    session.kind === 'local'
+      ? { spots: spotsOf(session.initial.state.balls), levelId: session.initial.state.levelId, tick: session.initial.state.tick }
+      : { spots: UNKNOWN_SPOTS, levelId: null, tick: -1 },
+  );
+  const spotsRef = useRef<Spots>(mount.spots);
   const bestsRef = useRef(bests);
   useEffect(() => {
     bestsRef.current = bests;
@@ -471,74 +489,75 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
     [session, levelIndex],
   );
 
-  // Event-derived UI state: holds, shot counts, bests, results, toasts the sim implies.
-  useEffect(
-    () =>
-      bus.subscribe((e: SimEvent) => {
-        switch (e.type) {
-          case 'levelStart': {
-            holdsRef.current = {};
-            setFlags((f) => ({ ...EMPTY_FLAGS, campaign: f.campaign }));
-            setResultsHold(false);
-            setHintForced(false);
-            holderTipShown.current = null;
-            if (online && seat !== null && e.levelIndex > 0 && !e.restarted && !localContinue.current) pushToast(COPY.toast.movedOn(otherPlayer(seat)));
-            localContinue.current = false;
-            break;
-          }
-          case 'playStart':
-            if (online && seat !== null && !localContinue.current) pushToast(COPY.toast.teedOff(otherPlayer(seat)));
-            localContinue.current = false;
-            break;
-          case 'switchOn':
-            holdsRef.current = { ...holdsRef.current, [e.switchId]: e.byPlayer };
-            break;
-          case 'switchOff': {
-            const holds = { ...holdsRef.current };
-            delete holds[e.switchId];
-            holdsRef.current = holds;
-            break;
-          }
-          case 'ballHit':
-            if (seats.includes(e.playerId)) {
-              setFlags((f) => ({ ...f, shots: f.shots + 1 }));
-              saveOnboarded();
-              setCoachDismissed(true);
-            }
-            break;
-          case 'turnStart': {
-            if (!seats.includes(e.playerId) || holderTipShown.current === level.id) break;
-            const held = level.switches.find((sw) => holdsRef.current[sw.id] === e.playerId && sw.id !== level.cupHoldsSwitch);
-            if (held !== undefined) {
-              holderTipShown.current = level.id;
-              pushToast(COPY.toast.holderTip(switchLabel(level, held.id), otherPlayer(e.playerId)));
-            }
-            break;
-          }
-          case 'levelComplete': {
-            const previous = bestsRef.current[e.result.levelId] ?? null;
-            setFlags((f) => ({ ...f, lastResult: e.result, resultBest: previous }));
-            setResultsHold(true);
-            onBest(e.result.levelId, e.teamStrokes, e.result.medal);
-            break;
-          }
-          case 'campaignComplete':
-            setFlags((f) => ({
-              ...f,
-              campaign: {
-                rows: e.results.map((result) => ({ level: levelById(result.levelId), result })),
-                coursePar: e.coursePar,
-                total: e.totalStrokes,
-                medal: e.medal,
-              },
-            }));
-            break;
-          default:
-            break;
+  // Event-derived UI state: ball spots (holder tip), shot counts, bests, results, toasts the sim implies.
+  useEffect(() => {
+    /** The holder tip belongs to its hole: a new hole, a restart or leaving the game takes it down. */
+    let tipToast: number | null = null;
+    const dropTip = (): void => {
+      if (tipToast !== null) popToast(tipToast);
+      tipToast = null;
+    };
+    const unsubscribe = bus.subscribe((e: SimEvent) => {
+      const mountEcho = e.type === 'levelStart' && e.levelId === mount.levelId && e.tick === mount.tick;
+      if (!mountEcho) spotsRef.current = advanceSpots(spotsRef.current, e);
+      switch (e.type) {
+        case 'levelStart': {
+          dropTip();
+          setFlags((f) => ({ ...EMPTY_FLAGS, campaign: f.campaign }));
+          setResultsHold(false);
+          setHintForced(false);
+          holderTipShown.current = null;
+          if (online && seat !== null && e.levelIndex > 0 && !e.restarted && !localContinue.current) pushToast(COPY.toast.movedOn(otherPlayer(seat)));
+          localContinue.current = false;
+          break;
         }
-      }),
-    [bus, online, seat, seats, level, pushToast, onBest],
-  );
+        case 'playStart':
+          if (online && seat !== null && !localContinue.current) pushToast(COPY.toast.teedOff(otherPlayer(seat)));
+          localContinue.current = false;
+          break;
+        case 'ballHit':
+          if (seats.includes(e.playerId)) {
+            setFlags((f) => ({ ...f, shots: f.shots + 1 }));
+            saveOnboarded();
+            setCoachDismissed(true);
+          }
+          break;
+        case 'turnStart': {
+          if (!tipSlots.includes(e.playerId) || holderTipShown.current === level.id) break;
+          const held = holderTipSwitch(level, spotsRef.current, e.playerId);
+          if (held !== null) {
+            holderTipShown.current = level.id;
+            tipToast = pushToast(COPY.toast.holderTip(switchLabel(level, held), otherPlayer(e.playerId)), undefined, HOLDER_TIP_MS);
+          }
+          break;
+        }
+        case 'levelComplete': {
+          const previous = bestsRef.current[e.result.levelId] ?? null;
+          setFlags((f) => ({ ...f, lastResult: e.result, resultBest: previous }));
+          setResultsHold(true);
+          onBest(e.result.levelId, e.teamStrokes, e.result.medal);
+          break;
+        }
+        case 'campaignComplete':
+          setFlags((f) => ({
+            ...f,
+            campaign: {
+              rows: e.results.map((result) => ({ level: levelById(result.levelId), result })),
+              coursePar: e.coursePar,
+              total: e.totalStrokes,
+              medal: e.medal,
+            },
+          }));
+          break;
+        default:
+          break;
+      }
+    });
+    return () => {
+      unsubscribe();
+      dropTip();
+    };
+  }, [bus, online, seat, seats, tipSlots, mount, level, pushToast, popToast, onBest]);
 
   // Online status transitions -> toasts / partner-away clock / SFX (handled in the subscription callback).
   useEffect(() => {

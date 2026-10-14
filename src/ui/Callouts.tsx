@@ -2,7 +2,7 @@
 /**
  * Turn banner + toasts (BUILD_DECISIONS D3 VISUAL 1-5): ONLY the banner ("RED'S TURN" / "YOUR TURN",
  * plus the paper stage announcements HOLE COMPLETE! / HOLE RESTARTED / OUT OF BOUNDS) and the ink
- * toasts ("Blue teed off", "Red restarted the hole", "Blue is here!", "Red left", the L2 holder tip).
+ * toasts ("Blue teed off", "Red restarted the hole", "Blue is here!", "Red left", the holder tip).
  * World-anchored callouts (GIMME!, IN THE HOLE!, BONK! …) are canvas text owned by VIEW. Lives in
  * stage space (App wraps it in the scaled stage layer). One polite live region announces banners
  * and toasts for screen readers (UX.md §6). An info banner holds for its full duration: a turn banner
@@ -14,7 +14,8 @@ import type { PlayerId, SimMode } from '../sim/types';
 import { COPY, turnBanner } from './copy';
 import type { EventBus } from './eventBus';
 
-export type Toast = { id: number; text: string; tone?: 'info' | 'good' | 'bad' };
+/** `ms` overrides TOAST_MS for one toast (the holder tip). */
+export type Toast = { id: number; text: string; tone?: 'info' | 'good' | 'bad'; ms?: number };
 
 export type CalloutsProps = {
   bus: EventBus;
@@ -107,7 +108,7 @@ export default function Callouts({ bus, seats, mode, toasts, onToastDone }: Call
         window.setTimeout(() => {
           timers.delete(t.id);
           onToastDone(t.id);
-        }, TOAST_MS),
+        }, t.ms ?? TOAST_MS),
       );
     }
   }, [toasts, onToastDone]);

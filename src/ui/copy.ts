@@ -13,6 +13,8 @@ import type { InputDevice } from '../view/view';
 export const nameOf = (p: PlayerId): string => PLAYER_NAMES[p];
 export const upperNameOf = (p: PlayerId): string => PLAYER_NAMES[p].toUpperCase();
 export const otherPlayer = (p: PlayerId): PlayerId => (p === 0 ? 1 : 0);
+/** "plate A" for a one-letter label, the switchLabel fallback as is, otherwise "the DOOR plate". */
+const platePhrase = (label: string): string => (label.length === 1 ? `plate ${label}` : label.startsWith('SWITCH ') ? label : `the ${label} plate`);
 
 export const COPY = Object.freeze({
   app: Object.freeze({
@@ -244,7 +246,7 @@ export const COPY = Object.freeze({
     notNow: 'Not right now',
     slowDown: 'Slow down a little',
     holderTip: (label: string, partner: PlayerId) =>
-      `You're holding the ${label} for ${nameOf(partner)} — tap straight up at low power to stay on the plate.`,
+      `Stay on ${platePhrase(label)} for ${nameOf(partner)} — tap straight up at low power`,
     waitingNewRound: (p: PlayerId) => `Waiting for ${nameOf(p)} to start a new round…`,
   }),
   results: Object.freeze({
