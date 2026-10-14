@@ -118,7 +118,7 @@ bronze (par + 2) absorbs one duff per ball. Re-derive after the physics retune (
 | Sand | flush surface zone: kills bounce and roll (drawn embedded; 1 px proud here only for the current physics). |
 | Respawn | after a fall: last rest position on PERMANENT terrain (never on a bridge or inside a doorway), +1 stroke, on-screen callout. |
 | `cupHoldsSwitch` | **adopted rule for the early-sink strand:** a sunk ball counts as resting on the cup, and a level may wire the cup to one switch. L2 → `window`, L3 → `door2`, L4 → `far`. The first ball home then holds the partner's way open ("P1 is holding the WINDOW from the cup"), so sinking early is a finale, not a restart. The solver verification above does NOT use this rule; it only removes the one restart-only failure every proposal had. |
-| Stall tap | a holder who must shoot before the partner is through taps straight up at minimum power and lands back on the plate (verified safe for doors and, with the deck plate, for the bridge). Taught on L2 by the turn toast: "You are holding the DOOR for P2 - tap straight up (low power) to stay on the plate." If the architecture track adds a `wait` command (+1 stroke, ball unchanged) it replaces the tap; the levels are verified without it. |
+| Stall tap | a holder who must shoot before the partner is through taps straight up at minimum power and lands back on the plate (verified safe for doors and, with the deck plate, for the bridge). Taught by the holder tip, at most once per hole (a restart re-arms it), at the start of a turn whose ball rests on a plate the partner still needs (never a deck plate or the cup-wired plate), e.g. "Stay on the DOOR plate for Blue — tap straight up at low power" (shipped copy; `src/ui/holderTip.ts` decides when). If the architecture track adds a `wait` command (+1 stroke, ball unchanged) it replaces the tap; the levels are verified without it. |
 | Gimme | start at 40 px; every plate is ≥ 500 px from its cup, so the gimme can never concede a holder. |
 | Camera | L1 fits one screen; L2-L4 scroll horizontally only (all 720 tall); overview at 0.65-0.71×. |
 
@@ -158,7 +158,7 @@ mechanicsIntroduced, mechanicsPresent, firstPlayer, cupHoldsSwitch?, axes, verif
   holder waits, and the holder follows later through the window the crosser holds open.
 - **Watch-out:** the first ball through the door plays on toward the cup instead of settling on the WINDOW plate
   (the holder is stuck until it comes back, 2 strokes, or sinks: `cupHoldsSwitch: 'window'`); the holder must
-  shoot before the partner is through and needs the stall tap (taught by the toast).
+  shoot before the partner is through and needs the stall tap (taught by the holder tip).
 - **Geometry (floor 620):** surface `[0,620] [360,620] [460,606] [560,620] [690,620] [740,640] [850,640] [900,620]
   [940,620] [990,640] [1180,640] [1230,620] [1320,620] [1400,600] [1480,620] [1540,620] [1600,600]
   [1800,600]`. Tees 100 / 150. **Wall** x 900-940: solid 200-350, **WINDOW** gate 350-520 (switch `window`),
@@ -254,7 +254,7 @@ then red field; plate A then plate B/deck), and no mistake needs a restart once 
    colour-glass slabs over doors; a chasm with a plank bridge), dishes/bowls, humps and raised greens on every
    level; door/window/plate carry the same letter/label; inactive gates drawn in place; deck strip drawn only
    while the bridge exists.
-5. **Stall tap untaught** — taught by the L2 holder toast; never on the main line of any level except as the L3
+5. **Stall tap untaught** — taught by the holder tip (Stall tap row above; it can fire on L2, L3 and L4); never on the main line of any level except as the L3
    fallback; safe with doors and (via the deck) with the bridge; `wait` command optional.
 6. **Doorway closing on a ball / respawn on a vanished bridge** — ejection rule and permanent-ground respawn in
    the contract table.

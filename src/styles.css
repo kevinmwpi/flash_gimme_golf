@@ -2502,7 +2502,8 @@ input {
 .toasts {
   position: absolute;
   left: 50%;
-  top: calc(var(--band) + 76px);
+  /* below the turn banner, which scales with --hud-scale from its 12 px offset (56 px tall + 8 px gap) */
+  top: calc(var(--band) + 12px + 64px * var(--hud-scale));
   display: flex;
   flex-direction: column;
   align-items: center;
