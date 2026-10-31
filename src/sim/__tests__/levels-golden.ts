@@ -8,7 +8,8 @@
  * Recorded with ROLL_DAMP 0.996 + ROLL_FRICTION 60 after the round-2 fixes: a plate is held only by a RESTING ball
  * (one switchOn per landing, on its ballRest tick), a lip-out fires once on the tick the ball leaves the 12 px
  * window (never followed by a sink), the L1 shelf 580-810 + bunker 800-1010 and the back bunkers behind every
- * cup (levels README "Deviations from LEVELS.md numbers").
+ * cup (levels README "Deviations from LEVELS.md numbers"). Snapshot version 2 (worlds 2-3) appended flightTicks;
+ * every tick of these lines was proved identical to the version-1 sim before the strings were re-recorded.
  */
 import type { ReplayEntry, SimConfig } from '../types';
 
@@ -35,7 +36,7 @@ export const GOLDEN_LINES: readonly GoldenLine[] = [
     name: 'First Fairway',
     strokes: [2, 2],
     finalTick: 624,
-    snapshot: '[1,624,3,0,1,0,[[2,-0.3187,94.4],[2,-0.1262,94.4]],[[1190,572,0,0,3,0,859.93,577.95],[1190,572,0,0,3,0,771.64,543.95]],0,1,[[2,2]]]',
+    snapshot: '[2,624,3,0,1,0,[[2,-0.3187,94.4],[2,-0.1262,94.4]],[[1190,572,0,0,3,0,859.93,577.95],[1190,572,0,0,3,0,771.64,543.95]],0,1,[[2,2]],0]',
     log: [
       { tick: 0, cmd: { type: 'continue', playerId: 0 } },
       { tick: 1, cmd: { type: 'setAim', playerId: 0, angle: -0.1262, power: 83.1 } },
@@ -53,7 +54,7 @@ export const GOLDEN_LINES: readonly GoldenLine[] = [
     name: 'Two Doors',
     strokes: [4, 2],
     finalTick: 1264,
-    snapshot: '[1,1264,3,0,0,0,[[4,-0.1262,71.9],[2,-0.1262,71.9]],[[1680,610,0,0,7,6,1648.31,587.95],[1680,610,0,0,7,0,1177.76,627.92]],2,1,[[4,2]]]',
+    snapshot: '[2,1264,3,0,0,0,[[4,-0.1262,71.9],[2,-0.1262,71.9]],[[1680,610,0,0,7,6,1648.31,587.95],[1680,610,0,0,7,0,1177.76,627.92]],2,1,[[4,2]],0]',
     log: [
       { tick: 0, cmd: { type: 'continue', playerId: 0 } },
       { tick: 1, cmd: { type: 'setAim', playerId: 0, angle: -0.1262, power: 60.6 } },
@@ -73,7 +74,7 @@ export const GOLDEN_LINES: readonly GoldenLine[] = [
     name: 'Colour Keys',
     strokes: [3, 4],
     finalTick: 1566,
-    snapshot: '[1,1566,3,0,1,0,[[3,-0.1262,71.9],[4,-0.1262,60.6]],[[1740,606,0,0,7,0,1271.66,627.68],[1740,606,0,0,7,0,1496.19,627.95]],2,1,[[3,4]]]',
+    snapshot: '[2,1566,3,0,1,0,[[3,-0.1262,71.9],[4,-0.1262,60.6]],[[1740,606,0,0,7,0,1271.66,627.68],[1740,606,0,0,7,0,1496.19,627.95]],2,1,[[3,4]],0]',
     log: [
       { tick: 0, cmd: { type: 'continue', playerId: 0 } },
       { tick: 1, cmd: { type: 'setAim', playerId: 1, angle: -0.8962, power: 83.1 } },
@@ -97,7 +98,7 @@ export const GOLDEN_LINES: readonly GoldenLine[] = [
     name: 'Plate & Bridge',
     strokes: [4, 3],
     finalTick: 1450,
-    snapshot: '[1,1450,3,0,0,0,[[4,-0.1262,71.9],[3,-0.1262,71.9]],[[1860,594,0,0,7,0,1364.14,615.95],[1860,594,0,0,7,0,1380.07,615.95]],2,1,[[4,3]]]',
+    snapshot: '[2,1450,3,0,0,0,[[4,-0.1262,71.9],[3,-0.1262,71.9]],[[1860,594,0,0,7,0,1364.14,615.95],[1860,594,0,0,7,0,1380.07,615.95]],2,1,[[4,3]],0]',
     log: [
       { tick: 0, cmd: { type: 'continue', playerId: 0 } },
       { tick: 1, cmd: { type: 'setAim', playerId: 0, angle: -0.1262, power: 38.1 } },

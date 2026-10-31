@@ -351,6 +351,8 @@ export const MECHANIC_COPY: Readonly<Record<MechanicKind, { name: string; blurb:
   switch: { name: 'PRESSURE SWITCH', blurb: 'A resting ball holds it down. Leave, and it releases.' },
   bridge: { name: 'BRIDGE', blurb: 'Exists only while its switch is held.' },
   blocker: { name: 'GATE', blurb: 'Vanishes while its switch is held.' },
+  trap: { name: 'TRAP', blurb: 'Stop in its jaws and you wait for your partner.' },
+  cannon: { name: 'CANNON', blurb: 'Rest inside it; a ball on FIRE shoots you across.' },
 });
 
 /** Turn banner (UX.md §4.4): online me => YOUR TURN; local => RED'S TURN · P1; solo/partner => RED'S TURN. */

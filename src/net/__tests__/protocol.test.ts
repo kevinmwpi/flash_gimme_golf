@@ -30,7 +30,17 @@ describe('parseClientMessage', () => {
       expect(parseClientMessage(frame({ type: 'command', cmd: { type, playerId: 1 } }))).toEqual({ type: 'command', cmd: { type, playerId: 1 } });
     }
     expect(parseClientMessage(frame({ type: 'playAgain' }))).toEqual({ type: 'playAgain' });
+    expect(parseClientMessage(frame({ type: 'playAgain', levelId: 'w3-12-grand-machine' }))).toEqual({ type: 'playAgain', levelId: 'w3-12-grand-machine' });
     expect(parseClientMessage(frame({ type: 'ping', t: 12.5 }))).toEqual({ type: 'ping', t: 12.5 });
+  });
+
+  it('playAgain carries an optional levelId with the setLevel id rules (shape here, existence in rooms.ts)', () => {
+    const parsed = parseClientMessage(frame({ type: 'playAgain', levelId: 'w2-05-spring-step', junk: 1 }));
+    expect(parsed).toEqual({ type: 'playAgain', levelId: 'w2-05-spring-step' });
+    expect(Object.keys(parsed ?? {})).toEqual(['type', 'levelId']);
+    for (const levelId of ['Upper-Case', 'x'.repeat(41), '', '-leading', 7, null, ['w2-05-spring-step']]) {
+      expect(parseClientMessage(frame({ type: 'playAgain', levelId })), String(levelId)).toBeNull();
+    }
   });
 
   it('REBUILDS objects: an extra junk key is absent from the result', () => {
@@ -133,13 +143,16 @@ describe('parseServerMessage', () => {
   });
 
   it('rejects a snapshot (or sync) whose snap[0] !== SNAPSHOT_VERSION', () => {
-    const snap = [SNAPSHOT_VERSION + 1, 0, 0, 0, 0, 0, [], [], 0, 0, []];
+    const snap = [SNAPSHOT_VERSION + 1, 0, 0, 0, 0, 0, [], [], 0, 0, [], 0];
     expect(parseServerMessage(frame({ type: 'snapshot', tick: 0, serverTime: 0, snap, events: [], immediate: false }))).toBeNull();
     expect(parseServerMessage(frame({ type: 'start', sync: { config: {}, tick: 0, snap, serverTime: 0 } }))).toBeNull();
     expect(parseServerMessage(frame({ type: 'joined', code: 'ABCDE', playerId: 1, sync: { snap } }))).toBeNull();
     expect(parseServerMessage(frame({ type: 'snapshot', tick: 0, serverTime: 0, snap: 'nope', events: [], immediate: false }))).toBeNull();
-    const ok = [SNAPSHOT_VERSION, 0, 0, 0, 0, 0, [], [], 0, 0, []];
+    const ok = [SNAPSHOT_VERSION, 0, 0, 0, 0, 0, [], [], 0, 0, [], 0];
     expect(parseServerMessage(frame({ type: 'snapshot', tick: 0, serverTime: 0, snap: ok, events: [], immediate: false }))).not.toBeNull();
+    // a protocol-3 server's version-1 snapshot is dropped, never decoded
+    const legacy = [1, 0, 0, 0, 0, 0, [], [], 0, 0, []];
+    expect(parseServerMessage(frame({ type: 'snapshot', tick: 0, serverTime: 0, snap: legacy, events: [], immediate: false }))).toBeNull();
     expect(parseServerMessage(frame({ type: 'joined', code: 'ABCDE', playerId: 1 }))).not.toBeNull();
   });
 });

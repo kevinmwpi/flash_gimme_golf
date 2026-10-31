@@ -11,6 +11,7 @@
  */
 import React, { useEffect, useRef } from 'react';
 import type { GameClient } from '../net/GameClient';
+import { releaseLabel, waitingOf, type WaitReason } from '../sim/devices';
 import { predictShot, switchPresser } from '../sim/physics';
 import { createSim, isShotReady, levelOf, stepSim } from '../sim/sim';
 import { isRectActive, switchMaskOf } from '../sim/terrain';
@@ -36,6 +37,9 @@ import {
 export type LocalSession = { kind: 'local'; config: SimConfig; initial: StepResult; seats: readonly PlayerId[] };
 export type OnlineSessionView = { kind: 'online'; client: GameClient; config: SimConfig; seat: PlayerId };
 
+/** A ball waiting in a device (BUILD_DECISIONS D10.10): the HUD chip `CAUGHT · needs <release>` / `LOADED · needs <release>`. */
+export type WaitingChip = { readonly reason: WaitReason; readonly release: string };
+
 export type FrameSummary = {
   phase: SimPhase;
   tick: number;
@@ -53,6 +57,11 @@ export type FrameSummary = {
   turnDelayTicks: number;
   /** switchId -> slot whose resting ball presses it, from SimState (VISUAL.md §11), so a resumed or re-synced game is right at once. */
   holds: Record<string, PlayerId>;
+  /**
+   * Per slot: the device its resting ball waits in and the plate that releases it (D10.10), derived from
+   * SimState every summary, never from events (online drops old events; a resumed game must be right at once).
+   */
+  waiting: [WaitingChip | null, WaitingChip | null];
   /** A fresh miss press (UX.md §5.2), for MISS_HINT_MS or until a real drag starts; drives the hint pill. */
   miss: MissKind | null;
 };
@@ -154,6 +163,14 @@ function holdsOf(level: Level, sim: SimState): Record<string, PlayerId> {
   return holds;
 }
 
+/** The chip for a slot whose ball waits in a trap or a cold cannon: the reason plus the label of the device's first release plate. */
+export function waitingChipOf(level: Level, sim: SimState, slot: PlayerId): WaitingChip | null {
+  const waiting = waitingOf(level, sim.switches, sim.balls[slot]);
+  if (waiting === null) return null;
+  const rect = level.rects.find((r) => r.id === waiting.rectId);
+  return { reason: waiting.reason, release: rect === undefined ? '' : releaseLabel(level, rect) };
+}
+
 type SummaryFlags = { paused: boolean; miss: MissKind | null };
 
 function summarise(sim: SimState, level: Level, view: ViewState, device: InputDevice, seats: readonly PlayerId[], flags: SummaryFlags): FrameSummary {
@@ -172,6 +189,7 @@ function summarise(sim: SimState, level: Level, view: ViewState, device: InputDe
     sunk: [sim.balls[0].sunk, sim.balls[1].sunk],
     turnDelayTicks: sim.turnDelayTicks,
     holds: holdsOf(level, sim),
+    waiting: [waitingChipOf(level, sim, 0), waitingChipOf(level, sim, 1)],
     miss: flags.miss,
   };
 }

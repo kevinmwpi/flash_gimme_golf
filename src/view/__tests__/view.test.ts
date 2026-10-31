@@ -76,6 +76,7 @@ function stateFor(level: Level, overrides: Partial<SimState> = {}): SimState {
     turnDelayTicks: 0,
     rng: 1,
     campaign: [],
+    flightTicks: 0,
     ...overrides,
   };
 }

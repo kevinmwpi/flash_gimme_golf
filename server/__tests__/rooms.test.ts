@@ -11,7 +11,7 @@ import {
   type ServerMessage,
   type ServerMessageType,
 } from '../../src/net/protocol';
-import { WORLD1_IDS } from '../../src/sim/levels/index';
+import { WORLD1_IDS, campaignFrom } from '../../src/sim/levels/index';
 import { decodeSnapshot } from '../../src/sim/serialize';
 import { GOLDEN_LINES } from '../../src/sim/__tests__/levels-golden';
 import { DEFAULT_AIM, PHASE_CODES, TICK_RATE, TURN_DELAY_TICKS, type PlayerCommand, type PlayerId, type ReplayEntry, type SimConfig } from '../../src/sim/types';
@@ -212,6 +212,15 @@ describe('RoomManager handshake and lobby', () => {
     expect(s.errors()).toEqual(['VERSION_MISMATCH']);
     expect(s.closed).not.toBeNull();
     expect(h.rm.stats().sockets).toBe(0);
+  });
+
+  it('a protocol-3 tab (before snapshot version 2 and the device events) is refused with VERSION_MISMATCH and close 1002', () => {
+    const h = new Harness();
+    const s = h.open();
+    h.say(s, { type: 'hello', protocol: 3 });
+    expect(s.errors()).toEqual(['VERSION_MISMATCH']);
+    expect(s.closed?.code).toBe(1002);
+    expect(s.of('welcome')).toEqual([]);
   });
 
   it('hello => welcome with serverTime; create => roomCreated + token + lobby', () => {
@@ -563,6 +572,32 @@ describe('RoomManager gameplay (needs the real stepSim)', () => {
     h.ticks(1);
     expect(host.errors()).toEqual([]);
     expect(decodeSnapshot(host.last('snapshot').snap, config).phase).toBe('aiming');
+  });
+
+  it('playAgain without a levelId restarts the same campaign with a new seed', () => {
+    const h = new Harness();
+    const { host, guest, config } = campaignResults(h);
+    h.say(host, { type: 'playAgain' });
+    const next = host.last('start').sync.config;
+    expect(next).toEqual({ ...config, seed: next.seed });
+    expect(guest.last('start').sync.config).toEqual(next);
+  });
+
+  it('playAgain with a levelId starts campaignFrom(levelId) for both seats; an unknown id => BAD_MESSAGE like setLevel', () => {
+    const h = new Harness();
+    const { host, guest, config } = campaignResults(h);
+    h.say(host, { type: 'playAgain', levelId: 'no-such-level' });
+    expect(host.errors()).toEqual(['BAD_MESSAGE']);
+    expect(host.of('start')).toHaveLength(0);
+    host.clear();
+    h.say(guest, { type: 'playAgain', levelId: LEVEL_2 });
+    expect(guest.errors()).toEqual(['NOT_HOST']);
+    h.say(host, { type: 'playAgain', levelId: LEVEL_2 });
+    expect(host.errors()).toEqual([]);
+    const next = host.last('start').sync.config;
+    expect(next).toEqual({ ...config, levelIds: [...campaignFrom(LEVEL_2)], seed: next.seed });
+    expect(guest.last('start').sync.config).toEqual(next);
+    expect(decodeSnapshot(host.last('start').sync.snap, next)).toMatchObject({ phase: 'intro', levelId: LEVEL_2, levelIndex: 0 });
   });
 });
 

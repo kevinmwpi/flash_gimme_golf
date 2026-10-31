@@ -141,6 +141,7 @@ function Backdrop(): React.JSX.Element {
 
 function LevelTile({ level, best, selected, onSelect, onActivate }: { level: Level; best: BestTable[string] | undefined; selected: boolean; onSelect(): void; onActivate(): void }): React.JSX.Element {
   const medal = best === undefined ? 'none' : medalFor(best.teamStrokes, level.par);
+  const introduced = level.mechanicsIntroduced[0];
   return (
     <div
       role="radio"
@@ -171,7 +172,7 @@ function LevelTile({ level, best, selected, onSelect, onActivate }: { level: Lev
           {best === undefined ? '—' : COPY.title.team(best.teamStrokes)}
           <small>{best === undefined ? COPY.title.notPlayed : trayVerdict(best.teamStrokes, level.par)}</small>
         </span>
-        <span className="teach">{COPY.title.teach(MECHANIC_COPY[level.mechanicsIntroduced[0]].name)}</span>
+        {introduced !== undefined && <span className="teach">{COPY.title.teach(MECHANIC_COPY[introduced].name)}</span>}
       </div>
     </div>
   );

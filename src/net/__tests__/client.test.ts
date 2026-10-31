@@ -354,6 +354,14 @@ describe('GameClient commands', () => {
     expect(s.sent.slice(before)).toEqual([{ type: 'command', cmd: { type: 'shoot', playerId: 0 } }]);
   });
 
+  it('playAgain() asks for the same campaign; playAgain(levelId) for campaignFrom(levelId) (the next world)', () => {
+    const r = rig();
+    const s = playingHost(r);
+    r.client.playAgain();
+    r.client.playAgain(LEVEL_1);
+    expect(s.sent.slice(-2)).toEqual([{ type: 'playAgain' }, { type: 'playAgain', levelId: LEVEL_1 }]);
+  });
+
   it('commands are ignored outside the playing state; ping/pong feeds rttMs()', () => {
     const r = rig();
     void r.client.createRoom();
@@ -491,6 +499,26 @@ describe('GameClient interpolation', () => {
     expect(r.client.interpolated(1340)).toMatchObject({ alpha: 0, snap: false });
     expect(r.client.interpolated(1350)).toMatchObject({ snap: true });
     expect(r.client.interpolated(1350)?.state.balls[0].pos.x).toBe(400);
+  });
+
+  it('a non-immediate snapshot carrying a device teleport (trapReturn, flightTimeout) holds then snaps (cursor catch-up)', () => {
+    const r = rig();
+    const s = playingHost(r, 900);
+    const a = withBall(baseState(), 100);
+    deliver(r, s, a, 1000);
+    r.client.interpolated(1100);
+    const teleports: SimEvent[] = [
+      { type: 'trapReturn', playerId: 0, pos: { x: 100, y: 0 }, respawnPos: { x: 200, y: 0 }, strokes: 2, toTee: false, tick: 3 },
+      { type: 'flightTimeout', playerId: 0, pos: { x: 200, y: 0 }, respawnPos: { x: 300, y: 0 }, tick: 6 },
+    ];
+    teleports.forEach((event, i) => {
+      const at = 1050 + i * 50;
+      deliver(r, s, withBall({ ...a, tick: event.tick }, 200 + i * 100), at, { events: [event] });
+      expect(r.client.interpolated(at + 75), event.type).toMatchObject({ alpha: 0, snap: false });
+      const snapped = r.client.interpolated(at + 100);
+      expect(snapped, event.type).toMatchObject({ snap: true });
+      expect(snapped?.state.balls[0].pos.x).toBe(200 + i * 100);
+    });
   });
 
   it('stall: extrapolates balls with their velocity for at most MAX_EXTRAPOLATION_MS, then holds', () => {

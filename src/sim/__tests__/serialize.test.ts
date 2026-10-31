@@ -22,6 +22,7 @@ import {
   BALL_FLAG_ASLEEP,
   BALL_FLAG_SUNK,
   CEILING_Y,
+  FLIGHT_WATCHDOG_TICKS,
   KILL_MARGIN,
   MAX_BALL_SPEED,
   MIN_POWER,
@@ -112,7 +113,15 @@ describe('serialize', () => {
 
   it('rejects wrong version, NaN, out-of-range phase, unknown level id, bad switch mask, non-tuple, angle outside [-3.11, -0.03]', () => {
     const bad: Array<[string, unknown]> = [
-      ['wrong version', withSnap((s) => (s[0] = 2))],
+      ['wrong version', withSnap((s) => (s[0] = SNAPSHOT_VERSION + 1))],
+      [
+        'version 1 (the 11-element layout before flightTicks)',
+        withSnap((s) => {
+          s.length = 11;
+          s[0] = 1;
+        }),
+      ],
+      ['version 1 layout stamped with the current version', withSnap((s) => (s.length = 11))],
       ['NaN tick', withSnap((s) => (s[1] = Number.NaN))],
       ['phase 5', withSnap((s) => (s[2] = 5))],
       ['negative phase', withSnap((s) => (s[2] = -1))],
@@ -136,15 +145,36 @@ describe('serialize', () => {
       ['ball faster than MAX_BALL_SPEED', withSnap((s) => (s[7] = [[200, 500, MAX_BALL_SPEED + 1, 0, 0, 0, 200, 588], [260, 588, 0, 0, 5, 6, 260, 588]]))],
       ['lastRest over the gap (no support => endless respawn)', withSnap((s) => (s[7] = [[580, 588, 0, 0, 5, 6, 580, 588], [260, 588, 0, 0, 5, 6, 260, 588]]))],
       ['lastRest in the sky', withSnap((s) => (s[7] = [[200, 588, 0, 0, 5, 6, 200, 100], [260, 588, 0, 0, 5, 6, 260, 588]]))],
+      ['flightTicks -1', withSnap((s) => (s[11] = -1))],
+      ['flightTicks 1.5', withSnap((s) => (s[11] = 1.5))],
+      ['flightTicks at the watchdog (never stored: the watchdog resets it)', withSnap((s) => (s[11] = FLIGHT_WATCHDOG_TICKS))],
+      ['flightTicks NaN', withSnap((s) => (s[11] = Number.NaN))],
+      ['flightTicks as a string', withSnap((s) => (s[11] = '5'))],
+      ['flightTicks outside a flight (the intro)', withSnap((s) => (s[11] = 5))],
     ];
     for (const [label, snap] of bad) expect(() => decodeSnapshot(snap, CONFIG), label).toThrow(SerializeError);
+    const flying = MID_FLIGHT[40] as SimState;
+    const longFlight = [...(encodeSnapshot(flying) as unknown[])];
+    longFlight[11] = FLIGHT_WATCHDOG_TICKS - 1;
+    expect(decodeSnapshot(longFlight, CONFIG).flightTicks).toBe(FLIGHT_WATCHDOG_TICKS - 1);
     // a sunk ball keeps its last lastRest and never respawns, so it is not held to the support rule
     const sunkFlags = BALL_FLAG_ASLEEP | BALL_FLAG_SUNK;
     expect(() => decodeSnapshot(withSnap((s) => (s[7] = [[1400, 610, 0, 0, sunkFlags, 6, 580, 588], [260, 588, 0, 0, 5, 6, 260, 588]])), CONFIG)).not.toThrow();
     expect(() => decodeSnapshot(encodeSnapshot(STATES[0] as SimState), { ...CONFIG, levelIds: ['no-such-level'] })).toThrow(SerializeError);
     expect(() => decodeConfig([2, 1, 42, ['no-such-level']])).toThrow(SerializeError);
     expect(() => decodeConfig([2, 1, 42, [CONFIG.levelIds[0], CONFIG.levelIds[0]]])).toThrow(SerializeError);
-    expect(isSimSnapshot(withSnap((s) => (s[0] = 2)))).toBe(false);
+    expect(isSimSnapshot(withSnap((s) => (s[0] = SNAPSHOT_VERSION + 1)))).toBe(false);
+    expect(isSimSnapshot(withSnap((s) => (s.length = 11)))).toBe(false);
+  });
+
+  it('flightTicks is the LAST snapshot element (version 2): 0 outside a flight, the sim count during one', () => {
+    for (const s of STATES) {
+      const snap = encodeSnapshot(s);
+      expect(snap).toHaveLength(12);
+      expect(snap[11]).toBe(s.flightTicks);
+      if (s.phase !== 'flying') expect(s.flightTicks).toBe(0);
+    }
+    expect(Math.max(...MID_FLIGHT.map((s) => s.flightTicks))).toBeGreaterThan(100);
   });
 
   it('a crafted share link whose ball has no support under lastRest is refused instead of looping respawns', () => {

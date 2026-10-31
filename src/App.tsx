@@ -34,7 +34,7 @@ import { tapSpeaker } from './ui/speaker';
 import { clearBests, loadBests, loadOnboarded, loadSettings, saveBest, saveOnboarded, saveSettings, type BestTable, type UiSettings } from './ui/storage';
 import { inviteUrlFor, isRoomCode } from './ui/url';
 import type { AudioSystem } from './view/audio';
-import GameCanvas, { type FrameSummary, type LocalSession, type OnlineSessionView } from './view/GameCanvas';
+import GameCanvas, { waitingChipOf, type FrameSummary, type LocalSession, type OnlineSessionView } from './view/GameCanvas';
 import type { UiAction } from './view/input/index';
 import type { InputDevice } from './view/view';
 
@@ -127,6 +127,7 @@ function decodeShared(param: string): { card: SharedCard; game: SharedGame | nul
 function initialSummary(session: Session): FrameSummary | null {
   if (session.kind !== 'local') return null;
   const s = session.initial.state;
+  const level = levelById(s.levelId);
   return {
     phase: s.phase,
     tick: s.tick,
@@ -142,6 +143,7 @@ function initialSummary(session: Session): FrameSummary | null {
     sunk: [s.balls[0].sunk, s.balls[1].sunk],
     turnDelayTicks: s.turnDelayTicks,
     holds: {},
+    waiting: [waitingChipOf(level, s, 0), waitingChipOf(level, s, 1)],
     miss: null,
   };
 }

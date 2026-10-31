@@ -40,7 +40,7 @@ function orLine(device: InputDevice): string {
 export default function LevelIntro(props: LevelIntroProps): React.JSX.Element {
   const { level, holeNumber, holeCount, firstPlayer, mode, seat, device, firstRun, onContinue } = props;
   const introduced = level.mechanicsIntroduced[0];
-  const teach = MECHANIC_COPY[introduced];
+  const teach = introduced === undefined ? null : MECHANIC_COPY[introduced];
   const passive = mode === 'online' && seat !== firstPlayer;
 
   return (
@@ -50,10 +50,12 @@ export default function LevelIntro(props: LevelIntroProps): React.JSX.Element {
         {level.name}
       </h2>
       <span className="sun-pill">{COPY.intro.par(level.par)}</span>
-      <div className="teach-row">
-        <span className="teach-tag">{COPY.intro.teach(teach.name)}</span>
-        <span className="teach-blurb">{teach.blurb}</span>
-      </div>
+      {teach !== null && (
+        <div className="teach-row">
+          <span className="teach-tag">{COPY.intro.teach(teach.name)}</span>
+          <span className="teach-blurb">{teach.blurb}</span>
+        </div>
+      )}
       <p className="hint-text">{level.hint}</p>
       <p className={`first-line first-p${firstPlayer + 1}`}>
         <span className={`ball-dot ball-p${firstPlayer + 1}`} aria-hidden="true" />

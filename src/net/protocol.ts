@@ -27,8 +27,9 @@ import {
   SNAPSHOT_VERSION,
 } from '../sim/types';
 
-/** Bump when a message shape changes incompatibly. Client sends it in `hello`; mismatch => VERSION_MISMATCH. */
-export const PROTOCOL_VERSION = 3;
+/** Bump when a message shape changes incompatibly. Client sends it in `hello`; mismatch => VERSION_MISMATCH.
+ *  4: snapshot version 2 (`flightTicks`), the trap / cannon / WAITING-rule events and `playAgain{levelId?}`. */
+export const PROTOCOL_VERSION = 4;
 
 /** Room codes: 5 chars from this alphabet (no 0/O/1/I). */
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -99,7 +100,7 @@ export type ClientMessage =
   /** Leave the current room deliberately (no reconnect grace for the leaver). */
   | { type: 'leaveRoom' }
   /** Host only, lobby only (no sim yet): choose the start hole. Server validates with `hasLevel`
-   *  and broadcasts `lobbyState`. Campaign = WORLD1_IDS from that id to the end. */
+   *  and broadcasts `lobbyState`. Campaign = `campaignFrom(levelId)`: that hole to the last hole of its world. */
   | { type: 'setLevel'; levelId: string }
   /** Host only, both players present, room not started: create the sim. `levelIds` (optional)
    *  overrides the lobby choice; every id must pass `hasLevel`, no duplicates, else BAD_MESSAGE. */
@@ -107,8 +108,10 @@ export type ClientMessage =
   /** Gameplay command. Server overwrites cmd.playerId with the sender's slot before validation.
    *  A `setAim` from the non-active slot is DROPPED SILENTLY (no error frame). */
   | { type: 'command'; cmd: PlayerCommand }
-  /** After campaignResults: new sim with a new seed (same room, same players). Either player. */
-  | { type: 'playAgain' }
+  /** Host only, after campaignResults: new sim with a new seed (same room, same players). Without `levelId`
+   *  the same campaign again; with it (e.g. the first hole of the next world) `campaignFrom(levelId)`, the id
+   *  checked with `hasLevel` exactly like `setLevel` (unknown => BAD_MESSAGE). */
+  | { type: 'playAgain'; levelId?: string }
   /** Latency probe; server echoes `t` plus its tick. */
   | { type: 'ping'; t: number };
 
@@ -146,7 +149,7 @@ export type RoomSync = {
 };
 
 export type LobbyState = {
-  /** Start hole chosen by the host (a WORLD1_IDS entry). */
+  /** Start hole chosen by the host (any registered level id). */
   levelId: string;
   /** Which slots currently have a connected socket. */
   players: [boolean, boolean];
@@ -297,7 +300,8 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return cmd ? { type: 'command', cmd } : null;
     }
     case 'playAgain':
-      return { type: 'playAgain' };
+      if (v.levelId === undefined) return { type: 'playAgain' };
+      return isLevelIdShape(v.levelId) ? { type: 'playAgain', levelId: v.levelId } : null;
     case 'ping':
       return isFiniteNum(v.t) ? { type: 'ping', t: v.t } : null;
     default:

@@ -7,13 +7,16 @@
  * `compileLevel` resolves every surface-relative value against the FAIRWAY (the lowest terrain
  * piece at an x), quantising compiled y values with `quantize2` so tee, rim and plate numbers
  * survive a snapshot round trip. `validateLevel` enforces every rule in ARCH.md §1.7 plus the D2
- * additions (bridge `switchIds`, deck plates with `onRectId`, `cupHoldsSwitch`, `firstPlayer`).
+ * additions (bridge `switchIds`, deck plates with `onRectId`, `cupHoldsSwitch`, `firstPlayer`) and the
+ * worlds 2-3 rules of BUILD_DECISIONS D10 (traps, cannons, one introduced mechanic at most, wind 0
+ * everywhere, rect and switch ids disjoint).
  *
  * The fairway lookup is built on `terrain.surfaceYOnPiece` (lowest piece wins) so that compiling
  * a level depends only on pure geometry; see `fairwayAt`.
  */
 import type {
   BlockerRect,
+  CannonRect,
   ColourGateRect,
   Gap,
   GateColour,
@@ -23,11 +26,14 @@ import type {
   PressureSwitch,
   Terrain,
   TerrainPiece,
+  TrapRect,
   Vec,
 } from '../types';
 import {
   BALL_RADIUS,
   BRIDGE_LIP_TOLERANCE,
+  CANNON_MIN_SIDEWAYS,
+  CANNON_MUZZLE_CLEAR_PX,
   HOLE_RADIUS,
   MAX_BALL_SPEED,
   MAX_LEVEL_WIDTH,
@@ -41,7 +47,7 @@ import {
   VIEWPORT_W,
   quantize2,
 } from '../types';
-import { surfaceYOnPiece, vec } from '../terrain';
+import { deepestContact, isPermanentRect, isSolidRect, pieceEdges, rectContains, surfaceYOnPiece, vec, type Collider } from '../terrain';
 
 // ---------------------------------------------------------------------------------------------
 // Authoring vocabulary
@@ -71,8 +77,11 @@ const DEFAULT_PLATE_W = 64;
 const OVERLAP_SAMPLE_PX = 4;
 
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Sampling step (px) of the cannon muzzle-clearance ray, and its first sample (px from the breech). */
+const MUZZLE_SAMPLE_PX = 2;
+const MUZZLE_FIRST_SAMPLE_PX = 4;
 
-const MECHANIC_ORDER: readonly MechanicKind[] = ['sand', 'spring', 'bumper', 'fan', 'colourGate', 'switch', 'bridge', 'blocker'];
+const MECHANIC_ORDER: readonly MechanicKind[] = ['sand', 'spring', 'bumper', 'fan', 'colourGate', 'switch', 'bridge', 'blocker', 'trap', 'cannon'];
 
 export type PropDef =
   | { kind: 'sand'; id: string; x1: number; x2: number; label?: string }
@@ -84,7 +93,11 @@ export type PropDef =
   /** Spans `gap` exactly; needs `switchId` or a non-empty `switchIds` (OR semantics). */
   | { kind: 'bridge'; id: string; gap: Gap; switchId?: string; switchIds?: readonly string[]; activeWhen?: boolean; thickness?: number; label?: string }
   /** No switch => permanent wall. With a switch the default `activeWhen` is false (door). */
-  | { kind: 'blocker'; id: string; centerX: number; w?: number; h: number; bottom?: number; switchId?: string; switchIds?: readonly string[]; activeWhen?: boolean; label?: string };
+  | { kind: 'blocker'; id: string; centerX: number; w?: number; h: number; bottom?: number; switchId?: string; switchIds?: readonly string[]; activeWhen?: boolean; label?: string }
+  /** The jaws' zone in absolute coordinates; ARMED until any of `releaseIds` is held (OR). */
+  | { kind: 'trap'; id: string; x: number; y: number; w: number; h: number; releaseIds: readonly string[]; label: string }
+  /** A breech pad (compiled like a spring) LIT while any of `fireIds` is held (OR); fires along `launch`. */
+  | { kind: 'cannon'; id: string; centerX: number; w?: number; launch: Vec; fireIds: readonly string[]; label: string };
 
 /** A plate. With `onRectId` it is a DECK plate living on top of that bridge/blocker (D2). */
 export type SwitchDef = { id: string; centerX: number; w?: number; colour: string; label?: string; onRectId?: string };
@@ -153,7 +166,7 @@ function pieceCovers(piece: TerrainPiece, x: number): boolean {
 // compileLevel
 // ---------------------------------------------------------------------------------------------
 
-function compilePad(def: Extract<PropDef, { kind: 'sand' | 'spring' | 'bumper' }>, terrain: Terrain): LevelRect {
+function compilePad(def: Extract<PropDef, { kind: 'sand' | 'spring' | 'bumper' | 'cannon' }>, terrain: Terrain): LevelRect {
   const x1 = def.kind === 'sand' ? def.x1 : def.centerX - (def.w ?? DEFAULT_PAD_W) / 2;
   const w = def.kind === 'sand' ? def.x2 - def.x1 : (def.w ?? DEFAULT_PAD_W);
   const y = quantize2(fairwayYOrThrow(terrain, x1 + w / 2, `${def.kind} "${def.id}"`));
@@ -165,6 +178,8 @@ function compilePad(def: Extract<PropDef, { kind: 'sand' | 'spring' | 'bumper' }
       return { ...base, kind: 'spring', launch: def.launch };
     case 'bumper':
       return { ...base, kind: 'bumper' };
+    case 'cannon':
+      return { ...base, kind: 'cannon', launch: def.launch, switchIds: def.fireIds };
   }
 }
 
@@ -211,7 +226,10 @@ function compileRect(def: PropDef, terrain: Terrain): LevelRect {
     case 'sand':
     case 'spring':
     case 'bumper':
+    case 'cannon':
       return compilePad(def, terrain);
+    case 'trap':
+      return { kind: 'trap', id: def.id, x: def.x, y: def.y, w: def.w, h: def.h, switchIds: def.releaseIds, label: def.label };
     case 'fan':
       return {
         kind: 'fan',
@@ -294,14 +312,15 @@ function validateMeta(level: Level, errors: Errors): void {
   if (!KEBAB.test(level.id)) errors.push(`id "${level.id}" is not kebab-case`);
   if (level.height !== VIEWPORT_H) errors.push(`height must be ${VIEWPORT_H}`);
   if (level.width < VIEWPORT_W || level.width > MAX_LEVEL_WIDTH) errors.push(`width ${level.width} out of range`);
-  if (level.world === 1 && level.wind !== 0) errors.push('world 1 wind must be 0');
+  if (level.wind !== 0) errors.push('wind must be 0');
   if (level.par < 3) errors.push('par must be >= 3');
   if (level.order < 1) errors.push('order must be >= 1');
   if (level.firstPlayer !== 0 && level.firstPlayer !== 1) errors.push('firstPlayer must be 0 or 1');
   for (const key of ['name', 'hint', 'aha', 'watchOut'] as const) {
     if (level[key].trim() === '') errors.push(`${key} must be non-empty`);
   }
-  if (level.mechanicsIntroduced.length !== 1) errors.push('exactly one mechanic must be introduced');
+  if (level.mechanicsIntroduced.length > 1) errors.push('at most one mechanic may be introduced');
+  if (level.world === 1 && level.mechanicsIntroduced.length !== 1) errors.push('a World 1 level introduces exactly one mechanic');
   const derived = derivePresent(level.rects, level.switches);
   const present = [...level.mechanicsPresent];
   if (new Set(present).size !== present.length) errors.push('mechanicsPresent has duplicates');
@@ -510,7 +529,7 @@ function validateWall(level: Level, rect: BlockerRect | ColourGateRect, errors: 
 }
 
 function validatePads(level: Level, errors: Errors): void {
-  const pads = level.rects.filter((r) => r.kind === 'sand' || r.kind === 'spring' || r.kind === 'bumper');
+  const pads = level.rects.filter((r) => r.kind === 'sand' || r.kind === 'spring' || r.kind === 'bumper' || r.kind === 'cannon');
   for (let i = 0; i < pads.length; i += 1) {
     const pad = pads[i];
     if (pad === undefined) continue;
@@ -523,11 +542,73 @@ function validatePads(level: Level, errors: Errors): void {
         errors.push(`${pad.kind} "${pad.id}" overlaps ${other.kind} "${other.id}"`);
       }
     }
-    if (pad.kind === 'spring') {
+    if (pad.kind === 'spring' || pad.kind === 'cannon') {
       const { launch } = pad;
-      if (!Number.isFinite(launch.x) || !Number.isFinite(launch.y)) errors.push(`spring "${pad.id}" launch is not finite`);
-      if (launch.y >= 0) errors.push(`spring "${pad.id}" must launch upward (launch.y < 0)`);
-      if (vec.len(launch) > MAX_BALL_SPEED) errors.push(`spring "${pad.id}" launch exceeds MAX_BALL_SPEED`);
+      if (!Number.isFinite(launch.x) || !Number.isFinite(launch.y)) errors.push(`${pad.kind} "${pad.id}" launch is not finite`);
+      if (launch.y >= 0) errors.push(`${pad.kind} "${pad.id}" must launch upward (launch.y < 0)`);
+      if (vec.len(launch) > MAX_BALL_SPEED) errors.push(`${pad.kind} "${pad.id}" launch exceeds MAX_BALL_SPEED`);
+    }
+  }
+}
+
+/** A device needs a sticker label and at least one release / FIRE plate (it is never permanent). */
+function validateDeviceBasics(rect: TrapRect | CannonRect, errors: Errors): void {
+  if (rect.label === undefined || rect.label.trim() === '') errors.push(`${rect.kind} "${rect.id}" needs a label`);
+  if (rect.switchIds === undefined || rect.switchIds.length === 0) errors.push(`${rect.kind} "${rect.id}" needs a non-empty switchIds`);
+}
+
+/** Jaws stand on ground, hold no tee and no cup, and none of their release plates lies inside them. */
+function validateTrap(level: Level, rect: TrapRect, errors: Errors): void {
+  validateDeviceBasics(rect, errors);
+  level.starts.forEach((tee, i) => {
+    if (rectContains(rect, tee)) errors.push(`trap "${rect.id}" holds tee ${i}`);
+  });
+  const hole = level.hole;
+  for (const x of [hole.x - hole.radius, hole.x, hole.x + hole.radius]) {
+    if (rectContains(rect, { x, y: hole.rimY })) errors.push(`trap "${rect.id}" holds the cup rim`);
+  }
+  const cx = rect.x + rect.w / 2;
+  if (inDeclaredGap(level.terrain, cx) || fairwayAt(level.terrain, cx) === null) errors.push(`trap "${rect.id}" has no ground under its centre`);
+  for (const id of rect.switchIds ?? []) {
+    const sw = level.switches.find((s) => s.id === id);
+    if (sw === undefined) continue;
+    const restY = sw.surfaceY - BALL_RADIUS;
+    const overlaps = sw.x <= rect.x + rect.w && sw.x + sw.w >= rect.x && restY >= rect.y && restY <= rect.y + rect.h;
+    if (overlaps) errors.push(`trap "${rect.id}" holds its own release plate "${id}"`);
+  }
+}
+
+/** Terrain plus every PERMANENT solid rect: what a cannon's muzzle must clear. */
+function permanentColliders(level: Level): Collider[] {
+  const out = level.terrain.pieces.map((piece, pieceIndex): Collider => ({ kind: 'terrain', pieceIndex, edges: pieceEdges(piece), piece }));
+  level.rects.forEach((rect, rectIndex) => {
+    if (isSolidRect(rect) && isPermanentRect(rect)) out.push({ kind: 'rect', rectIndex, rect });
+  });
+  return out;
+}
+
+/** A cannon fires sideways enough to read as a cannon, from a flat breech, through a clear muzzle, with no tee on it. */
+function validateCannon(level: Level, rect: CannonRect, errors: Errors): void {
+  validateDeviceBasics(rect, errors);
+  const { launch } = rect;
+  if (Math.abs(launch.x) < CANNON_MIN_SIDEWAYS * Math.abs(launch.y)) errors.push(`cannon "${rect.id}" launches too steeply (|launch.x| < ${CANNON_MIN_SIDEWAYS} * |launch.y|)`);
+  const floor = fairwayAt(level.terrain, rect.x + rect.w / 2);
+  const piece = floor === null ? undefined : level.terrain.pieces[floor.pieceIndex];
+  if (piece !== undefined && maxSlopeOver(piece, rect.x, rect.x + rect.w) > RESTABLE_MAX_SLOPE) {
+    errors.push(`cannon "${rect.id}" breech floor is steeper than ${RESTABLE_MAX_SLOPE}`);
+  }
+  level.starts.forEach((tee, i) => {
+    if (tee.x >= rect.x && tee.x <= rect.x + rect.w) errors.push(`cannon "${rect.id}" breech holds tee ${i}`);
+  });
+  const length = vec.len(launch);
+  if (!Number.isFinite(length) || length === 0) return; // reported by validatePads; there is no ray to sample
+  const colliders = permanentColliders(level);
+  const start: Vec = { x: rect.x + rect.w / 2, y: rect.y - BALL_RADIUS - 1 };
+  for (let d = MUZZLE_FIRST_SAMPLE_PX; d <= CANNON_MUZZLE_CLEAR_PX; d += MUZZLE_SAMPLE_PX) {
+    const centre: Vec = { x: start.x + (launch.x / length) * d, y: start.y + (launch.y / length) * d };
+    if (deepestContact(centre, colliders) !== null) {
+      errors.push(`cannon "${rect.id}" muzzle is blocked ${d} px along its launch`);
+      return;
     }
   }
 }
@@ -537,6 +618,8 @@ function validateRects(level: Level, errors: Errors): void {
     if (rect.w <= 0 || rect.h <= 0) errors.push(`rect "${rect.id}" has a non-positive size`);
     if (rect.kind === 'bridge') validateBridge(level, rect, errors);
     if (isWall(rect)) validateWall(level, rect, errors);
+    if (rect.kind === 'trap') validateTrap(level, rect, errors);
+    if (rect.kind === 'cannon') validateCannon(level, rect, errors);
   }
   validatePads(level, errors);
 }
@@ -552,6 +635,7 @@ function validateIds(level: Level, errors: Errors): void {
   for (const sw of level.switches) {
     if (!KEBAB.test(sw.id)) errors.push(`switch id "${sw.id}" is not kebab-case`);
     if (seenSwitches.has(sw.id)) errors.push(`duplicate switch id ${sw.id}`);
+    if (seenRects.has(sw.id)) errors.push(`switch id "${sw.id}" is also a rect id (rect and switch ids are disjoint)`);
     seenSwitches.add(sw.id);
   }
 }

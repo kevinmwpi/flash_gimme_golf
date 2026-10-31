@@ -183,13 +183,16 @@ export function isPermanentRect(rect: LevelRect): boolean {
   return rectSwitchIds(rect).length === 0;
 }
 
-/** No switch => always active. `switchIds` (OR) overrides `switchId`. Default activeWhen: blocker false, else true. */
+/**
+ * No switch => always active. `switchIds` (OR) overrides `switchId`. Default activeWhen: blocker and trap
+ * false (a door is shut and a trap ARMED until a plate is held), else true (a cannon is LIT while held).
+ */
 export function isRectActive(rect: LevelRect, switches: Readonly<Record<string, boolean>>): boolean {
   const ids = rectSwitchIds(rect);
   if (ids.length === 0) return true;
   let pressed = false;
   for (const id of ids) if (switches[id] === true) pressed = true;
-  return pressed === (rect.activeWhen ?? rect.kind !== 'blocker');
+  return pressed === (rect.activeWhen ?? (rect.kind !== 'blocker' && rect.kind !== 'trap'));
 }
 
 export function activeRects(level: Level, switches: Readonly<Record<string, boolean>>): readonly LevelRect[] {
@@ -206,7 +209,8 @@ export function switchMaskOf(level: Level, switches: Readonly<Record<string, boo
   return mask;
 }
 
-function isSolidRect(rect: LevelRect): rect is BridgeRect | BlockerRect | ColourGateRect {
+/** The rect kinds with collision geometry (traps, cannons and the other pads have none). */
+export function isSolidRect(rect: LevelRect): rect is BridgeRect | BlockerRect | ColourGateRect {
   return rect.kind === 'bridge' || rect.kind === 'blocker' || rect.kind === 'colourGate';
 }
 

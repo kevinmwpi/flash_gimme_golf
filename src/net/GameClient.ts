@@ -559,8 +559,9 @@ export class GameClient {
     this.sendRaw(levelIds !== undefined ? { type: 'start', levelIds } : { type: 'start' });
   }
 
-  playAgain(): void {
-    this.sendRaw({ type: 'playAgain' });
+  /** host, after campaignResults: the same campaign, or `campaignFrom(levelId)` (the next world's first hole). */
+  playAgain(levelId?: string): void {
+    this.sendRaw(levelId !== undefined ? { type: 'playAgain', levelId } : { type: 'playAgain' });
   }
 
   /**

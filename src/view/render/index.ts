@@ -8,6 +8,7 @@
  */
 import type { Level, LevelRect, PlayerId, PressureSwitch, SimState, Vec } from '../../sim/types';
 import { BALL_RADIUS, GIMME_RADIUS, VIEWPORT_H, VIEWPORT_W } from '../../sim/types';
+import { isCannonLit, isTrapArmed } from '../../sim/devices';
 import { isRectActive } from '../../sim/terrain';
 import { isShotReady } from '../../sim/sim';
 import { shakeOffset, worldToScreen, type InputDevice, type ViewState } from '../view';
@@ -292,6 +293,14 @@ function stickerForRect(level: Level, state: SimState, r: LevelRect, surfaceY: (
       const index = id === undefined ? 0 : level.switches.findIndex((s) => s.id === id);
       const text = `${gateWord(r.label, index)}${active ? COPY.stickers.shut : COPY.stickers.open}`;
       return propSticker({ key: r.id, text, world: { x: cx, y: r.y + GATE_LAMP_DY }, spanHalf: half, side: -1, accent: PALETTE.sw, priority: 0 });
+    }
+    case 'trap': {
+      const text = `${r.label ?? COPY.stickers.trap}${isTrapArmed(r, state.switches) ? COPY.stickers.armed : COPY.stickers.open}`;
+      return propSticker({ key: r.id, text, world: { x: cx, y: r.y - STICKER_ABOVE }, spanHalf: half, accent: PALETTE.sw, priority: 0 });
+    }
+    case 'cannon': {
+      const text = `${r.label ?? COPY.stickers.cannon}${isCannonLit(r, state.switches) ? COPY.stickers.lit : COPY.stickers.cold}`;
+      return propSticker({ key: r.id, text, world: { x: cx, y: r.y - 16 - STICKER_ABOVE }, spanHalf: half, accent: PALETTE.sw, priority: 0 });
     }
   }
 }
