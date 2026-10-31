@@ -1,17 +1,34 @@
 // OWNER: levels
-// ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, deck inset,
-// 420 px walls, 720 px chasm). Level ids are derived from the file names and the level names so
-// no level-id literal lives outside src/sim/levels/.
+// ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, deck inset, 420 px
+// walls, 720 px chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign,
+// traps and cannons, at most one introduced mechanic, rect and switch ids disjoint, the overview rule).
+// Level ids are derived from the file names and the level names so no level-id literal lives outside
+// src/sim/levels/.
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { cameraFor } from '../../view/view';
+import { releaseLabel } from '../devices';
 import { SWITCH_COLOUR, WALL_EMBED_PX, compileLevel, levelWarnings, validateLevel } from '../levels/authoring';
-import { LEVELS, WORLD1_IDS, campaignFrom, coursePar, hasLevel, levelById, worldTitle } from '../levels/index';
+import {
+  LEVELS,
+  WORLD1_IDS,
+  WORLDS,
+  WORLD_IDS,
+  campaignFrom,
+  coursePar,
+  hasLevel,
+  levelById,
+  levelsOfWorld,
+  nextWorld,
+  worldOf,
+  worldTitle,
+} from '../levels/index';
 import { encodeSnapshot } from '../serialize';
 import { createSim, runReplay, stepSim } from '../sim';
-import { surfaceYOnPiece } from '../terrain';
-import type { BlockerRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig } from '../types';
-import { GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, VIEWPORT_H } from '../types';
+import { rectContains, rectSwitchIds, surfaceYOnPiece } from '../terrain';
+import type { BlockerRect, CannonRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig, TrapRect, Vec } from '../types';
+import { BALL_RADIUS, GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, VIEWPORT_H } from '../types';
 import { GOLDEN_LINES, goldenConfig } from './levels-golden';
 
 /** The wall height LEVELS.md verified against the 6.5 shot speed (vacuum apex 341 + radius 12 + margin). */
@@ -43,63 +60,103 @@ function isWall(rect: LevelRect): rect is BlockerRect | ColourGateRect {
   return rect.kind === 'blocker' || rect.kind === 'colourGate';
 }
 
-/** Wall rects sharing an x-range form one column; returns [x, top] per column. */
-function wallColumns(level: Level): { x: number; top: number }[] {
-  const columns = new Map<number, number>();
-  for (const rect of level.rects.filter(isWall)) columns.set(rect.x, Math.min(columns.get(rect.x) ?? Infinity, rect.y));
-  return [...columns.entries()].map(([x, top]) => ({ x, top }));
+function isDevice(rect: LevelRect): rect is TrapRect | CannonRect {
+  return rect.kind === 'trap' || rect.kind === 'cannon';
+}
+
+/** Wall rects sharing an x-range form one column. A GATE column holds a door / window or a colour field. */
+type Column = { x: number; top: number; foot: number; gate: boolean };
+
+function wallColumns(level: Level): Column[] {
+  const columns = new Map<number, Column>();
+  for (const rect of level.rects.filter(isWall)) {
+    const seen = columns.get(rect.x);
+    const gate = rect.kind === 'colourGate' || rectSwitchIds(rect).length > 0;
+    columns.set(rect.x, {
+      x: rect.x,
+      top: Math.min(seen?.top ?? Infinity, rect.y),
+      foot: Math.max(seen?.foot ?? -Infinity, rect.y + rect.h),
+      gate: (seen?.gate ?? false) || gate,
+    });
+  }
+  return [...columns.values()];
 }
 
 function configFor(level: Level): SimConfig {
   return { playerCount: 2, levelIds: [level.id], seed: 7, mode: 'local' };
 }
 
-const [L1, L2, L3, L4] = LEVELS as [Level, Level, Level, Level];
+type Twelve = [Level, Level, Level, Level, Level, Level, Level, Level, Level, Level, Level, Level];
+const [L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12] = LEVELS as Twelve;
 
-describe('World 1 registry', () => {
-  it('registers exactly four levels in campaign order with 1-based order fields', () => {
-    expect(LEVELS).toHaveLength(4);
-    LEVELS.forEach((level, index) => {
-      expect(level.world).toBe(1);
-      expect(level.order).toBe(index + 1);
-    });
+/** D10.12: the doors of Bait and Grand Machine stand flush on their channel floors. */
+const FLUSH_DOOR_HOLES: readonly Level[] = [L9, L12];
+
+describe('registry', () => {
+  it('registers twelve levels in campaign order: orders 1-12, worlds 1/1/1/1/2/2/2/2/3/3/3/3', () => {
+    expect(LEVELS).toHaveLength(12);
+    LEVELS.forEach((level, index) => expect(level.order).toBe(index + 1));
+    expect(LEVELS.map((l) => l.world)).toEqual([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
     expect(Object.isFrozen(LEVELS)).toBe(true);
-    expect(WORLD1_IDS).toEqual(LEVELS.map((l) => l.id));
   });
 
-  it('ids are unique, kebab-case and equal "w1-0N-<slug of the name>"', () => {
-    expect(new Set(WORLD1_IDS).size).toBe(WORLD1_IDS.length);
-    LEVELS.forEach((level, index) => {
+  it('ids are unique, kebab-case and equal "w<world>-<hole, 2 digits>-<slug of the name>"', () => {
+    expect(new Set(LEVELS.map((l) => l.id)).size).toBe(LEVELS.length);
+    for (const level of LEVELS) {
       expect(level.id).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
-      expect(level.id).toBe(`w1-0${index + 1}-${slugOf(level.name)}`);
-    });
+      expect(level.id).toBe(`w${level.world}-${String(level.order).padStart(2, '0')}-${slugOf(level.name)}`);
+    }
   });
 
   it('ids match the level file names in directory order and no placeholder file remains', () => {
     const files = readdirSync(LEVELS_DIR)
-      .filter((f) => /^w1-\d\d-.*\.ts$/.test(f))
+      .filter((f) => /^w[1-3]-\d\d-.*\.ts$/.test(f))
       .sort();
-    expect(files.map((f) => f.replace(/\.ts$/, ''))).toEqual([...WORLD1_IDS]);
-    expect(files.some((f) => f.startsWith('w1-00-'))).toBe(false);
+    expect(files.map((f) => f.replace(/\.ts$/, ''))).toEqual(LEVELS.map((l) => l.id));
+    expect(files.some((f) => /^w\d-00-/.test(f))).toBe(false);
   });
 
-  it('levelById / hasLevel / campaignFrom / coursePar / worldTitle', () => {
+  it('WORLDS / WORLD_IDS / WORLD1_IDS / levelsOfWorld / worldOf / nextWorld split the twelve holes into three worlds of four', () => {
+    expect(WORLDS).toEqual([1, 2, 3]);
+    expect(WORLDS.flatMap((w) => WORLD_IDS[w])).toEqual(LEVELS.map((l) => l.id));
+    for (const world of WORLDS) {
+      expect(WORLD_IDS[world]).toEqual(LEVELS.filter((l) => l.world === world).map((l) => l.id));
+      expect(levelsOfWorld(world).map((l) => l.id)).toEqual(WORLD_IDS[world]);
+      expect(Object.isFrozen(WORLD_IDS[world])).toBe(true);
+      for (const id of WORLD_IDS[world]) expect(worldOf(id)).toBe(world);
+    }
+    expect(WORLD1_IDS).toEqual([L1.id, L2.id, L3.id, L4.id]);
+    expect(levelsOfWorld(2)).toEqual([L5, L6, L7, L8]);
+    expect(levelsOfWorld(3)).toEqual([L9, L10, L11, L12]);
+    expect([nextWorld(1), nextWorld(2), nextWorld(3)]).toEqual([2, 3, null]);
+    expect(() => worldOf('w1-99-nope')).toThrow(/unknown level id/);
+  });
+
+  it('levelById / hasLevel / campaignFrom (to the last hole of the SAME world, D10.2) / coursePar / worldTitle', () => {
     for (const level of LEVELS) {
       expect(levelById(level.id)).toBe(level);
       expect(hasLevel(level.id)).toBe(true);
+      const campaign = campaignFrom(level.id);
+      const world = WORLD_IDS[level.world];
+      expect(campaign).toEqual(world.slice(world.indexOf(level.id)));
     }
     expect(hasLevel('w1-99-nope')).toBe(false);
     expect(() => levelById('w1-99-nope')).toThrow(/unknown level id/);
     expect(() => campaignFrom('w1-99-nope')).toThrow(/unknown level id/);
     expect(campaignFrom(L1.id)).toEqual([...WORLD1_IDS]);
     expect(campaignFrom(L3.id)).toEqual([L3.id, L4.id]);
-    expect(coursePar(WORLD1_IDS)).toBe(28);
+    expect(campaignFrom(L4.id)).toEqual([L4.id]);
+    expect(campaignFrom(L5.id)).toEqual([L5.id, L6.id, L7.id, L8.id]);
+    expect(campaignFrom(L7.id)).toEqual([L7.id, L8.id]);
+    expect(campaignFrom(L9.id)).toEqual([L9.id, L10.id, L11.id, L12.id]);
+    expect(campaignFrom(L12.id)).toEqual([L12.id]);
+    expect(WORLDS.map((w) => coursePar(WORLD_IDS[w]))).toEqual([28, 30, 32]);
     expect(coursePar([L2.id, L4.id])).toBe(14);
-    expect(worldTitle(1)).toBe('World 1 — Teach');
+    expect(WORLDS.map(worldTitle)).toEqual(['World 1 — Teach', 'World 2 — Lift & Lock', 'World 3 — Sky Machines']);
   });
 });
 
-describe('World 1 levels', () => {
+describe('levels', () => {
   it('validateLevel(level) is [] and levelWarnings(level) is [] for every registered level', () => {
     for (const level of LEVELS) {
       expect(validateLevel(level), level.id).toEqual([]);
@@ -107,8 +164,8 @@ describe('World 1 levels', () => {
     }
   });
 
-  it('pars are 6 / 7 / 8 / 7 (course 28, re-derived against the real sim); every par >= 3; wind 0; height 720', () => {
-    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7]);
+  it('pars are 6 / 7 / 8 / 7, 7 / 7 / 8 / 8, 9 / 7 / 8 / 8 (World 1 re-derived against the real sim; worlds 2-3 the LEVELS.md proposals); every par >= 3; wind 0; height 720', () => {
+    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7, 7, 7, 8, 8, 9, 7, 8, 8]);
     for (const level of LEVELS) {
       expect(level.par).toBeGreaterThanOrEqual(3);
       expect(level.wind).toBe(0);
@@ -117,27 +174,47 @@ describe('World 1 levels', () => {
     }
   });
 
-  it('mechanicsIntroduced is sand, switch, colourGate, bridge: four distinct ideas, each present in its level', () => {
-    expect(LEVELS.map((l) => l.mechanicsIntroduced)).toEqual([['sand'], ['switch'], ['colourGate'], ['bridge']]);
-    expect(new Set(LEVELS.map((l) => l.mechanicsIntroduced[0])).size).toBe(LEVELS.length);
-    for (const level of LEVELS) expect(level.mechanicsPresent).toContain(level.mechanicsIntroduced[0]);
+  it('mechanicsIntroduced: sand, switch, colourGate, bridge in World 1; spring, trap, cannon on holes 5-7; none on holes 8-12 (D10.12); every idea distinct and present', () => {
+    expect(LEVELS.map((l) => l.mechanicsIntroduced)).toEqual([['sand'], ['switch'], ['colourGate'], ['bridge'], ['spring'], ['trap'], ['cannon'], [], [], [], [], []]);
+    const introduced = LEVELS.flatMap((l) => [...l.mechanicsIntroduced]);
+    expect(new Set(introduced).size).toBe(introduced.length);
+    for (const level of LEVELS) for (const kind of level.mechanicsIntroduced) expect(level.mechanicsPresent).toContain(kind);
   });
 
   it('mechanicsPresent lists exactly the kinds each level contains (every hole carries sand: the back bunker behind its cup)', () => {
-    expect(L1.mechanicsPresent).toEqual(['sand']);
-    expect(L2.mechanicsPresent).toEqual(['sand', 'switch', 'blocker']);
-    expect(L3.mechanicsPresent).toEqual(['sand', 'colourGate', 'switch', 'blocker']);
-    expect(L4.mechanicsPresent).toEqual(['sand', 'switch', 'bridge']);
+    expect(LEVELS.map((l) => l.mechanicsPresent)).toEqual([
+      ['sand'],
+      ['sand', 'switch', 'blocker'],
+      ['sand', 'colourGate', 'switch', 'blocker'],
+      ['sand', 'switch', 'bridge'],
+      ['sand', 'spring', 'switch', 'blocker'],
+      ['sand', 'switch', 'blocker', 'trap'],
+      ['sand', 'switch', 'cannon'],
+      ['sand', 'spring', 'colourGate', 'switch', 'blocker'],
+      ['sand', 'spring', 'switch', 'blocker', 'trap'],
+      ['sand', 'spring', 'switch', 'bridge', 'cannon'],
+      ['sand', 'colourGate', 'switch', 'blocker', 'cannon'],
+      ['sand', 'spring', 'switch', 'blocker', 'trap', 'cannon'],
+    ]);
   });
 
   it('every green ends in a back bunker that reaches the level edge, outside the gimme radius of the cup', () => {
     for (const level of LEVELS) {
       const back = level.rects.find((r) => r.kind === 'sand' && r.id === 'back-bunker');
       expect(back, level.id).toBeDefined();
-      expect(back!.x + back!.w).toBe(level.width);
-      expect(back!.x - level.hole.x).toBeGreaterThan(GIMME_RADIUS);
-      expect(back!.x - level.hole.x).toBeLessThanOrEqual(NEAR_CUP_RADIUS);
-      expect(back!.w).toBeGreaterThanOrEqual(40);
+      expect(back!.x + back!.w, level.id).toBe(level.width);
+      expect(back!.x - level.hole.x, level.id).toBeGreaterThan(GIMME_RADIUS);
+      expect(back!.x - level.hole.x, level.id).toBeLessThanOrEqual(NEAR_CUP_RADIUS);
+      expect(back!.w, level.id).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  it('the overview camera (intro and results) shows every hole down to the level bottom: rimY >= 720 - 216 / zoom', () => {
+    // cameraFor (src/view/view.ts) puts the cup rim at OVERVIEW_GROUND_FRACTION of the frame, so the frame
+    // bottom is rimY + 216 / zoom with zoom = 1280 / width; L10 (rim 390 on a 1960 px hole) keeps 0.75 px.
+    for (const level of LEVELS) {
+      const camera = cameraFor(level, createSim(configFor(level)).state, 'overview');
+      expect(camera.y + VIEWPORT_H / camera.zoom, level.id).toBeGreaterThanOrEqual(level.height);
     }
   });
 
@@ -146,41 +223,74 @@ describe('World 1 levels', () => {
       expect(level.hint.trim().length).toBeGreaterThan(0);
       expect(level.aha.trim().length).toBeGreaterThan(0);
       expect(level.watchOut.trim().length).toBeGreaterThan(0);
-      expect(level.hint.split(/[.!?](\s|$)/).filter((s) => s.trim().length > 0).length).toBeLessThanOrEqual(2);
-      expect(level.hint.length).toBeLessThanOrEqual(220);
+      expect(level.hint.split(/[.!?](\s|$)/).filter((s) => s.trim().length > 0).length, level.id).toBeLessThanOrEqual(2);
+      expect(level.hint.length, level.id).toBeLessThanOrEqual(220);
     }
     expect(L1.hint).toBe('Pull back from your ball and let go. Sand stops a rolling ball dead, so pitch over the bunker.');
   });
 
-  it('firstPlayer is red, red, BLUE, red; cupHoldsSwitch wires L2 window, L3 door2, L4 far', () => {
-    expect(LEVELS.map((l) => l.firstPlayer)).toEqual([0, 0, 1, 0]);
-    expect(L1.cupHoldsSwitch).toBeUndefined();
-    expect(L2.cupHoldsSwitch).toBe('window');
-    expect(L3.cupHoldsSwitch).toBe('door2');
-    expect(L4.cupHoldsSwitch).toBe('far');
+  it('firstPlayer and cupHoldsSwitch follow the design: blue first on holes 3, 8 and 10; the cup holds a plate on every hole but the first', () => {
+    expect(LEVELS.map((l) => l.firstPlayer)).toEqual([0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0]);
+    expect(LEVELS.map((l) => l.cupHoldsSwitch)).toEqual([undefined, 'window', 'door2', 'far', 'top', 'far', 'fire-far', 'door', 'top', 'b', 'far', 'top']);
     for (const level of LEVELS) {
       if (level.cupHoldsSwitch !== undefined) expect(level.switches.map((s) => s.id)).toContain(level.cupHoldsSwitch);
     }
   });
 
-  it('every switch and switch-driven rect carries its D2 label (DOOR / WINDOW, DOOR 1 / DOOR 2, A / B / DECK, BRIDGE)', () => {
-    expect(L2.switches.map((s) => [s.id, s.label])).toEqual([
+  it('every switch and switch-driven rect carries its D2 / D10 label', () => {
+    const plates = (level: Level): (string | undefined)[][] => level.switches.map((s) => [s.id, s.label]);
+    expect(plates(L2)).toEqual([
       ['door', 'DOOR'],
       ['window', 'WINDOW'],
     ]);
-    expect(L3.switches.map((s) => [s.id, s.label])).toEqual([
+    expect(plates(L3)).toEqual([
       ['door1', 'DOOR 1'],
       ['door2', 'DOOR 2'],
     ]);
-    expect(L4.switches.map((s) => [s.id, s.label])).toEqual([
+    expect(plates(L4)).toEqual([
       ['near', 'A'],
       ['far', 'B'],
       ['deck', 'DECK'],
     ]);
+    expect(plates(L5)).toEqual([
+      ['door', 'DOOR'],
+      ['top', 'TOP'],
+    ]);
+    expect(plates(L6)).toEqual([
+      ['perch', 'PERCH'],
+      ['free', 'FREE'],
+      ['far', 'FAR'],
+    ]);
+    expect(plates(L7)).toEqual([
+      ['fire', 'FIRE'],
+      ['fire-far', 'FIRE'],
+    ]);
+    expect(plates(L8)).toEqual([
+      ['window', 'WINDOW'],
+      ['door', 'DOOR'],
+    ]);
+    expect(plates(L9)).toEqual([
+      ['bait', 'BAIT'],
+      ['top', 'TOP'],
+    ]);
+    expect(plates(L10)).toEqual([
+      ['a', 'A'],
+      ['b', 'B'],
+      ['deck', 'DECK'],
+    ]);
+    expect(plates(L11)).toEqual([
+      ['fire', 'FIRE'],
+      ['far', 'FAR'],
+    ]);
+    expect(plates(L12)).toEqual([
+      ['fire', 'FIRE'],
+      ['door', 'DOOR'],
+      ['top', 'TOP'],
+    ]);
     for (const level of LEVELS) {
       for (const rect of level.rects) {
-        const driven = rect.switchId !== undefined || (rect.switchIds !== undefined && rect.switchIds.length > 0);
-        if (driven) expect(rect.label, `${level.id}/${rect.id}`).toBeTruthy();
+        if (rectSwitchIds(rect).length > 0) expect(rect.label, `${level.id}/${rect.id}`).toBeTruthy();
+        if (rect.kind === 'spring') expect(rect.label, `${level.id}/${rect.id}`).toBe('SPRING');
       }
     }
     const labelOf = (level: Level, id: string): string | undefined => level.rects.find((r) => r.id === id)?.label;
@@ -189,9 +299,92 @@ describe('World 1 levels', () => {
     expect(labelOf(L3, 'door-1-gate')).toBe('DOOR 1');
     expect(labelOf(L3, 'door-2-gate')).toBe('DOOR 2');
     expect(labelOf(L4, 'bridge')).toBe('BRIDGE');
+    for (const level of [L5, L6, L8, L9, L11, L12]) expect(labelOf(level, 'door-gate'), level.id).toBe('DOOR');
+    expect(labelOf(L8, 'window-gate')).toBe('WINDOW');
+    expect(labelOf(L10, 'bridge')).toBe('BRIDGE');
   });
 
-  it('every World 1 plate uses the single switch accent colour (pairs differ by label, not hue)', () => {
+  it('rect ids and switch ids are disjoint within every level (D10.8: door-gate, window-gate)', () => {
+    for (const level of LEVELS) {
+      const rectIds = new Set(level.rects.map((r) => r.id));
+      expect(level.switches.map((s) => s.id).filter((id) => rectIds.has(id)), level.id).toEqual([]);
+    }
+  });
+
+  it('traps and cannons follow the D10 table: kind, release / FIRE plates in order (partner-reachable first), label TRAP / CANNON', () => {
+    const devicesOf = (level: Level): unknown[][] => level.rects.filter(isDevice).map((r) => [r.id, r.kind, rectSwitchIds(r), r.label]);
+    for (const level of [L1, L2, L3, L4, L5, L8]) expect(devicesOf(level), level.id).toEqual([]);
+    expect(devicesOf(L6)).toEqual([['snare', 'trap', ['free', 'far'], 'TRAP']]);
+    expect(devicesOf(L7)).toEqual([['cannon', 'cannon', ['fire', 'fire-far'], 'CANNON']]);
+    expect(devicesOf(L9)).toEqual([['bait-trap', 'trap', ['top'], 'TRAP']]);
+    expect(devicesOf(L10)).toEqual([['cannon', 'cannon', ['a', 'b', 'deck'], 'CANNON']]);
+    expect(devicesOf(L11)).toEqual([['cannon', 'cannon', ['fire', 'far'], 'CANNON']]);
+    expect(devicesOf(L12)).toEqual([
+      ['pit', 'trap', ['fire', 'top'], 'TRAP'],
+      ['cannon', 'cannon', ['fire', 'top'], 'CANNON'],
+      ['door-seat', 'trap', ['top'], 'TRAP'],
+    ]);
+  });
+
+  it('every device names a labelled first plate (the HUD chip "CAUGHT · needs <LABEL>", D10.10) and the cup holds one of its plates', () => {
+    const chips: string[] = [];
+    for (const level of LEVELS) {
+      for (const rect of level.rects.filter(isDevice)) {
+        const first = level.switches.find((s) => s.id === rectSwitchIds(rect)[0]);
+        expect(first, `${level.id}/${rect.id}`).toBeDefined();
+        expect(first?.label, `${level.id}/${rect.id}`).toBeTruthy();
+        expect(releaseLabel(level, rect)).toBe(first?.label);
+        expect(rectSwitchIds(rect), `${level.id}/${rect.id}`).toContain(level.cupHoldsSwitch);
+        chips.push(`${level.order}:${rect.id}:${releaseLabel(level, rect)}`);
+      }
+    }
+    expect(chips).toEqual(['6:snare:FREE', '7:cannon:FIRE', '9:bait-trap:TOP', '10:cannon:A', '11:cannon:FIRE', '12:pit:FIRE', '12:cannon:FIRE', '12:door-seat:TOP']);
+  });
+
+  it('launchers keep the vectors and pads the launcher re-verification measured (levels README): breech or pad x-range, y and launch', () => {
+    const launchers = (level: Level): unknown[][] =>
+      level.rects.flatMap((r) => (r.kind === 'spring' || r.kind === 'cannon' ? [[r.id, r.x, r.x + r.w, r.y, r.launch.x, r.launch.y]] : []));
+    expect(launchers(L5)).toEqual([['spring', 862, 918, 620, 150, -800]]);
+    expect(launchers(L7)).toEqual([['cannon', 890, 930, 565, 400, -700]]);
+    expect(launchers(L8)).toEqual([['spring', 702, 758, 620, 380, -780]]);
+    expect(launchers(L9)).toEqual([['spring', 976, 1040, 580, 200, -740]]);
+    expect(launchers(L10)).toEqual([
+      ['cannon', 76, 124, 600, 520, -760],
+      ['spring', 442, 498, 620, 120, -690],
+    ]);
+    expect(launchers(L11)).toEqual([['cannon', 780, 840, 640, 440, -730]]);
+    expect(launchers(L12)).toEqual([
+      ['cannon', 100, 140, 565, 700, -760],
+      ['spring', 972, 1028, 640, 180, -800],
+    ]);
+    const zones = (level: Level): unknown[][] => level.rects.flatMap((r) => (r.kind === 'trap' ? [[r.id, r.x, r.y, r.w, r.h]] : []));
+    expect(zones(L6)).toEqual([['snare', 350, 560, 100, 80]]);
+    expect(zones(L9)).toEqual([['bait-trap', 480, 590, 130, 50]]);
+    expect(zones(L12)).toEqual([
+      ['pit', 12, 590, 28, 50],
+      ['door-seat', 680, 590, 100, 50],
+    ]);
+  });
+
+  it('the only seats (a plate wholly inside a trap, so its holder is caught) are BAIT on hole 9 and DOOR on hole 12; no release or FIRE plate is a seat', () => {
+    const seats: string[] = [];
+    for (const level of LEVELS) {
+      const devicePlates = new Set(level.rects.filter(isDevice).flatMap((r) => [...rectSwitchIds(r)]));
+      for (const sw of level.switches) {
+        const rests: Vec[] = [sw.x, sw.x + sw.w / 2, sw.x + sw.w].map((x) => ({ x, y: sw.surfaceY - BALL_RADIUS }));
+        for (const trap of level.rects.filter((r) => r.kind === 'trap')) {
+          const inside = rests.filter((p) => rectContains(trap, p)).length;
+          if (inside === 0) continue;
+          expect(inside, `${level.id}/${sw.id} straddles ${trap.id}`).toBe(rests.length);
+          expect(devicePlates.has(sw.id), `${level.id}/${sw.id}`).toBe(false);
+          seats.push(`${level.order}:${sw.id}:${trap.id}`);
+        }
+      }
+    }
+    expect(seats).toEqual(['9:bait:bait-trap', '12:door:door-seat']);
+  });
+
+  it('every plate uses the single switch accent colour (pairs differ by label, not hue)', () => {
     for (const level of LEVELS) for (const sw of level.switches) expect(sw.colour).toBe(SWITCH_COLOUR);
   });
 
@@ -204,16 +397,17 @@ describe('World 1 levels', () => {
     }
   });
 
-  it('walls and colour fields rise >= 420 px above the fairway, stand embedded 20 px into it, and the L4 gap is 720 px', () => {
-    for (const level of [L2, L3]) {
-      const columns = wallColumns(level);
-      expect(columns.length).toBeGreaterThan(0);
-      for (const column of columns) expect(fairwayY(level, column.x) - column.top, `${level.id} wall at ${column.x}`).toBeGreaterThanOrEqual(WALL_CLEARANCE_PX);
-      const feet = level.rects.filter(isWall).map((r) => r.y + r.h);
-      expect(Math.max(...feet)).toBe(fairwayY(level, columns[0]?.x ?? 0) + WALL_EMBED_PX);
+  it('every gate column (door, window or colour field, a cap stacked on it) rises >= 420 px above the fairway; its foot sinks 20 px into it, flush on the L9 and L12 channel floors (D10.12)', () => {
+    for (const level of LEVELS) {
+      for (const column of wallColumns(level).filter((c) => c.gate)) {
+        const fairway = fairwayY(level, column.x);
+        expect(fairway - column.top, `${level.id} wall at ${column.x}`).toBeGreaterThanOrEqual(WALL_CLEARANCE_PX);
+        expect(column.foot - fairway, `${level.id} wall foot at ${column.x}`).toBe(FLUSH_DOOR_HOLES.includes(level) ? 0 : WALL_EMBED_PX);
+      }
     }
-    expect(L4.terrain.gaps).toEqual([{ x1: 520, x2: 1240 }]);
-    expect(L4.terrain.gaps[0]!.x2 - L4.terrain.gaps[0]!.x1).toBe(CHASM_PX);
+    expect(LEVELS.map((l) => wallColumns(l).filter((c) => c.gate).length)).toEqual([0, 1, 2, 0, 1, 1, 0, 2, 1, 0, 2, 1]);
+    // The L6 backboard (a permanent 120 px backstop behind the perch bowl) is the one wall that is not a gate.
+    expect(wallColumns(L6).filter((c) => !c.gate)).toEqual([{ x: 162, top: 340, foot: 480, gate: false }]);
   });
 
   it('L3 colour fields are blue over DOOR 1 (red bounces) and red over DOOR 2 (blue bounces), each above a door opened by the other colour', () => {
@@ -237,21 +431,29 @@ describe('World 1 levels', () => {
     }
   });
 
-  it('L4 bridge spans the gap at the lip height with switchIds near|far|deck; the DECK plate is inset 24 px on the bridge', () => {
-    const bridge = L4.rects.find((r) => r.id === 'bridge');
-    const gap = L4.terrain.gaps[0]!;
-    expect(bridge?.kind).toBe('bridge');
-    expect(bridge?.x).toBe(gap.x1);
-    expect(bridge?.w).toBe(gap.x2 - gap.x1);
-    expect(bridge?.y).toBe(620);
-    expect(bridge?.switchIds).toEqual(['near', 'far', 'deck']);
-    expect(bridge?.switchId).toBeUndefined();
-    const deck = L4.switches.find((s) => s.id === 'deck');
-    expect(deck?.onRectId).toBe('bridge');
-    expect(deck?.x).toBe(gap.x1 + DECK_INSET_PX);
-    expect(deck!.x + deck!.w).toBe(gap.x2 - DECK_INSET_PX);
-    expect(deck?.surfaceY).toBe(bridge?.y);
-    for (const sw of L4.switches) if (sw.onRectId === undefined) expect(sw.surfaceY).toBe(fairwayY(L4, sw.x + sw.w / 2));
+  it('the L4 and L10 bridges span their 720 px gap at the lip height, held by A, B or the DECK; each DECK plate is inset 24 px on its bridge', () => {
+    for (const [level, plates, top] of [
+      [L4, ['near', 'far', 'deck'], 620],
+      [L10, ['a', 'b', 'deck'], 400],
+    ] as const) {
+      const bridge = level.rects.find((r) => r.id === 'bridge');
+      expect(level.terrain.gaps).toHaveLength(1);
+      const gap = level.terrain.gaps[0]!;
+      expect(gap.x2 - gap.x1).toBe(CHASM_PX);
+      expect(bridge?.kind).toBe('bridge');
+      expect(bridge?.x).toBe(gap.x1);
+      expect(bridge?.w).toBe(gap.x2 - gap.x1);
+      expect(bridge?.y).toBe(top);
+      expect(bridge?.switchIds).toEqual(plates);
+      expect(bridge?.switchId).toBeUndefined();
+      const deck = level.switches.find((s) => s.id === 'deck');
+      expect(deck?.onRectId).toBe('bridge');
+      expect(deck?.x).toBe(gap.x1 + DECK_INSET_PX);
+      expect(deck!.x + deck!.w).toBe(gap.x2 - DECK_INSET_PX);
+      expect(deck?.surfaceY).toBe(bridge?.y);
+      for (const sw of level.switches) if (sw.onRectId === undefined) expect(sw.surfaceY).toBe(fairwayY(level, sw.x + sw.w / 2));
+    }
+    expect(L4.terrain.gaps).toEqual([{ x1: 520, x2: 1240 }]);
   });
 
   it('tees sit on the fairway >= MIN_TEE_SEPARATION apart and compiled positions are 2-dp exact', () => {
@@ -277,14 +479,14 @@ describe('World 1 levels', () => {
       expect(events[0]).toMatchObject({ type: 'levelStart', levelId: level.id, firstPlayer: level.firstPlayer });
     }
   });
-
 });
 
-describe('golden replay of each level\'s scripted line (runReplay on the real levels)', () => {
+describe("golden replay of each level's scripted line (runReplay on the real levels)", () => {
   const snapshotJson = (state: ReturnType<typeof runReplay>['state']): string => JSON.stringify(encodeSnapshot(state));
 
-  it('every level has exactly one golden line and every golden line names a level', () => {
-    expect(GOLDEN_LINES.map((g) => g.order)).toEqual(LEVELS.map((l) => l.order));
+  it('every World 1 hole has exactly one golden line and every golden line names a level', () => {
+    // Narrowed to World 1 until phase 3 (solver) records the golden lines of holes 5-12; then every hole again.
+    expect(GOLDEN_LINES.map((g) => g.order)).toEqual(LEVELS.filter((l) => l.world === 1).map((l) => l.order));
     for (const golden of GOLDEN_LINES) expect(golden.name).toBe(LEVELS[golden.order - 1]?.name);
   });
 
