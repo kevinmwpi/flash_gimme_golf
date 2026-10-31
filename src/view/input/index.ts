@@ -22,7 +22,7 @@ export type InputContext = {
   state: SimState;
   /** seats this browser controls: solo [0]; local [0,1]; online [seat] */
   seats: readonly PlayerId[];
-  /** for screenToWorld */
+  /** camera for worldToScreen: where the active and partner balls sit on the stage */
   view: ViewState;
   /** CSS box of the canvas for pointer->logical mapping */
   canvasRect: DOMRect;
@@ -31,12 +31,18 @@ export type InputContext = {
   nowMs: number;
 };
 
-/** A live slingshot drag in LOGICAL screen px (the loop maps it to world space for `ViewState.drag`). */
-export type PointerDrag = { pointer: Vec; cancel: boolean; clamped: boolean };
+/**
+ * A live slingshot drag: `offset` is the pointer minus the press point in LOGICAL screen px. The loop
+ * anchors it at the active ball for `ViewState.drag` (BUILD_DECISIONS D10.9), so the band shows the
+ * pull from the ball wherever the press started.
+ */
+export type PointerDrag = { offset: Vec; cancel: boolean; clamped: boolean };
 
 /**
- * A press that grabbed nothing (UX.md §5.2 "Miss feedback"): off the active ball, on the partner's
- * ball, or by a seat that is not aiming. View-only: the sim never sees it.
+ * A press that grabbed nothing (UX.md §5.2 "Miss feedback"). View-only: the sim never sees it. The
+ * pointer reports 'wrongBall' for a press on the partner's ball and 'notYourTurn' for a press by a
+ * seat that is not aiming; since D10.9 made a press anywhere else a drag it no longer reports 'miss'
+ * (off the ball), which the HUD still maps to copy.
  */
 export type MissKind = 'miss' | 'wrongBall' | 'notYourTurn';
 

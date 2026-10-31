@@ -23,7 +23,6 @@ import {
   applySimEvents,
   createViewState,
   pulseMissRings,
-  screenToWorld,
   setCameraMode,
   updateView,
   worldToScreen,
@@ -129,10 +128,15 @@ function writeHudVars(hud: HTMLElement | null, aim: Aim, ready: boolean, ball: V
   hud.style.setProperty('--dragging', dragging ? '1' : '0');
 }
 
-/** The live slingshot drag for the renderer: logical screen px -> world space under the frame's camera. */
-function dragVisual(view: ViewState, drag: PointerDrag | null): DragVisual | null {
+/**
+ * The live slingshot drag for the renderer (BUILD_DECISIONS D10.9): the pull offset (logical px) anchored
+ * at the drawn active ball (world), divided by the zoom so the band on screen is exactly the pull, at
+ * any camera and wherever the press started.
+ */
+export function dragVisual(view: ViewState, drag: PointerDrag | null, ball: Vec): DragVisual | null {
   if (drag === null) return null;
-  return { pointer: screenToWorld(view, drag.pointer), cancel: drag.cancel, clamped: drag.clamped };
+  const zoom = view.camera.zoom;
+  return { pointer: { x: ball.x + drag.offset.x / zoom, y: ball.y + drag.offset.y / zoom }, cancel: drag.cancel, clamped: drag.clamped };
 }
 
 function seatsOf(session: LocalSession | OnlineSessionView): readonly PlayerId[] {
@@ -384,7 +388,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     syncLevel();
     updateView(view, prev, sim, alpha, frameDt);
     view.lastDevice = frameIn.device;
-    view.drag = dragVisual(view, frameIn.drag);
+    view.drag = dragVisual(view, frameIn.drag, view.renderBalls[sim.activePlayer].pos);
     if (frameIn.miss !== null && !paused) pulseMissRings(view, sim);
     const miss = paused ? null : trackMiss(frameIn.miss, frameIn.drag !== null, now);
     const localAim = input.localAim();
