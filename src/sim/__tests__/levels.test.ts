@@ -2,8 +2,8 @@
 // ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, deck inset, 420 px
 // walls, 720 px chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign,
 // traps and cannons, at most one introduced mechanic, rect and switch ids disjoint, the overview rule).
-// Level ids are derived from the file names and the level names so no level-id literal lives outside
-// src/sim/levels/.
+// Level ids are derived from the file names and the level names, so this file holds no level-id literal;
+// the goldens it replays (levels-golden.ts) and the solver's tables are keyed by level id (D10.1).
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -150,7 +150,7 @@ describe('registry', () => {
     expect(campaignFrom(L7.id)).toEqual([L7.id, L8.id]);
     expect(campaignFrom(L9.id)).toEqual([L9.id, L10.id, L11.id, L12.id]);
     expect(campaignFrom(L12.id)).toEqual([L12.id]);
-    expect(WORLDS.map((w) => coursePar(WORLD_IDS[w]))).toEqual([28, 30, 32]);
+    expect(WORLDS.map((w) => coursePar(WORLD_IDS[w]))).toEqual([28, 29, 30]);
     expect(coursePar([L2.id, L4.id])).toBe(14);
     expect(WORLDS.map(worldTitle)).toEqual(['World 1 — Teach', 'World 2 — Lift & Lock', 'World 3 — Sky Machines']);
   });
@@ -164,8 +164,8 @@ describe('levels', () => {
     }
   });
 
-  it('pars are 6 / 7 / 8 / 7, 7 / 7 / 8 / 8, 9 / 7 / 8 / 8 (World 1 re-derived against the real sim; worlds 2-3 the LEVELS.md proposals); every par >= 3; wind 0; height 720', () => {
-    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7, 7, 7, 8, 8, 9, 7, 8, 8]);
+  it('pars are 6 / 7 / 8 / 7, 7 / 6 / 8 / 8, 8 / 7 / 8 / 7 (World 1 re-derived against the real sim; worlds 2-3 calibrated by the solver, D10.13); every par >= 3; wind 0; height 720', () => {
+    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7, 7, 6, 8, 8, 8, 7, 8, 7]);
     for (const level of LEVELS) {
       expect(level.par).toBeGreaterThanOrEqual(3);
       expect(level.wind).toBe(0);
@@ -484,14 +484,16 @@ describe('levels', () => {
 describe("golden replay of each level's scripted line (runReplay on the real levels)", () => {
   const snapshotJson = (state: ReturnType<typeof runReplay>['state']): string => JSON.stringify(encodeSnapshot(state));
 
-  it('every World 1 hole has exactly one golden line and every golden line names a level', () => {
-    // Narrowed to World 1 until phase 3 (solver) records the golden lines of holes 5-12; then every hole again.
-    expect(GOLDEN_LINES.map((g) => g.order)).toEqual(LEVELS.filter((l) => l.world === 1).map((l) => l.order));
-    for (const golden of GOLDEN_LINES) expect(golden.name).toBe(LEVELS[golden.order - 1]?.name);
+  it('every hole has exactly one golden line, keyed by its level id in campaign order, with the hole number and name of the registry', () => {
+    expect(GOLDEN_LINES.map((g) => g.levelId)).toEqual(LEVELS.map((l) => l.id));
+    for (const golden of GOLDEN_LINES) {
+      expect(golden.order).toBe(levelById(golden.levelId).order);
+      expect(golden.name).toBe(levelById(golden.levelId).name);
+    }
   });
 
   for (const golden of GOLDEN_LINES) {
-    const level = LEVELS[golden.order - 1]!;
+    const level = levelById(golden.levelId);
 
     it(`hole ${golden.order} (${golden.name}): the recorded line holes both balls in ${golden.strokes.join('+')} and the snapshot is bit-exact`, () => {
       const { state, events } = runReplay(goldenConfig(level.id), golden.log, golden.finalTick);
@@ -499,11 +501,11 @@ describe("golden replay of each level's scripted line (runReplay on the real lev
       expect(state.balls.every((b) => b.sunk)).toBe(true);
       expect(state.players.map((p) => p.strokes)).toEqual([...golden.strokes]);
       expect(state.campaign).toEqual([{ levelId: level.id, par: level.par, strokes: [...golden.strokes], medal: expect.any(String) }]);
-      // every stroke is a shot or a gimme concession; none is a fall penalty
+      // every stroke is a shot or a gimme concession; none is a fall penalty or a BACK +1, and no flight needs the watchdog
       const hits = events.filter((e) => e.type === 'ballHit').length;
       const gimmes = events.filter((e) => e.type === 'gimme').length;
       expect(hits + gimmes).toBe(golden.strokes[0] + golden.strokes[1]);
-      expect(events.some((e) => e.type === 'fellOffWorld')).toBe(false);
+      expect(events.some((e) => e.type === 'fellOffWorld' || e.type === 'trapReturn' || e.type === 'flightTimeout')).toBe(false);
       // Recorded on Node 22 / V8 by scripts/solver.ts. A differing value means the physics, the level or the engine changed.
       expect(snapshotJson(state)).toBe(golden.snapshot);
     });

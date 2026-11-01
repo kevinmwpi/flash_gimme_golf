@@ -1,14 +1,16 @@
 // OWNER: input-loop
 /**
  * UX.md §4.6 "downward pull room" / locked decision 10 (fully playable with touch only): every
- * LEVELS.md intended line must be completable with pointer pulls that stay inside the stage. Each
- * beat of every scripted line is replayed on the solver grid taking the FIRST satisfying shot that
- * `pullReachable` accepts from the shooter's resting ball as the real follow camera shows it
- * (cameraFor: zoom 1, y 0, clamped to the level with no overscan per BUILD_DECISIONS D7, so a ball
- * near a level edge sits near the stage edge, which is the hard case for pull room).
+ * intended line of every hole (scripts/solver SCRIPTED_LINES, keyed by level id; the leftward lobs of
+ * holes 6, 10, 11 and 12 included) must be completable with pointer pulls that stay inside the stage.
+ * Each beat is replayed on the solver grid taking the FIRST satisfying shot that `pullReachable`
+ * accepts from the shooter's resting ball as the real follow camera shows it (cameraFor: zoom 1, y 0,
+ * clamped to the level with no overscan per BUILD_DECISIONS D7, so a ball near a level edge sits near
+ * the stage edge, which is the hard case for pull room). A press anywhere on the playfield also starts
+ * a drag (D10.9); pressing on the ball, as here, is the tightest case.
  */
 import { describe, expect, it } from 'vitest';
-import { SCRIPTED_LINES, cellGrid, newGame, takeShot, aimOf, type Game, type Shot } from '../../../scripts/solver';
+import { cellGrid, newGame, scriptedLinesOf, takeShot, aimOf, type Game, type ScriptedLine, type Shot } from '../../../scripts/solver';
 import { LEVELS } from '../../sim/levels/index';
 import type { Level, Vec } from '../../sim/types';
 import { pullReachable } from '../input/pointer';
@@ -24,7 +26,6 @@ function gridShots(): Shot[] {
 
 const SHOTS = gridShots();
 
-type Line = (typeof SCRIPTED_LINES)[number];
 type Replay = { bothSunk: boolean; failedAt: string | null; shots: string[] };
 
 /** The shooter's ball on the stage under the follow camera the game shows for this turn. */
@@ -35,7 +36,7 @@ function pressFor(level: Level, game: Game): Vec {
 }
 
 /** Replays a scripted line with touch-reachable shots only. */
-function replayReachable(level: Level, line: Line): Replay {
+function replayReachable(level: Level, line: ScriptedLine): Replay {
   let game = newGame(level);
   const shots: string[] = [];
   for (const beat of line.beats) {
@@ -58,9 +59,8 @@ function replayReachable(level: Level, line: Line): Replay {
 }
 
 describe('every LEVELS.md intended line is completable with pointer pulls that stay inside the stage', () => {
-  // World 1 only until phase 3 (solver) adds the scripted lines of holes 5-12; then every level again.
-  for (const level of LEVELS.filter((l) => l.world === 1)) {
-    const lines = SCRIPTED_LINES.filter((l) => l.order === level.order);
+  for (const level of LEVELS) {
+    const lines = scriptedLinesOf(level);
     it(`hole ${level.order}: ${level.name} (${lines.length} scripted lines)`, () => {
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) {

@@ -9,7 +9,7 @@
  * tees) or on FAR (behind the door), or a ball is in the cup. Teaches the TRAP as a hazard that
  * punishes a missed precision shot; red shoots first. The cup holds FAR (D2).
  *
- * Intended line (par 7): red lobs LEFT onto the perch (PERCH opens the DOOR) -> blue rolls through the
+ * Intended line (par 6): red lobs LEFT onto the perch (PERCH opens the DOOR) -> blue rolls through the
  * door into the FAR dish (FAR holds the door and also opens the trap) -> red drops off the perch and
  * rolls through -> both putt out about 400 px. With one rescue: red falls short and is caught -> blue
  * rolls onto FREE -> red, freed where it sits, lobs back up almost vertically -> as above.
@@ -32,7 +32,7 @@ export const level: Level = compileLevel({
   name: 'Booby Trap',
   world: 2,
   order: 6,
-  par: 7,
+  par: 6,
   hint: 'Lob onto the PERCH behind you: a ball resting in its bowl opens the DOOR. Fall short and the TRAP at its foot holds you until your partner rests on FREE.',
   aha: 'A trap pauses you, it does not end you: if I am caught under the perch, you roll onto FREE and I get another try, and once I am up there my perch holds the door while you go through.',
   watchOut:

@@ -12,7 +12,7 @@
  * basin (plate 1230-1680) that holds the door, lights the cannon and frees both traps. Red shoots
  * first. The cup holds TOP (D2), so the second ball can always take either route.
  *
- * Intended lines (par 8): FLY - red lobs LEFT into the cannon and waits, LOADED -> blue rests on FIRE
+ * Intended lines (par 7): FLY - red lobs LEFT into the cannon and waits, LOADED -> blue rests on FIRE
  * and red is fired onto TOP -> blue lobs LEFT into the cannon (TOP keeps it lit) and flies up -> both
  * chip down to the green and putt. CLIMB - red rolls onto the DOOR plate and is caught (the door opens)
  * -> blue rolls through to the spring and lands on TOP, freeing red -> red rolls through and climbs ->
@@ -36,7 +36,7 @@ export const level: Level = compileLevel({
   name: 'Grand Machine',
   world: 3,
   order: 12,
-  par: 8,
+  par: 7,
   hint: 'Two ways up: lob LEFT into the CANNON while your partner rests on FIRE, or ride the SPRING behind the DOOR while your partner sits in its TRAP. TOP opens everything for the second ball.',
   aha: 'Every way up needs the other ball, so we choose: I fly while you hold FIRE, or I climb while you sit in the door trap, and whoever lands on TOP opens both machines for the other.',
   watchOut:

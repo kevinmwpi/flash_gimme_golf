@@ -3,13 +3,17 @@
  * World 3, hole 9 — BAIT (worlds-2-3 LEVELS.md "Level 9", Appendix A; the DOOR rect is renamed
  * `door-gate`, D10.8). Introduces nothing: trap, spring and door combined, and the trap learnt as a
  * hazard on hole 6 becomes a tool. A sunken channel (490-760, floor 640) runs under a wall at 650-690
- * (top y 200) whose DOOR stands flush on the channel floor (D10.12). The BAIT plate (490-600) that holds the
+ * (top y 200) whose DOOR stands flush on the channel floor (D10.12). The BAIT plate (490-610) that holds the
  * door sits INSIDE a trap (480-610 x 590-640, released only by TOP): whoever rests there is caught,
- * which hands every turn to the partner. Past the door a sandy yard leads to a raised SPRING mouth (the
+ * which hands every turn to the partner. The plate covers the trap's whole restable floor (480-490 is the
+ * 0.4 ramp): with Appendix A's 490-600 plate, a ball resting at 600-610 was caught WITHOUT holding the
+ * door, and its partner on the tee side could never reach TOP or the cup, a softlock the scoped reset
+ * cannot end because the partner can still shoot (the solver's traps pass found it: 174 of 2,639 low
+ * shots from red's tee stopped in that strip). Past the door a sandy yard leads to a raised SPRING mouth (the
  * pad 976-1040 on a 40 px plinth at y 580, behind a 16 px back lip) that lifts a ball 360 px onto TOP on
  * the summit; TOP frees the bait and holds the door. Red shoots first. The cup holds TOP (D2).
  *
- * Intended line (par 9): red rolls onto BAIT and is caught (the door opens) -> blue rolls through the
+ * Intended line (par 8): red rolls onto BAIT and is caught (the door opens) -> blue rolls through the
  * door past red into the yard -> blue lobs into the raised spring mouth (as many tries as it takes: red
  * is caught, so blue keeps the turn) and lands on TOP, freeing red -> red rolls out through the door
  * and makes the same lob -> both chip down to the terrace green and putt.
@@ -31,7 +35,7 @@ export const level: Level = compileLevel({
   name: 'Bait',
   world: 3,
   order: 9,
-  par: 9,
+  par: 8,
   hint: 'The BAIT plate opens the DOOR, but it sits in a TRAP: whoever rests there is caught and skips turns. Take the bait on purpose; your partner climbs the SPRING to TOP, which frees you.',
   aha: 'Getting caught is the plan: the ball in the trap holds the door and hands every turn to its partner, who takes as many shots as the raised spring needs and then frees the bait from the top.',
   watchOut:
@@ -81,7 +85,7 @@ export const level: Level = compileLevel({
     { kind: 'sand', id: 'back-bunker', x1: 1910, x2: 1960 },
   ],
   switches: [
-    { id: 'bait', centerX: 545, w: 110, colour: SWITCH_COLOUR, label: 'BAIT' }, // 490-600 on the channel floor, inside the trap
+    { id: 'bait', centerX: 550, w: 120, colour: SWITCH_COLOUR, label: 'BAIT' }, // 490-610: the trap's whole restable floor (no caught-but-not-holding strip)
     { id: 'top', centerX: 1370, w: 140, colour: SWITCH_COLOUR, label: 'TOP' }, // 1300-1440 on the bowl floor
   ],
   holeX: 1840,

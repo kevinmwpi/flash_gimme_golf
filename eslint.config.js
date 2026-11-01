@@ -88,11 +88,11 @@ export default tseslint.config(
     ),
   },
   {
-    // ui/* -> sim/types, sim/levels (LEVELS/WORLD1_IDS), view/audio, net/GameClient types, ui/*
+    // ui/* -> sim/types, sim/levels (LEVELS/WORLD_IDS), sim/devices, view/audio, net/GameClient types, ui/*
     files: ['src/ui/**/*.{ts,tsx}'],
     ignores: ['src/ui/__tests__/**'],
     rules: forbid(
-      '/sim/levels/w1-|/sim/(physics|terrain|serialize|rng)$|/view/(render|input)/|/server/',
+      '/sim/levels/w\\d-|/sim/(physics|terrain|serialize|rng)$|/view/(render|input)/|/server/',
       'src/ui may import only sim/types, sim/levels/index, view/audio, net types and ui/* (ARCH.md §0).',
       true,
     ),

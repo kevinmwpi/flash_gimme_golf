@@ -27,19 +27,19 @@ lists `sand` on every hole (worlds 2-3 keep the rule: 45-70 px behind the cup, s
 | # | id | name | size | par | first | holds | new idea | devices (release / FIRE plates; the first names the HUD chip) |
 |---|---|---|---|---|---|---|---|---|
 | 5 | `w2-05-spring-step` | Spring Step | 1800 × 720 | 7 | red | cup → `top` | spring | — |
-| 6 | `w2-06-booby-trap` | Booby Trap | 1700 × 720 | 7 | red | cup → `far` | trap | trap `snare` [`free`, `far`] |
+| 6 | `w2-06-booby-trap` | Booby Trap | 1700 × 720 | 6 | red | cup → `far` | trap | trap `snare` [`free`, `far`] |
 | 7 | `w2-07-load-and-fire` | Load & Fire | 1960 × 720 | 8 | red | cup → `fire-far` | cannon | cannon `cannon` [`fire`, `fire-far`] |
 | 8 | `w2-08-colour-lift` | Colour Lift | 1960 × 720 | 8 | **blue** | cup → `door` | — (the World 2 exam) | — |
-| 9 | `w3-09-bait` | Bait | 1960 × 720 | 9 | red | cup → `top` | — | trap `bait-trap` [`top`] (the BAIT seat) |
+| 9 | `w3-09-bait` | Bait | 1960 × 720 | 8 | red | cup → `top` | — | trap `bait-trap` [`top`] (the BAIT seat) |
 | 10 | `w3-10-sky-bridge` | Sky Bridge | 1960 × 720 | 7 | **blue** | cup → `b` | — | cannon `cannon` [`a`, `b`, `deck`] |
 | 11 | `w3-11-crossfire` | Crossfire | 1960 × 720 | 8 | red | cup → `far` | — | cannon `cannon` [`fire`, `far`] |
-| 12 | `w3-12-grand-machine` | Grand Machine | 1960 × 720 | 8 | red | cup → `top` | — | trap `pit` [`fire`, `top`], cannon `cannon` [`fire`, `top`], trap `door-seat` [`top`] (the DOOR seat) |
+| 12 | `w3-12-grand-machine` | Grand Machine | 1960 × 720 | 7 | red | cup → `top` | — | trap `pit` [`fire`, `top`], cannon `cannon` [`fire`, `top`], trap `door-seat` [`top`] (the DOOR seat) |
 
 Every trap and cannon lists the cup's plate among its own, so a sunk partner always frees a caught ball and
 lights a cold cannon (asserted in `levels.test.ts`). Back bunkers sit 60 / 50 / 50 / 70 / 70 / 45 / 50 / 50 px
 behind the cups of holes 5-12; every plate edge is at least 135 px from its cup (L10 B, the tightest). Course
-pars 30 (World 2) and 32 (World 3) are the design's proposals; the solver calibrates them (D10.13: solver
-minimum ≤ par ≤ minimum + 2) and may change only the `par` lines.
+pars 29 (World 2) and 30 (World 3): the solver calibrated the design's proposals (30 and 32) to solver minimum ≤
+par ≤ minimum + 2 (D10.13), lowering holes 6, 9 and 12 by one each ("Pars" at the end).
 
 World 1 course par 28 (LEVELS.md authored 6 / 7 / 9 / 8 = 30; the re-verification against the real sim moved Colour Keys
 and Plate & Bridge down one each, see "Pars" at the end). Everything is verified for `SHOT_SPEED_PER_POWER = 6.5` (max launch 650 px/s, vacuum range
@@ -236,7 +236,7 @@ on TOP, which holds the door → red leaves DOOR, rolls through and rides up →
 Watch-outs: lobbing at the 420 px wall instead of rolling through the door; the TOP ball chipping away before
 the DOOR holder has ridden up (the cup holds TOP, so sinking is safe).
 
-### 6 · Booby Trap (par 7, red first, cup holds `far`)
+### 6 · Booby Trap (par 6, red first, cup holds `far`)
 
 Floor 620. Perch 160–340, top 460 (160 px), its bowl 170–330 carrying PERCH 200–300 at y 484 and a backboard
 162–182 up to y 340. At its foot the trap dish 360–460 under the jaws `snare` (350–450 × 560–640, released by
@@ -269,11 +269,13 @@ onto WINDOW → red lobs through the window from a few steps back (blue stall-ta
 through the red field onto DOOR → blue rolls through → both chip down and putt. Watch-outs: blue reading the
 bounce as a failure; the window lob is World 2's precision peak.
 
-### 9 · Bait (par 9, red first, cup holds `top`)
+### 9 · Bait (par 8, red first, cup holds `top`)
 
 Floor 620. Sunken channel 490–760 at y 640 under the wall 650–690 (cap 200–520; DOOR 520–640 flush on the
-channel floor, held by `bait` OR `top`). The BAIT plate 490–600 is a seat inside the jaws `bait-trap`
-(480–610 × 590–640, released only by TOP). Yard 800–960 with sand 820–950; raised spring mouth (lip 961–968 at
+channel floor, held by `bait` OR `top`). The BAIT plate 490–610 is a seat inside the jaws `bait-trap`
+(480–610 × 590–640, released only by TOP) and covers the trap's whole restable floor: Appendix A's 490–600
+plate left a 600–610 strip where a ball was caught WITHOUT holding the door, a softlock the solver's traps
+pass found (the partner can still shoot, so the scoped reset never runs). Yard 800–960 with sand 820–950; raised spring mouth (lip 961–968 at
 y 564, SPRING 976–1040 at y 580, launch (200, −740)). 360 px cliff at 1240; TOP 1300–1440 in the sand bowl
 1260–1480; drop at 1560 to the terrace at 440, cup 1840, back bunker 1910–1960. Line: red rolls onto BAIT and
 is caught (the door opens) → blue rolls through past red into the yard → blue lobs into the spring mouth,
@@ -302,7 +304,7 @@ fired onto FAR (or waits LOADED) → FAR opens the door and keeps the cannon lit
 ledge, rolls through the door into the cannon, flies onto FAR and putts. Watch-outs: blue trying to load the
 cannon (the red field bounces it); red lobbing from the tee instead of moving up first.
 
-### 12 · Grand Machine (par 8, red first, cup holds `top`)
+### 12 · Grand Machine (par 7, red first, cup holds `top`)
 
 Pit 0–40 at y 640 under the jaws `pit` (12–40 × 590–640, released by FIRE or TOP). Cannon mount 41–200 (top
 540): sand funnel 41–99 / 141–199 around the breech 100–140 at y 565 (launch (700, −760), lit by `fire` OR
@@ -443,11 +445,29 @@ the 1960 px overview width can raise it):
 | 3 | 5 | blue lobs onto DOOR 1 plate, must shoot once while DOOR 2 is shut, rolls in (3); red rolls through DOOR 1, lobs the red field and holes out, which holds DOOR 2 from the cup (2) | 7 | 9 | **8** (D2's −1; 5 is par − 3) |
 | 4 | 5 | red chips onto A, crosses, sinks (3); blue crosses, sinks (2) | 9 · deck 8 | 8 | **7** (5 ∈ 5..7) |
 
+Worlds 2-3 are calibrated the same way (D10.13: solver minimum ≤ par ≤ minimum + 2, the design's proposal as the
+target, so par = min(proposal, minimum + 2)). Minimum = the better of `coop` (beam 6) and `wide` (beam 60) with
+the slow suite's options (`npm run solve -- <id> --pass coop,wide --maxSeconds 600`); scripted = the golden line.
+These minimums are search results, not proofs of a floor:
+
+| hole | minimum (coop / wide) | the solver's line | scripted | LEVELS.md par | shipped par |
+|---|---|---|---|---|---|
+| 5 | 5 (5 / 5) | red parks on DOOR; blue rides the spring onto TOP; red rides up; both chip in from TOP | 5 | 7 | **7** (5 ∈ 5..7) |
+| 6 | 4 (4 / 4) | red lobs LEFT onto the PERCH (118°/83); blue holes out from its tee through the open door (29°/94); red holes out from the perch (29°/94; the cup holds FAR) | 5 · rescue 7 | 7 | **6** (7 > 4 + 2) |
+| 7 | 6 (6 / 6) | red lobs to 804; blue rests on FIRE; red BOOM onto the far plate; blue lobs into the lit funnel (BOOM); both putt | 8 · load line 8 | 8 | **8** (6 ∈ 6..8) |
+| 8 | 6 (6 / 6) | blue's spring bounce onto WINDOW; red's window lob through the red wall onto DOOR; blue moves up; both sink | 7 | 8 | **8** (6 ∈ 6..8) |
+| 9 | 6 (7 / 6) | red rolls to 611 (just outside the jaws); blue rolls onto BAIT, CAUGHT; red rolls from 611 through the door straight into the raised spring onto TOP; blue climbs from the channel; both sink from TOP | 7 | 9 | **8** (9 > 6 + 2) |
+| 10 | 5 (5 / 5) | blue rides the spring onto A; red lobs LEFT into the lit cannon onto B (129°/49); blue onto the deck; both sink | 5 · spring route 7 | 7 | **7** (5 ∈ 5..7) |
+| 11 | 6 (6 / 6) | red lobs from its tee into the cold cannon (LOADED); blue lobs LEFT onto FIRE and fires red onto FAR; red sinks; blue rolls through the door into the cannon (BOOM); blue sinks | 8 | 8 | **8** (6 ∈ 6..8) |
+| 12 | 5 (5 / 5) | red rests on FIRE; blue lobs LEFT into the lit cannon onto TOP; red lobs LEFT from the FIRE dish into the cannon (TOP keeps it lit); both chip in | fly 5 · climb 5 | 8 | **7** (8 > 5 + 2) |
+
+Course pars: World 1 28, World 2 29, World 3 30.
+
 Colour Keys is the one hole where the rule cannot be met inside BUILD_DECISIONS D2's ±1: the real roll
 (twice the old build's) collapses "chip to the green, then putt" into one roll-in from either bowl, and
 `cupHoldsSwitch: 'door2'` (D2) lets red's field lob hole out instead of resting on the DOOR 2 plate. The
 rule's answer is par 7 (the scripted line); D2 caps the change at 8. `scripts/solver.ts` encodes the exception
-explicitly (`PAR_SLACK_BY_ORDER`, slack 3 for hole 3; the test and the CLI criterion share it) so a lead
+explicitly (`PAR_SLACK_BY_ID`, slack 3 for `w1-03-colour-keys`; the test and the CLI criterion share it) so a lead
 decision to waive the cap is a one-line change there plus `par: 7` in the level file. Human play is slower
 than the grid: the blue lob onto the DOOR 1 plate succeeds for about 7 % of human-grid shots, so a typical pair
 still finishes Colour Keys around 9–10 and the pars read as "silver for a clean pair, gold for one hole-out".
