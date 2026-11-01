@@ -1,14 +1,15 @@
 # Flash Golf
 
-A flash-style 2D **co-op** golf game for two, in your browser. Pull back from your ball like a
-slingshot, let go, and solve switch, door, colour-gate and bridge puzzles *together* across
-World 1 "Teach": four holes, about ten minutes. No install, no account.
+A flash-style 2D **co-op** golf game for two, in your browser. Pull back like a slingshot, let go,
+and solve plate, door, colour-gate, bridge, spring, trap and cannon puzzles *together* across three
+worlds of four holes: World 1 "Teach", World 2 "Lift & Lock" and World 3 "Sky Machines", each about
+ten minutes. No install, no account.
 
 - **Play now:** https://flash-golf.vercel.app
 - **Online server:** `wss://flash-gimme-golf.fly.dev/ws` (Fly.io; the first room of the day wakes it
   in a few seconds)
-- **Status:** the polished rebuild lives on branch `redesign/polished-v1` (this tree). `main` still
-  serves the previous prototype until the rebuild is merged.
+- **Status:** `main` is the live build: Vercel serves the client and Fly the server, both redeployed
+  from `main`. Worlds 2 and 3 (holes 5-12) were added in November 2026.
 
 ## The game
 
@@ -23,12 +24,19 @@ two of you against the course; per-player strokes are shown as a footnote.
 - **Out of bounds.** A ball that falls off the world comes back to where it last rested, +1 stroke.
 - **Turns.** Red and blue alternate. After a ball settles there is a short hand-off before the next
   player may shoot; who tees off first is set per hole.
-- **Mechanics, one new idea per hole:** sand (kills bounce and roll), **pressure plates** (held
-  while a ball *rests* on them; leave and the door shuts or the bridge vanishes), **doors and
+- **World 1 mechanics, one new idea per hole:** sand (kills bounce and roll), **pressure plates**
+  (held while a ball *rests* on them; leave and the door shuts or the bridge vanishes), **doors and
   windows** (open only while their plate is held), **colour gates** (only the matching player's ball
   passes; the other bounces off), and a **bridge** across a gap that exists only while a plate is
   held. A ball that has sunk keeps holding the switch its hole is wired to, so finishing first helps
   your partner instead of stranding them. Balls never collide with each other.
+- **World 2 adds height and three devices:** a **spring** throws any ball that touches it up a
+  cliff; a **trap** catches a ball that comes to rest in its jaws until the partner rests on its
+  release plate; a **cannon** holds a ball that rests in it and fires it across a chasm the moment
+  the partner rests on a FIRE plate. A caught or loaded ball's turns go to its partner (the banner
+  says so every time, and the player's chip names the plate that frees it); if nobody can shoot, the
+  ball that moved last goes back to where it last stood free, +1. **World 3** introduces nothing new:
+  every hole combines the machines, and the finale offers two ways up.
 
 ### Modes
 
@@ -36,11 +44,13 @@ two of you against the course; per-player strokes are shown as a footnote.
 |---|---|
 | **Solo** | You play **both balls**, alternating red and blue. Same holes, same puzzles: hold a plate with one ball, cross with the other. |
 | **2 players, one screen** | Red and blue take turns on the same keyboard, mouse, touchscreen or pads. |
-| **Online with a friend** | Create a room and share the 5-letter code or the invite link (`?room=CODE`). Each browser owns one ball; the host is red, and who tees off first is set per hole (blue opens Colour Keys). The server runs the game; a dropped player has 60 s to rejoin the same seat. |
+| **Online with a friend** | Create a room and share the 5-letter code or the invite link (`?room=CODE`). Each browser owns one ball; the host is red, and who tees off first is set per hole (blue opens Colour Keys, Colour Lift and Sky Bridge). The server runs the game; a dropped player has 60 s to rejoin the same seat. |
 
-The title screen shows the four holes with your best team result on this device; pick any hole to
-start the course from there. Local games can be shared mid-course with the pause menu's
-**Copy share link** (`?state=...`), which encodes the compact game state.
+The title screen shows the three worlds (pick one with the World 1 / 2 / 3 tabs) with your best team
+result per hole on this device; pick any hole to start from there. A session plays to the end of
+that hole's world, and the world results card offers **Continue to World N+1** (online: the host).
+Local games can be shared mid-course with the pause menu's **Copy share link** (`?state=...`), which
+encodes the compact game state.
 
 ### Controls
 
@@ -48,16 +58,18 @@ Keyboard only and touch only are both complete. Hints on screen follow whichever
 
 | action | keyboard | mouse / touch | gamepad |
 |---|---|---|---|
-| aim | ← → or A D (hold 0.6 s for a fast sweep) | press on or near **your** ball, pull back (slingshot: the shot goes the other way) | left stick (absolute) |
+| aim | ← → or A D (hold 0.6 s for a fast sweep) | press anywhere on the course (on your ball works too) and pull back (slingshot: the shot goes the other way) | left stick (absolute) |
 | power | ↑ ↓ or W S | drag length (full power at 240 px) | right trigger up, left trigger down, or right stick ↑↓ |
 | shoot | Space or Enter | release the drag | A |
-| cancel a shot | — | drag back into the ring around the ball, second finger, or right-click | — |
+| cancel a shot | — | drag back to where you pressed (the band shrinks back onto your ball), second finger, or right-click | — |
 | camera (follow / overview) | C | camera button | X |
 | pause | Esc | pause button | Start |
 | mute | M | speaker button | Y |
 | hints | H | tap the hole chip | — |
 
-Stray taps never cost a stroke: a press away from your ball just shows where to grab.
+Taps never cost a stroke: letting go within 24 px of where you pressed cancels, and a press on your
+partner's ball is refused. Because a drag can start anywhere, a ball at the edge of the screen still
+has the full 240 px of pull.
 
 ## Develop
 
@@ -82,8 +94,8 @@ npm run build        # typecheck + vite build -> dist/
 | `build` / `preview` | production client build (runs `typecheck` first) / serve `dist/` locally |
 | `build:server` / `start` | esbuild bundle of `server/index.ts` to `dist-server/index.mjs` / run it (what the Docker image does) |
 | `typecheck` | `tsconfig.json` (app), `tsconfig.server.json`, `tsconfig.test.json` |
-| `test` / `test:levels` | vitest without / only the slow solver suite (`src/sim/__tests__/levels-solver.test.ts`) |
-| `solve -- <levelId>` | beam-search solver over the real sim; proves a hole is co-op solvable and not solo-bypassable |
+| `test` / `test:levels` | vitest without / only the slow solver suite (`src/sim/__tests__/levels-solver-w{1,2,3}.test.ts`, one file per world) |
+| `solve -- <levelId\|w1\|w2\|w3\|all>` | the solver over the real sim (`scripts/solver/`): proves a hole is co-op solvable and not solo-bypassable, and that its springs and cannons land, no flight loops and every trapped or loaded ball can be freed; `--write-goldens` re-records the golden lines |
 | `lint` | ESLint flat config (`eslint.config.js`) |
 
 ### Environment variables
@@ -115,8 +127,9 @@ that bundles the server with esbuild and runs it as `node` on `node:22-alpine`. 
 (`.github/workflows/ci.yml`: `npm ci`, typecheck, lint, test, build, `build:server`,
 `npm audit --omit=dev --audit-level=high`) runs on every push and PR; each `main` commit gets its own
 run that a newer push never cancels. `levels.yml` runs the slow
-level-solver suite (`npm run test:levels`, ~12 min) whenever `src/sim/`, `scripts/solver.ts` or the package
-files change, and on demand (*Run workflow*). `fly-deploy.yml` deploys only
+level-solver suite as three parallel jobs, one per world (each well inside its 45-minute limit),
+whenever `src/sim/`, `scripts/solver.ts`, `scripts/solver/` or the package files change, and on
+demand (*Run workflow*). `fly-deploy.yml` deploys only
 after CI succeeded on `main` **and** a server-relevant file changed (`server/`, `src/sim/`,
 `src/net/protocol.ts`, package files, `Dockerfile`, `fly.toml`, the tsconfigs) since the commit that
 is live on Fly (the last run whose `flyctl deploy` step succeeded), so a change is never lost when
@@ -131,10 +144,13 @@ Manual deploy: `flyctl deploy --remote-only --ha=false` then `flyctl scale count
 `[http_service.concurrency]` in `fly.toml` raises Fly's default 25-connection cap to 700 (above
 `LIMITS.maxRooms` x 2), so a full server answers `SERVER_FULL` instead of the proxy queueing sockets.
 
-**Protocol version.** `PROTOCOL_VERSION` in `src/net/protocol.ts` is checked in the first message of
-every connection; a mismatch is refused with a clear error. Client and server **ship together**:
-change the protocol, the sim rules or `src/sim/types.ts` in one commit so that the same push deploys
-both. A client-only change (`src/view`, `src/ui`) never redeploys the server, by design.
+**Protocol version.** `PROTOCOL_VERSION` in `src/net/protocol.ts` (now 4) is checked in the first
+message of every connection; a mismatch is refused with a clear error. Change the protocol, the sim
+rules or `src/sim/types.ts` in one commit so that the same push redeploys both sides. They do not
+land at the same instant: Vercel publishes the client as soon as `main` moves, Fly redeploys the
+server only after CI passes, so for those few minutes online play reports a version mismatch. Merge
+protocol changes at a quiet time. A client-only change (`src/view`, `src/ui`) never redeploys the
+server, by design.
 
 ### Project structure
 
@@ -145,8 +161,9 @@ src/
   sim/                     pure, deterministic rules: 60 Hz stepSim(state, commands) -> { state, events }
     types.ts               the frozen data contract and every tuning constant
     sim.ts physics.ts terrain.ts rng.ts serialize.ts
-    levels/                one file per hole (compileLevel) + registry (LEVELS, WORLD1_IDS, campaignFrom)
-    __tests__/             determinism, turns, switches, physics, cup, serialization, level validity
+    devices.ts             trap and cannon queries (caught, loaded, release labels) shared by sim, view, ui, solver
+    levels/                one file per hole (compileLevel) + registry (LEVELS, WORLD_IDS, campaignFrom, worldTitle)
+    __tests__/             determinism, turns, switches, devices, physics, cup, serialization, level validity
   view/                    client-only presentation; never writes to the sim
     view.ts                ViewState (camera, particles, trails, shake, golfer anims) fed by SimEvents
     render/                Canvas 2D drawing in a fixed 1280x720 logical space
@@ -156,7 +173,7 @@ src/
   ui/                      React menus, HUD, overlays, copy, local storage, URL params
   net/                     protocol.ts (frozen wire contract) and GameClient.ts (socket, interpolation, reconnect)
 server/                    Node ws server: RoomManager runs the only online sim and broadcasts compact snapshots
-scripts/solver.ts          level solver (npm run solve)
+scripts/solver.ts          level solver CLI (npm run solve); the passes live in scripts/solver/
 design/                    the redesign package this rebuild is built from (see below)
 ```
 

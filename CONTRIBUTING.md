@@ -9,13 +9,13 @@ Node 22 (`.nvmrc`), npm. `npm ci`, then work with these scripts:
 | `npm run typecheck` | `tsc` for the app, the server (`lib ES2022`, no DOM) and the tests |
 | `npm run lint` | ESLint incl. the layer dependency rule (`eslint.config.js`) |
 | `npm test` | vitest, fast suite (the solver suite is excluded) |
-| `npm run test:levels` | the slow level-solver suite |
-| `npm run solve -- <levelId>` | solve one hole with the real sim |
+| `npm run test:levels` | the slow level-solver suite (one file per world) |
+| `npm run solve -- <levelId\|w1\|w2\|w3\|all>` | solve and verify holes with the real sim (`--write-goldens` re-records the golden lines) |
 | `npm run build` | typecheck + Vite production build |
 
 CI runs typecheck, lint (zero warnings), test, build, `build:server` and `npm audit` on every push and
-PR, and the `Levels` workflow runs `npm run test:levels` when `src/sim/**` or `scripts/solver.ts`
-changed; all of it must be green before merging.
+PR, and the `Levels` workflow runs the slow suite as one job per world when `src/sim/**`,
+`scripts/solver.ts` or `scripts/solver/**` changed; all of it must be green before merging.
 
 ## Rules
 
@@ -40,8 +40,8 @@ the contracts for everything else.
 
 | group | owns |
 |---|---|
-| sim | `src/sim/{sim,physics,terrain,rng,serialize}.ts`, `src/sim/__tests__/` (except the two levels tests) |
-| levels | `src/sim/levels/`, `src/sim/__tests__/levels*.test.ts`, `scripts/solver.ts` |
+| sim | `src/sim/{sim,physics,terrain,rng,serialize,devices}.ts`, `src/sim/__tests__/` (except the levels tests and the golden lines) |
+| levels | `src/sim/levels/`, `src/sim/__tests__/levels*.ts` (incl. `levels-golden.ts`, `levels-solver-suite.ts`), `scripts/solver.ts`, `scripts/solver/` |
 | view | `src/view/view.ts`, `src/view/render/`, `src/view/audio.ts`, `src/view/__tests__/view.test.ts` |
 | input-loop | `src/view/input/`, `src/view/GameCanvas.tsx`, `src/view/__tests__/{input-*,loop}.test.ts` |
 | ui | `src/ui/`, `src/App.tsx`, `src/main.tsx`, `src/styles.css`, `index.html`, `public/` |

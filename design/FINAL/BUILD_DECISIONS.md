@@ -101,11 +101,11 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
   every message, rate-limits and caps rooms regardless. README documents the trade-off.
 - A door that closes on a parked ball ejects it through the nearest face (D2), even when that face is the tee side.
 - `.claude/settings.json` (third-party plugin marketplace) is the owner's call; leave it untouched.
-- The slow solver suite (`npm run test:levels`, ~12 min) runs in its own workflow, not in `npm test`.
+- The slow solver suite (`npm run test:levels`) runs in its own workflow (one CI job per world since D10.13), not in `npm test`.
 - `CLAUDE.md` edits are limited to the dated status note in §5 and the §11 companion list; both are sanctioned.
 
 ## D9. Pars are final: 6 / 7 / 8 / 7 (course par 28)
-- Colour Keys keeps par 8 with its documented slack exception (`PAR_SLACK_BY_ORDER = { 3: 3 }` in scripts/solver.ts):
+- Colour Keys keeps par 8 with its documented slack exception (`PAR_SLACK_BY_ID = { 'w1-03-colour-keys': 3 }` in the solver, keyed by id since D10.1):
   its structural solver minimum is 5, but the human line needs 7-8 strokes.
 - Change a par only together with fresh `npm run solve -- all` evidence and the matching golden/test updates.
 
@@ -166,7 +166,9 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   device's FIRST switch id (levels list the partner-reachable release first). It is derived from SimState every frame,
   never from events. Every skipped turn shows the turn banner with the line "Red is caught — Blue shoots again" (or "is
   loaded"), and the live region reads it. The holder (stall-tap) tip never shows while either ball is waiting, and never
-  names a trap-release or FIRE plate.
+  names a plate whose only consumers are traps or cannons. A plate that also drives a door or bridge (L10's A raises the
+  bridge and lights the cannon) can still be named while the partner is free and needs that door or bridge, as in World
+  1's Plate & Bridge (lead reading, 2026-11-01).
 - **D10.11 Audio.** Trap, cannon, return and skip sounds follow AUDIO.md's timbre-per-mechanic rule; no new continuous
   loops (LIT and ARMED are visual only). One music bed per world on the existing white-key set (World 2 D Dorian, World 3
   centred on F); title and lobby keep the World 1 bed. The fan loop stops when a game is left.
@@ -175,7 +177,12 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   cup" applies to World 1 only; every plate edge must still be more than `GIMME_RADIUS + NEAR_CUP_RADIUS` from the cup.
   Doors may stand flush on a channel floor (L9, L12): a door closing on a ball in its doorway ejects it sideways
   (tested). Appendix A geometry is used verbatim except where an existing level rule forces a minimal change (L10's
-  back bunker and plate B), re-verified by the launcher checks.
+  back bunker and plate B), re-verified by the launcher checks, or where verification found a defect: Bait's BAIT plate
+  spans 490-610 (Appendix A: 490-600), the trap's whole restable floor, because a ball resting at 600-610 was caught
+  without holding the door and its partner could never progress (a softlock the scoped reset cannot end while the
+  partner can still shoot). A plate inside a trap must cover that trap's restable floor.
 - **D10.13 Verification.** The solver adds `launchers`, `loops` and `traps` passes and explicit opt-outs (backboards and
   ledge-only columns for `walls`, cannon-crossed gaps for `gaps`). Pars are calibrated as D9 and LEVELS.md require
-  (solver minimum <= par <= minimum + 2). The slow suite is split per world and runs as a CI matrix.
+  (solver minimum <= par <= minimum + 2): Booby Trap 7 -> 6 (minimum 4: once red holds the perch, blue can hole out
+  from its tee through the open door), Bait 9 -> 8 and Grand Machine 8 -> 7; course pars 28 / 29 / 30. The slow suite
+  is split per world and runs as a CI matrix.
