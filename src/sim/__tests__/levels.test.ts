@@ -3,13 +3,17 @@
 // walls, 720 px chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign,
 // traps and cannons, at most one introduced mechanic, rect and switch ids disjoint, the overview rule).
 // Level ids are derived from the file names and the level names, so this file holds no level-id literal;
-// the goldens it replays (levels-golden.ts) and the solver's tables are keyed by level id (D10.1).
-import { readdirSync } from 'node:fs';
+// the goldens it replays (levels-golden.ts) and the solver's tables are keyed by level id (D10.1). The levels
+// README is binding for the level docs, so the files, constants and solver passes it names are checked to exist.
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import * as solver from '../../../scripts/solver';
 import { cameraFor } from '../../view/view';
-import { releaseLabel } from '../devices';
+import { onCannonBreech, releaseLabel } from '../devices';
+import * as authoring from '../levels/authoring';
 import { SWITCH_COLOUR, WALL_EMBED_PX, compileLevel, levelWarnings, validateLevel } from '../levels/authoring';
+import * as registry from '../levels/index';
 import {
   LEVELS,
   WORLD1_IDS,
@@ -24,9 +28,11 @@ import {
   worldOf,
   worldTitle,
 } from '../levels/index';
+import { predictLaunch } from '../physics';
 import { encodeSnapshot } from '../serialize';
 import { createSim, runReplay, stepSim } from '../sim';
-import { rectContains, rectSwitchIds, surfaceYOnPiece } from '../terrain';
+import { rectContains, rectSwitchIds, surfaceYAt, surfaceYOnPiece } from '../terrain';
+import * as simTypes from '../types';
 import type { BlockerRect, CannonRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig, TrapRect, Vec } from '../types';
 import { BALL_RADIUS, GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, VIEWPORT_H } from '../types';
 import { GOLDEN_LINES, goldenConfig } from './levels-golden';
@@ -384,6 +390,42 @@ describe('levels', () => {
     expect(seats).toEqual(['9:bait:bait-trap', '12:door:door-seat']);
   });
 
+  it('L11: between the DOOR and the chasm a ball rests only on the cannon breech (LOADED while cold), and a lit cannon fires every ball there', () => {
+    // Blue gets right of the red field only through the door, which only FAR holds open. Appendix A's 20 px flat at
+    // 880-900 held a ball there after red left FAR: door shut, cannon cold, FIRE and FAR out of reach, a softlock the
+    // scoped reset never ends. Every ball between the door and the chasm lip (dropped dead or rolling either way)
+    // must end in the breech, fired by FIRE or LOADED, or fall into the chasm (+1 back to its safe spot).
+    const door = L11.rects.find((r) => r.kind === 'blocker' && rectSwitchIds(r).length > 0);
+    const cannon = L11.rects.find((r): r is CannonRect => r.kind === 'cannon');
+    const gap = L11.terrain.gaps[0];
+    if (door === undefined || cannon === undefined || gap === undefined) throw new Error('L11 lost its door, cannon or chasm');
+    // the FIRE plate is the cannon's plate that does not also open the door (FAR does both)
+    expect(rectSwitchIds(cannon).filter((id) => !rectSwitchIds(door).includes(id))).toEqual(['fire']);
+    const strays: string[] = [];
+    let loaded = 0;
+    let fired = 0;
+    for (let x = door.x + door.w + 1; x < gap.x1; x += 1) {
+      const ground = surfaceYAt(L11, x);
+      if (ground === null) throw new Error(`L11 has no ground at x ${x}`);
+      for (const vx of [0, -60, 60]) {
+        for (const player of [0, 1] as const) {
+          const from = { x, y: ground - BALL_RADIUS - 1 };
+          const cold = predictLaunch(L11, {}, from, { x: vx, y: 0 }, player);
+          const coldEnd = cold.points[cold.points.length - 1];
+          if (cold.outcome === 'rest' && coldEnd !== undefined && onCannonBreech(L11, coldEnd)) loaded += 1;
+          else if (cold.outcome !== 'fell') strays.push(`cold P${player + 1} ${x}/${vx}: ${cold.outcome} at ${coldEnd?.x}`);
+          const lit = predictLaunch(L11, { fire: true }, from, { x: vx, y: 0 }, player);
+          const litEnd = lit.points[lit.points.length - 1];
+          if (lit.outcome === 'rest' && litEnd !== undefined && litEnd.x > gap.x2) fired += 1;
+          else if (lit.outcome !== 'fell') strays.push(`lit P${player + 1} ${x}/${vx}: ${lit.outcome} at ${litEnd?.x}`);
+        }
+      }
+    }
+    expect(strays).toEqual([]);
+    expect(loaded).toBeGreaterThan(0);
+    expect(fired).toBe(loaded);
+  });
+
   it('every plate uses the single switch accent colour (pairs differ by label, not hue)', () => {
     for (const level of LEVELS) for (const sw of level.switches) expect(sw.colour).toBe(SWITCH_COLOUR);
   });
@@ -611,5 +653,39 @@ describe('validateLevel rules (negative cases on mutated copies of the real leve
         startXs: [90, 100],
       }),
     ).toThrow(/par must be >= 3.*tees too close|tees too close.*par must be >= 3|introduced mechanic "sand" is not present/);
+  });
+});
+
+// worlds-2-3 LEVELS.md: "the code and that README win where they differ", so the README may not drift from the code.
+describe('levels README names only files, constants and solver passes that exist', () => {
+  const ROOT = new URL('../../../', import.meta.url);
+  const README = readFileSync(`${LEVELS_DIR}README.md`, 'utf8');
+  /** The text of every inline code span (the fenced recipe block dropped; a span may wrap onto the next line). */
+  const spans = [...README.replace(/^```[\s\S]*?^```$/gm, '').matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
+  /** `levels-solver-w{1,2,3}.test.ts` names three files. */
+  const expandBraces = (s: string): string[] => {
+    const open = s.indexOf('{');
+    const close = s.indexOf('}', open);
+    if (open < 0 || close < 0) return [s];
+    return s.slice(open + 1, close).split(',').flatMap((alt) => expandBraces(s.slice(0, open) + alt + s.slice(close + 1)));
+  };
+  const exists = (file: string): boolean => existsSync(new URL(file, ROOT));
+  /** Where a bare file name (no directory) may live. */
+  const BARE_NAME_DIRS = ['src/sim/', 'src/sim/levels/', 'src/sim/__tests__/', 'scripts/', 'scripts/solver/'];
+
+  it('every file it names exists (a repo path, or a bare name in src/sim, its levels or tests, scripts or scripts/solver)', () => {
+    const files = spans.filter((s) => /^[\w./{},-]+\.(ts|md|yml)$/.test(s)).flatMap(expandBraces);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((f) => (f.includes('/') ? !exists(f) : !BARE_NAME_DIRS.some((dir) => exists(dir + f))))).toEqual([]);
+  });
+
+  it('every SCREAMING_SNAKE_CASE constant it names is exported by sim/types, levels/authoring, the registry or the solver', () => {
+    const constants = spans.filter((s) => /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/.test(s));
+    expect(constants.length).toBeGreaterThan(0);
+    expect(constants.filter((name) => ![simTypes, authoring, registry, solver].some((mod) => name in mod))).toEqual([]);
+  });
+
+  it('the verification recipe documents every solver pass in a bullet of its own', () => {
+    expect(solver.PASS_NAMES.filter((pass) => !README.includes(`\n- \`${pass}\` — `))).toEqual([]);
   });
 });

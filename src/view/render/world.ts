@@ -249,7 +249,7 @@ function drawHills(ctx: CanvasRenderingContext2D, camX: number): void {
   }
 }
 
-/** Gradient + sun + clouds + parallax hills, full viewport, BEFORE the camera transform. */
+/** Gradient + sun + clouds (static under reduced motion, UX §3.10) + parallax hills, full viewport, BEFORE the camera transform. */
 export function drawSky(ctx: CanvasRenderingContext2D, view: ViewState): void {
   const g = ctx.createLinearGradient(0, 0, 0, SKY_GRADIENT_END_Y);
   g.addColorStop(0, PALETTE.sky1);
@@ -258,7 +258,7 @@ export function drawSky(ctx: CanvasRenderingContext2D, view: ViewState): void {
   ctx.fillRect(0, 0, VIEWPORT_W, VIEWPORT_H);
   drawSun(ctx);
   const camX = view.camera.x * view.camera.zoom;
-  drawClouds(ctx, camX, view.timeSec);
+  drawClouds(ctx, camX, view.reducedMotion ? 0 : view.timeSec);
   drawHills(ctx, camX);
 }
 

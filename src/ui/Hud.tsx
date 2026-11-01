@@ -191,9 +191,13 @@ function chipSub(mode: SimMode, seat: PlayerId | null, p: PlayerId): string | nu
   return null;
 }
 
+/**
+ * The plate slot `p`'s resting ball holds (VISUAL.md §11 `HOLDS <label>`), the cup-wired one included: on holes
+ * 5-12 that is each hole's key landing plate. A sunk ball holds nothing here; its CUP HOLDS line is chipStatus's.
+ */
 function holdsLabelFor(level: Level, holds: Readonly<Record<string, PlayerId>>, p: PlayerId): string | null {
   for (const sw of level.switches) {
-    if (holds[sw.id] === p && sw.id !== level.cupHoldsSwitch) return switchLabel(level, sw.id);
+    if (holds[sw.id] === p) return switchLabel(level, sw.id);
   }
   return null;
 }

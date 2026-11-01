@@ -11,10 +11,23 @@ import {
   type ServerMessage,
   type ServerMessageType,
 } from '../../src/net/protocol';
-import { WORLD1_IDS, campaignFrom } from '../../src/sim/levels/index';
-import { decodeSnapshot } from '../../src/sim/serialize';
-import { GOLDEN_LINES } from '../../src/sim/__tests__/levels-golden';
-import { DEFAULT_AIM, PHASE_CODES, TICK_RATE, TURN_DELAY_TICKS, type PlayerCommand, type PlayerId, type ReplayEntry, type SimConfig } from '../../src/sim/types';
+import { WORLD1_IDS, WORLD_IDS, campaignFrom } from '../../src/sim/levels/index';
+import { decodeSnapshot, encodeSnapshot } from '../../src/sim/serialize';
+import { createSim, runReplay, stepSim } from '../../src/sim/sim';
+import { GOLDEN_LINES, type GoldenLine } from '../../src/sim/__tests__/levels-golden';
+import {
+  DEFAULT_AIM,
+  IMMEDIATE_SNAPSHOT_EVENTS,
+  PHASE_CODES,
+  TICK_RATE,
+  TURN_DELAY_TICKS,
+  type PlayerCommand,
+  type PlayerId,
+  type ReplayEntry,
+  type SimConfig,
+  type SimEvent,
+  type SimState,
+} from '../../src/sim/types';
 import { HELLO_TIMEOUT_MS, MAX_SOCKETS_PER_IP, RoomManager, SILENT_PROBE_AFTER_MS, SILENT_PROBE_TIMEOUT_MS, type SocketLike } from '../rooms';
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -599,33 +612,179 @@ describe('RoomManager gameplay (needs the real stepSim)', () => {
     expect(guest.last('start').sync.config).toEqual(next);
     expect(decodeSnapshot(host.last('start').sync.snap, next)).toMatchObject({ phase: 'intro', levelId: LEVEL_2, levelIndex: 0 });
   });
+
+  it('playAgain with the next world first hole starts that whole world for both seats (1 -> 2 -> 3); unknown => BAD_MESSAGE, guest => NOT_HOST', () => {
+    for (const [from, to] of [[1, 2], [2, 3]] as const) {
+      const h = new Harness();
+      const lastHole = WORLD_IDS[from][WORLD_IDS[from].length - 1];
+      const { host, guest, config } = campaignResults(h, GOLDEN_LINES.find((l) => l.levelId === lastHole));
+      const firstHole = WORLD_IDS[to][0] ?? '';
+      h.say(guest, { type: 'playAgain', levelId: firstHole });
+      expect(guest.errors()).toEqual(['NOT_HOST']);
+      h.say(host, { type: 'playAgain', levelId: 'w9-99-no-such-hole' });
+      expect(host.errors()).toEqual(['BAD_MESSAGE']);
+      expect([...host.of('start'), ...guest.of('start')]).toEqual([]);
+      h.say(host, { type: 'playAgain', levelId: firstHole });
+      const sync = host.last('start').sync;
+      expect(guest.last('start').sync).toEqual(sync);
+      expect(sync.config).toEqual({ ...config, levelIds: [...WORLD_IDS[to]], seed: sync.config.seed });
+      expect(decodeSnapshot(sync.snap, sync.config)).toMatchObject({ phase: 'intro', levelId: firstHole, levelIndex: 0 });
+      h.command(guest, { type: 'continue', playerId: 1 });
+      h.ticks(1);
+      expect(decodeSnapshot(guest.last('snapshot').snap, sync.config)).toMatchObject({ phase: 'aiming', levelId: firstHole });
+      expect(host.errors()).toEqual(['BAD_MESSAGE']);
+      expect(guest.errors()).toEqual(['NOT_HOST']);
+    }
+  });
 });
 
-/** A one-hole online campaign played to campaignResults with the golden line of World 1 hole 1. */
-function campaignResults(h: Harness): ReturnType<Harness['lobby']> & { config: SimConfig } {
+type Online = ReturnType<Harness['lobby']> & { config: SimConfig };
+
+/**
+ * A fresh room started on `levelIds`, then `log` played through it: every command is sent from the seat that
+ * owns it on its tick, and the room steps exactly one sim tick per poll (runReplay's timing).
+ */
+function playOnline(h: Harness, levelIds: readonly string[], log: readonly ReplayEntry[], untilTick: number): Online {
   const room = h.lobby();
-  const line = GOLDEN_LINES[0];
-  if (line === undefined) throw new Error('no golden line');
-  h.say(room.host, { type: 'start', levelIds: [LEVEL_1] });
+  h.say(room.host, { type: 'start', levelIds: [...levelIds] });
   const config = room.host.last('start').sync.config;
   const seats = [room.host, room.guest] as const;
   let cursor = 0;
-  for (let t = 0; t < line.finalTick; t += 1) {
-    for (; cursor < line.log.length && (line.log[cursor] as ReplayEntry).tick === t; cursor += 1) {
-      const entry = line.log[cursor] as ReplayEntry;
+  for (let t = 0; t < untilTick; t += 1) {
+    for (; cursor < log.length && (log[cursor] as ReplayEntry).tick === t; cursor += 1) {
+      const entry = log[cursor] as ReplayEntry;
       h.command(seats[entry.cmd.playerId], entry.cmd);
     }
     h.ticks(1);
   }
-  h.command(room.host, { type: 'continue', playerId: 0 });
-  h.ticks(SNAPSHOT_KEEPALIVE_TICKS);
-  expect(decodeSnapshot(room.host.last('snapshot').snap, config).phase).toBe('campaignResults');
-  room.host.clear();
-  room.guest.clear();
   return { ...room, config };
 }
 
+/** A one-hole online campaign played to campaignResults with a golden line (World 1 hole 1 unless given). */
+function campaignResults(h: Harness, line: GoldenLine | undefined = GOLDEN_LINES[0]): Online {
+  if (line === undefined) throw new Error('no golden line');
+  const room = playOnline(h, [line.levelId], line.log, line.finalTick);
+  h.command(room.host, { type: 'continue', playerId: 0 });
+  h.ticks(SNAPSHOT_KEEPALIVE_TICKS);
+  expect(decodeSnapshot(room.host.last('snapshot').snap, room.config).phase).toBe('campaignResults');
+  room.host.clear();
+  room.guest.clear();
+  return room;
+}
+
 const PHASE_INDEX = 2;
+const RNG_INDEX = 9;
+
+// ---------------------------------------------------------------------------------------------
+// Server == local on every hole: each golden line played through a real room from both seats, every
+// snapshot checked against local stepping of the same log (the per-hole form of equivalence.test.ts).
+// ---------------------------------------------------------------------------------------------
+
+type Snapshot = Of<'snapshot'>;
+
+const isImmediate = (e: SimEvent): boolean => IMMEDIATE_SNAPSHOT_EVENTS.includes(e.type);
+
+/** runReplay's loop keeping every tick's state (index = tick), checked against runReplay itself. */
+function localTrace(config: SimConfig, log: readonly ReplayEntry[], untilTick: number): { states: SimState[]; events: SimEvent[] } {
+  const first = createSim(config);
+  const states: SimState[] = [first.state];
+  const events: SimEvent[] = [...first.events];
+  let cursor = 0;
+  for (let t = 0; t < untilTick; t += 1) {
+    const cmds: PlayerCommand[] = [];
+    for (; cursor < log.length && (log[cursor] as ReplayEntry).tick === t; cursor += 1) cmds.push((log[cursor] as ReplayEntry).cmd);
+    const step = stepSim(states[t] as SimState, cmds);
+    states.push(step.state);
+    events.push(...step.events);
+  }
+  const replay = runReplay(config, log, untilTick);
+  expect(states[untilTick]).toEqual(replay.state);
+  expect(events).toEqual(replay.events);
+  return { states, events };
+}
+
+/**
+ * Both seats got the same snapshot stream and no error frame. Every snapshot decodes against the room config (no
+ * SerializeError), re-encodes to itself and is the local state of its tick as the wire carries it; it delivers
+ * exactly the events of the ticks since the previous snapshot (so the stream is the local one minus
+ * `commandRejected`, once, in order); `immediate` is set exactly on the ticks carrying an
+ * IMMEDIATE_SNAPSHOT_EVENTS event, each of which gets its own snapshot; a `turnSkipped` arrives in the snapshot
+ * of the `turnStart` it explains, before it. Returns the snapshots and the shipped events.
+ */
+function expectServerEqualsLocal(room: Online, log: readonly ReplayEntry[], untilTick: number): { snaps: Snapshot[]; events: SimEvent[] } {
+  const { states, events } = localTrace(room.config, log, untilTick);
+  const shipped = JSON.parse(JSON.stringify(events.filter((e) => e.type !== 'commandRejected'))) as SimEvent[];
+  const snaps = room.host.of('snapshot');
+  expect(room.guest.of('snapshot')).toEqual(snaps);
+  expect([...room.host.errors(), ...room.guest.errors()]).toEqual([]);
+  const misses: string[] = [];
+  let prev = -1;
+  for (const s of snaps) {
+    const local = states[s.tick];
+    const wire = JSON.stringify(s.snap);
+    if (local === undefined || wire !== JSON.stringify(encodeSnapshot(local))) misses.push(`${s.tick}: snap differs from the local state`);
+    try {
+      if (JSON.stringify(encodeSnapshot(decodeSnapshot(s.snap, room.config))) !== wire) misses.push(`${s.tick}: decode is lossy`);
+    } catch (err) {
+      misses.push(`${s.tick}: ${String(err)}`);
+    }
+    const window = shipped.filter((e) => e.tick > prev && e.tick <= s.tick);
+    if (JSON.stringify(s.events) !== JSON.stringify(window)) misses.push(`${s.tick}: events differ from ticks ${prev + 1}..${s.tick}`);
+    if (s.immediate !== window.some((e) => e.tick === s.tick && e.tick > 0 && isImmediate(e))) misses.push(`${s.tick}: immediate ${s.immediate}`);
+    s.events.forEach((skip, i) => {
+      if (skip.type !== 'turnSkipped') return;
+      const { tick, nextPlayer } = skip;
+      if (s.events.findIndex((e) => e.type === 'turnStart' && e.tick === tick && e.playerId === nextPlayer) < i) misses.push(`${s.tick}: turnSkipped without its turnStart`);
+    });
+    prev = s.tick;
+  }
+  expect(misses).toEqual([]);
+  const immediateTicks = [...new Set(shipped.filter((e) => e.tick > 0 && isImmediate(e)).map((e) => e.tick))];
+  expect(snaps.filter((s) => s.immediate).map((s) => s.tick)).toEqual(immediateTicks);
+  return { snaps, events: shipped };
+}
+
+describe('RoomManager == local play on every hole (golden lines through two seats)', () => {
+  for (const line of GOLDEN_LINES) {
+    it(`hole ${line.order} (${line.name}): every snapshot decodes and equals runReplay of the same log; the last is the golden`, () => {
+      const h = new Harness();
+      const room = playOnline(h, [line.levelId], line.log, line.finalTick);
+      const { snaps } = expectServerEqualsLocal(room, line.log, line.finalTick);
+      const last = snaps[snaps.length - 1];
+      expect(last?.tick).toBe(line.finalTick);
+      // Recorded locally with seed 1: online play is the same sim, only the rng field carries the room's seed.
+      const golden = JSON.parse(line.snapshot) as unknown[];
+      expect(last?.snap).toEqual([...golden.slice(0, RNG_INDEX), room.config.seed, ...golden.slice(RNG_INDEX + 1)]);
+      expect(h.logs).toEqual([]);
+    });
+  }
+
+  it('hole 12, a real BACK +1 line: trapReturn alone forces a same-tick immediate snapshot; the skip arrives with its turnStart', () => {
+    // Red rests LOADED in the cold cannon (the golden opening); Blue comes to rest in the DOOR seat trap, so both
+    // wait and Blue goes BACK +1. Leaving the seat releases DOOR, so by R5 that tick has no turnStart: trapReturn is
+    // its only IMMEDIATE_SNAPSHOT_EVENTS event. The next settled tick skips Red (loaded) and hands Blue the turn.
+    const log: ReplayEntry[] = [
+      { tick: 0, cmd: { type: 'continue', playerId: 0 } },
+      { tick: 1, cmd: { type: 'setAim', playerId: 0, angle: -1.8587, power: 60.6 } },
+      { tick: 1, cmd: { type: 'shoot', playerId: 0 } },
+      { tick: 194, cmd: { type: 'setAim', playerId: 1, angle: -0.1262, power: 60.6 } },
+      { tick: 194, cmd: { type: 'shoot', playerId: 1 } },
+    ];
+    const h = new Harness();
+    const room = playOnline(h, ['w3-12-grand-machine'], log, 420);
+    const { snaps, events } = expectServerEqualsLocal(room, log, 420);
+    const reset = events.find((e) => e.type === 'trapReturn');
+    expect(reset).toMatchObject({ playerId: 1, strokes: 2, toTee: false });
+    const tick = reset?.tick ?? -1;
+    const at = (t: number): Snapshot | undefined => snaps.find((s) => s.tick === t);
+    expect(at(tick)?.immediate).toBe(true);
+    expect(at(tick)?.events.filter((e) => e.tick === tick).map((e) => e.type)).toEqual(['trapReturn', 'switchOff', 'bridgeToggle']);
+    expect(at(tick + 1)?.events.filter((e) => e.tick === tick + 1)).toMatchObject([
+      { type: 'turnSkipped', playerId: 0, reason: 'loaded', rectId: 'cannon', nextPlayer: 1 },
+      { type: 'turnStart', playerId: 1, sameAsBefore: true },
+    ]);
+  });
+});
 
 describe('RoomManager presence, grace and limits', () => {
   it('guest close => host gets peerLeft{graceMs:60000} + paused; the sim stops ticking', () => {

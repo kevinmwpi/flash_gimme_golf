@@ -1,7 +1,8 @@
 // OWNER: input-loop
 /**
  * Input composition (ARCH.md §1.11, §7; UX.md §5). Adapters produce ABSOLUTE aims; the adapter that
- * produced input most recently sets `device` (drives hint copy). Gameplay commands are stamped
+ * produced input most recently sets `device` (drives hint copy), after the page's own keys and presses
+ * (`watchPageDevice`: title, lobby and cards, where no adapter listens). Gameplay commands are stamped
  * `playerId = state.activePlayer` only when a local seat controls that slot AND the sim would accept
  * them (`allowedCommands`). `setAim` is emitted only when the quantised aim changed since the last
  * emitted one, at most once per frame, and always BEFORE a `shoot` in the same frame. A `shoot`
@@ -119,6 +120,58 @@ function detectInitialDevice(): InputDevice {
   return fine ? 'pointer' : 'touch';
 }
 
+/**
+ * The device the player used last anywhere on the page, kept across screens. App watches the page from boot
+ * (`watchPageDevice`), so keys on the title, the lobby and the cards count, Space/Enter on a focused button
+ * included (the stage's keyboard adapter leaves those to the button). A new input system starts from it
+ * instead of the guess above and adopts every later observation on its next poll, so a player who reached
+ * the stage with the keyboard is coached with keys from the first intro card. Null until the page saw input.
+ */
+let pageDevice: InputDevice | null = null;
+/** Counts page observations, so a running input system also adopts a repeat of the device it last saw. */
+let pageSeen = 0;
+const pageListeners = new Set<() => void>();
+const TEXT_FIELDS: ReadonlySet<string> = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+function notePageDevice(device: InputDevice): void {
+  pageSeen += 1;
+  if (device === pageDevice) return;
+  pageDevice = device;
+  for (const listener of pageListeners) listener();
+}
+
+/** The device the page saw last, else the UX §1.6 guess; what a new input system starts from. */
+export function lastInputDevice(): InputDevice {
+  return pageDevice ?? detectInitialDevice();
+}
+
+/** Called when `lastInputDevice()` changes (a `useSyncExternalStore` subscription). */
+export function subscribeInputDevice(listener: () => void): () => void {
+  pageListeners.add(listener);
+  return () => pageListeners.delete(listener);
+}
+
+/**
+ * Records every key and press on the page, in the capture phase so no handler that stops propagation hides
+ * one. Keys typed into a text field are no evidence of a keyboard (a phone's on-screen keyboard types the
+ * room code), nor are Ctrl/Meta/Alt shortcuts. Returns the disposer.
+ */
+export function watchPageDevice(target: Window): () => void {
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = e.target;
+    if (el instanceof HTMLElement && (TEXT_FIELDS.has(el.tagName) || el.isContentEditable)) return;
+    notePageDevice('keyboard');
+  };
+  const onPointer = (e: PointerEvent): void => notePageDevice(e.pointerType === 'touch' ? 'touch' : 'pointer');
+  target.addEventListener('keydown', onKey, true);
+  target.addEventListener('pointerdown', onPointer, true);
+  return () => {
+    target.removeEventListener('keydown', onKey, true);
+    target.removeEventListener('pointerdown', onPointer, true);
+  };
+}
+
 /** The locally owned aim of the active slot. `emitted` is the last value handed to the sim/server. */
 type LocalAim = { slot: PlayerId; aim: Aim; emitted: Aim };
 
@@ -131,7 +184,8 @@ export function createInputSystem(): InputSystem {
     { adapter: createPointer(), device: 'pointer' },
   ];
   let enabled = true;
-  let device: InputDevice = detectInitialDevice();
+  let device: InputDevice = lastInputDevice();
+  let pageSeenHere = pageSeen;
   let local: LocalAim | null = null;
   let prevPhase: SimPhase | null = null;
   let prevTurnDelay = 0;
@@ -176,6 +230,11 @@ export function createInputSystem(): InputSystem {
       let drag: PointerDrag | null = null;
       let miss: MissKind | null = null;
       const uiActions: UiAction[] = [];
+      // The page's input since the last poll first (a button pressed with Space), then this frame's adapters.
+      if (pageSeen !== pageSeenHere) {
+        pageSeenHere = pageSeen;
+        device = pageDevice ?? device;
+      }
       for (const { adapter, device: fallback } of adapters) {
         const r = adapter.poll(ctx, currentAim);
         if (!r.active) continue;

@@ -8,9 +8,10 @@
  * plate of a seat); a cannon's comes from its breech alone (the cradle spans it). Device STATE is never derived
  * here: callers pass what sim/devices.ts says (armed, lit, caught).
  */
+import { isCannonLit } from '../../sim/devices';
 import { predictLaunch } from '../../sim/physics';
-import { switchMaskOf } from '../../sim/terrain';
-import type { CannonRect, Level, PlayerId, PressureSwitch, TrapRect, Vec } from '../../sim/types';
+import { rectSwitchIds, switchMaskOf } from '../../sim/terrain';
+import type { CannonRect, Level, LevelRect, PlayerId, PressureSwitch, TrapRect, Vec } from '../../sim/types';
 import { BALL_RADIUS } from '../../sim/types';
 import { lamp, switchGeometry } from './parts';
 import { circle, clamp01, easeOut, fillStroke, INK, OUTLINE_DOT, OUTLINE_SMALL, OUTLINE_WIDTH, PALETTE, roundRect } from './palette';
@@ -227,6 +228,29 @@ export function trapGeometry(level: Level, rect: TrapRect): TrapGeometry {
   return cached(trapCache, level, rect.id, () => buildTrap(rect, (x) => fairwayYAt(level, x), seatOf(level, rect)));
 }
 
+/** Sand within this many px of a cannon breech is its funnel. */
+const FUNNEL_TOUCH_PX = 2;
+
+function touchesBreech(sand: LevelRect, cannon: CannonRect): boolean {
+  return sand.kind === 'sand' && sand.x <= cannon.x + cannon.w + FUNNEL_TOUCH_PX && sand.x + sand.w >= cannon.x - FUNNEL_TOUCH_PX;
+}
+
+/** Funnel sand either side of a cannon breech is part of the device (D10.8): it carries no SAND label. */
+export function isFunnelSand(level: Level, r: LevelRect): boolean {
+  return level.rects.some((c) => c.kind === 'cannon' && touchesBreech(r, c));
+}
+
+/** The world x-span a cannon occupies on the ground: its cradle and its funnel sand. */
+export function cannonSpan(level: Level, rect: CannonRect): { x1: number; x2: number } {
+  let { x1, x2 } = cannonGeometry(rect).cradleBase;
+  for (const r of level.rects) {
+    if (!touchesBreech(r, rect)) continue;
+    x1 = Math.min(x1, r.x);
+    x2 = Math.max(x2, r.x + r.w);
+  }
+  return { x1, x2 };
+}
+
 /** A cannon's hardware stands on its breech (the cradle spans it), so it needs nothing but the rect. */
 export function cannonGeometry(rect: CannonRect): CannonGeometry {
   let g = cannons.get(rect);
@@ -439,13 +463,29 @@ export function drawCannonBarrel(ctx: CanvasRenderingContext2D, g: CannonGeometr
 /** A cannon's flight as the sim will fly it: the ball centre every tick, and whether it comes to rest. */
 export type LaunchArc = { readonly points: readonly Vec[]; readonly rests: boolean };
 
+type Switches = Readonly<Record<string, boolean>>;
+
 const arcCache = new WeakMap<Level, Map<string, LaunchArc>>();
 
-/** The real flight from the breech (physics.predictLaunch with the switches fixed), memoised by level, cannon, switch mask and ball. */
-export function launchArc(level: Level, rect: CannonRect, switches: Readonly<Record<string, boolean>>, playerId: PlayerId): LaunchArc {
-  const key = `${rect.id}|${switchMaskOf(level, switches)}|${playerId}`;
+/**
+ * The switches a cannon fires under: the current ones while it is LIT; while it is COLD, the current ones with
+ * its first FIRE plate held (the partner-reachable plate the LOADED chip names, D10.10), because a loaded ball
+ * fires the tick that plate is held. On Sky Bridge that same plate raises the bridge the flight crosses.
+ */
+export function firingSwitches(rect: CannonRect, switches: Switches): Switches {
+  const first = rectSwitchIds(rect)[0];
+  return isCannonLit(rect, switches) || first === undefined ? switches : { ...switches, [first]: true };
+}
+
+/**
+ * The real flight from the breech as the cannon will fire it (physics.predictLaunch with its firing switches
+ * fixed), memoised by level, cannon, firing switch mask and ball.
+ */
+export function launchArc(level: Level, rect: CannonRect, switches: Switches, playerId: PlayerId): LaunchArc {
+  const firing = firingSwitches(rect, switches);
+  const key = `${rect.id}|${switchMaskOf(level, firing)}|${playerId}`;
   return cached(arcCache, level, key, () => {
-    const flight = predictLaunch(level, switches, { x: rect.x + rect.w / 2, y: rect.y - BALL_RADIUS }, rect.launch, playerId);
+    const flight = predictLaunch(level, firing, { x: rect.x + rect.w / 2, y: rect.y - BALL_RADIUS }, rect.launch, playerId);
     return { points: flight.points, rests: flight.outcome === 'rest' };
   });
 }

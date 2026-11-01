@@ -4,16 +4,34 @@
  * its course par, five-column scorecard (Hole · Par · Team · ± · Medal) with a TOTAL row, per-player totals
  * in grey, PERFECT ROUND ribbon when every hole is gold, DOM confetti (none under reduced motion), then
  * Continue to World N+1 (while a next world exists), Play again (same world), Level select, Title. Shown
- * while phase === 'campaignResults'. Online: the host sends playAgain (with the next world's first hole
- * to continue); the guest waits.
+ * while phase === 'campaignResults', with the numbers `campaignTally` reads from that SimState. Online: the
+ * host sends playAgain (with the next world's first hole to continue); the guest waits.
  */
 import React from 'react';
-import type { Level, LevelResult, Medal, PlayerId, SimMode, WorldId } from '../sim/types';
+import { coursePar, levelById } from '../sim/levels/index';
+import { medalFor, type Level, type LevelResult, type Medal, type PlayerId, type SimMode, type SimState, type WorldId } from '../sim/types';
 import { COPY, golfDelta, otherPlayer } from './copy';
 import { MedalDisc } from './LevelResults';
 import { Modal } from './Pause';
 
 export type CampaignRow = { level: Level; result: LevelResult };
+
+/** What the card shows: a row per hole of the world, the world's course par, the team's total and its medal. */
+export type CampaignTally = { rows: readonly CampaignRow[]; coursePar: number; total: number; medal: Medal };
+
+/**
+ * The card's numbers from the finished round's SimState: its `campaign` (every hole's result; a decoded
+ * snapshot carries each hole's strokes and the registry supplies par and medal) and its course, which are the
+ * numbers the sim's `campaignComplete` event reports. Reading them from state means a dropped event (online,
+ * a hidden tab) or a rejoin still shows the card (D10.2: it is the only way on to the next world). Null until
+ * the round is over.
+ */
+export function campaignTally(state: SimState | null): CampaignTally | null {
+  if (state === null || state.phase !== 'campaignResults') return null;
+  const par = coursePar(state.config.levelIds);
+  const total = state.campaign.reduce((sum, r) => sum + r.strokes[0] + r.strokes[1], 0);
+  return { rows: state.campaign.map((result) => ({ level: levelById(result.levelId), result })), coursePar: par, total, medal: medalFor(total, par) };
+}
 
 export type CampaignResultsProps = {
   /** the world this session played (one world per session, D10.2) */
@@ -140,7 +158,11 @@ export default function CampaignResults(props: CampaignResultsProps): React.JSX.
         <div className="button-row card-actions">
           {online && !isHost ? (
             waitingForHost ? (
-              <span className="body muted-text">{COPY.toast.waitingNewRound(host)}</span>
+              // Focus parks on the caption, not on Level select: this card is the hand-off where the host continues to
+              // the next world (D10.2), and a guest pressing Space/Enter through the cards must not leave the room.
+              <span className="body muted-text focus-park" tabIndex={-1} data-autofocus>
+                {COPY.toast.waitingNewRound(host)}
+              </span>
             ) : null
           ) : nextWorld !== null ? (
             <>

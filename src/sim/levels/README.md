@@ -150,9 +150,15 @@ and `bridge` in `mechanicsPresent`) and the four levels introduce four distinct 
 
 ### Worlds 2-3: deviations from Appendix A (`design/proposals/worlds-2-3/LEVELS.md`)
 
-The geometry is Appendix A verbatim except where an existing level rule forces a change (D10.12):
+The geometry is Appendix A verbatim except where an existing level rule forces a minimal change or verification
+found a softlock (D10.12). Three holes change:
 
-- **L10 Sky Bridge, the only geometry change.** Appendix A put the back bunker at 1930–1960 (30 px, under the
+- **L9 Bait (a softlock).** The BAIT plate is 490–610 (Appendix A: 490–600) and covers the whole restable floor
+  of the jaws (480–610 × 590–640). With the Appendix plate a ball resting at 600–610 was caught WITHOUT holding
+  the door, so its partner could never get through, and the scoped reset never runs while the partner can still
+  shoot. The solver's `traps` pass found it (`traps-rescuable`); D10.12 now asks every plate inside a trap to
+  cover that trap's restable floor. The walkthrough below has the details.
+- **L10 Sky Bridge (a level rule).** Appendix A put the back bunker at 1930–1960 (30 px, under the
   40 px minimum) and plate B's right edge (1750) exactly `GIMME_RADIUS + NEAR_CUP_RADIUS` = 130 px from the cup
   at 1880, where the rule needs more. A 40 px bunker reaching the edge must start at 1920 and the cup must stay
   more than `GIMME_RADIUS` in front of it, so the bunker is 1920–1960, the cup moves 5 px along the same green
@@ -162,6 +168,18 @@ The geometry is Appendix A verbatim except where an existing level rule forces a
   bowl the cannon → B flight rests at x 1672.45–1719.68 for every breech x and every ±3 % launch (1,746 of
   1,746 fired on entry or LOADED, all on B), 20 px short of the new edge; on the shipped bowl every case still
   rests on B ("Launcher re-verification" below).
+- **L11 Crossfire (a softlock).** The cannon pit's right side runs straight from the breech (840, 640) up to the
+  chasm lip at (900, 610), sanded all the way (pit-r 841–899). Appendix A's side stopped at (880, 620), followed by
+  a 20 px flat to the lip, with pit-r 841–879. Blue gets right of the red field only through the door, and only
+  FAR holds the door open. A hard roll through the open door could skip the lit pit and stop on that flat. If red
+  then left FAR, blue was boxed in: the door was shut, the cannon cold, FIRE behind the blue field and FAR across
+  the chasm, and the scoped reset never ends that. Now nothing between the door and the chasm holds a resting
+  ball except the breech, where a lit cannon fires it and a cold one LOADS it (`levels.test.ts` drops a ball at
+  every x there). Red cannot come back to rest free on the near side either: 0 of 64,792 leftward shots from
+  eight spots on the far plateau (1° × 1 power) do, and 1,886 end LOADED. So when the door shuts on blue in the
+  doorway and pushes it into the cold pit, red is still on the plateau and fires blue by holding FAR again or by
+  sinking. The launcher rows and the golden line are unchanged, and every solver criterion on the hole passes
+  (`traps-rescuable` 18 / 18).
 - **Ids.** Rect ids and switch ids are disjoint (D10.8): L8 `window` → `window-gate` and `door` → `door-gate`;
   L9, L11 and L12 `door` → `door-gate` (L5 and L6 already used `door-gate`).
 - **Vocabulary** (D2). The Appendix's `wall` is a permanent blocker; its `devices` are `trap` / `cannon` props
@@ -173,7 +191,9 @@ The geometry is Appendix A verbatim except where an existing level rule forces a
   (World 1's `switchId` is equivalent).
 - **Copy.** Hints are the design's "In-game hint" verbatim and `aha` its "Aha"; `watchOut` is player-facing
   "Stuck?" copy written from "Watch for in playtests" and the hole's recovery rules, without solver numbers.
-- **Pars** are the design's proposals (7 / 7 / 8 / 8 and 9 / 7 / 8 / 8) until the solver calibrates them.
+- **Pars** started from the design's proposals (7 / 7 / 8 / 8 and 9 / 7 / 8 / 8); the solver's calibration (D10.13)
+  lowered Booby Trap, Bait and Grand Machine by one each, so they ship at 7 / 6 / 8 / 8 and 8 / 7 / 8 / 7 ("Pars" at
+  the end).
 
 ## Walkthroughs
 
@@ -297,7 +317,8 @@ one cause and effect; trusting the wait in a cold cannon; a lone DECK ball must 
 
 FIRE ledge 0–200 at y 520 (FIRE 60–180 at y 530) behind a full-height BLUE field 230–270 (200–640). Floor 620
 (tees 420 / 470) to 740; RED field 700–740 (200–520) over the DOOR 520–640 (`far`). Cannon pit: sand 741–779 /
-841–879 around the breech 780–840 at y 640 (launch (440, −730), lit by `fire` OR `far`). Chasm 900–1460. Far
+841–899 around the breech 780–840 at y 640 (launch (440, −730), lit by `fire` OR `far`); its right side runs on
+to the chasm lip at (900, 610), so the breech is the only resting spot right of the door. Chasm 900–1460. Far
 plateau at y 400: FAR 1500–1700 in the sand bowl 1480–1720; cup 1860, back bunker 1910–1960. Line: red moves up
 to x 600–660 → blue lobs LEFT through its field onto FIRE → red lobs through the red field into the pit and is
 fired onto FAR (or waits LOADED) → FAR opens the door and keeps the cannon lit; red putts → blue drops off the
@@ -355,55 +376,118 @@ cold, 0 of 1,620 shots from the approach (x 650–830, both colours) rest beyond
 door lets 0 of 60 low rolls (2–15°, power 30–100) from the seat channel through; and every ball dropped into
 L6's trap dish (x 361–459) comes to rest inside the armed jaws (99 of 99).
 
-The slow solver suite (`npm run test:levels`) still verifies World 1 only. The solver's scripted lines for
-holes 5-12, the `walls` / `gaps` opt-outs and the `launchers`, `loops` and `traps` passes (D10.13) bring worlds
-2-3 into it and calibrate their pars.
+The solver's `launchers` pass (below) repeats these rides for both colours on every run, with the plates each
+intended line holds at that moment.
 
 ## Verification recipe (`scripts/solver.ts`, built on the real sim)
 
 ```
-npm run solve -- all --json <out.json>                                   # every pass: beam 6 + wide beam 60, ~9 min
+npm run solve -- all --json <out.json>                                   # every pass on all 12 holes (~30 min)
+npm run solve -- w3                                                      # one world: w1, w2 or w3
 npm run solve -- w1-03-colour-keys --pass coop,wide --wideBeam 120       # a deeper co-op search
 npm run solve -- w1-04-plate-and-bridge --pass gaps,stall,deck
-npm run test:levels                                                      # levels-solver.test.ts (slow, ~12 min)
+npm run solve -- w3-12-grand-machine --pass launchers,loops,traps        # the device passes (D10.13)
+npm run solve -- w3-09-bait --write-goldens                              # re-record its golden line (runs no pass)
+npm run test:levels                                                      # the slow suite (three shards in parallel)
 ```
 
-The solver drives full two-ball games with `createSim` / `stepSim` (turn order, held plates, `cupHoldsSwitch`,
-partners falling off a vanished bridge), proves every solved line with `runReplay`, sweeps single shots with
-`predictShot` (the partner passed as `otherBalls`) and asks `evaluateSwitches` who presses what. Shots are
-designer units (degrees above the horizontal, power 10–100) quantised through `aimOf` exactly like the client.
-Passes and pass criteria (exit code 1 when any fails):
+`scripts/solver.ts` is the CLI and re-exports the modules of `scripts/solver/`: `game.ts` (shots, grids and the game
+driver), `search.ts` (the co-op and solo searches), `sweeps.ts` (aces, walls, gaps and `OPT_OUTS`), `lines.ts` (the
+intended lines and the goldens), `plates.ts` (stall taps and the deck), `devices.ts` (launchers, loops and traps) and
+`verify.ts` (the criteria and `verifyLevel`). The solver drives full two-ball games with `createSim` / `stepSim` (turn
+order, held plates, `cupHoldsSwitch`, partners falling off a vanished bridge, the WAITING rule, partner-fired cannons,
+scoped resets and the flight watchdog), proves every solved line with `runReplay`, sweeps single shots with
+`predictShot` (the partner passed as `otherBalls`) and asks `evaluateSwitches` who presses what. Shots are designer
+units (degrees above the horizontal: 0 right, 90 up, 180 left; power 10–100) quantised through `aimOf` exactly like
+the client. Its tables (`SCRIPTED_LINES`, `PAR_SLACK_BY_ID`, `LAUNCHER_CASES`, `OPT_OUTS`) are keyed by level id
+(D10.1). Defaults: the 16 × 8 cell grid (`--angles`, `--powers`), beam 6 (`--beam`), wide beam 60 (`--wideBeam`),
+depth = the highest selected par + 3 (`--depth`), 900 s per search (`--maxSeconds`), 400 traps games (`--games`).
+Passes and pass criteria (exit code 1 when any fails, 2 on bad arguments; `walls`, `gaps`, `stall`, `deck` and the
+device passes report only on holes that have their subject):
 
-- `coop` — bucketed beam search over `stepSim` (16 angles × 8 powers, beam 6 per bucket, depth ≥ 8; buckets =
-  sunk flags × held switches × active player): both balls sunk within par + 3; the solved line's command log
+- `coop` — bucketed beam search over `stepSim` (16 angles × 8 powers, beam 6 per bucket, depth ≥ par + 3;
+  buckets = sunk flags × caught / loaded / free flags × held switches × active player; a shot the flight watchdog
+  has to end is never built on): both balls sunk within par + 3 (`coop-solvable`); the solved line's command log
   re-run through `runReplay` reproduces the state exactly (`replay-deterministic`).
-- `wide` — the same search at beam 60 (`--wideBeam`); its minimum calibrates par: `par − 2 ≤ minimum ≤ par`
-  (`par-calibrated`, the LEVELS.md rule "par = scripted line, at most solver minimum + 2"; `PAR_SLACK_BY_ORDER`
-  in the solver carries the one documented exception, hole 3 at slack 3, shared with the test).
-- `solo` — `predictShot` chains (depth 10, beam 40) with the partner parked on its tee: holes 2–4 unsolved
-  for both balls and 0 first-shot sinks; hole 1 solvable (reference).
-- `aces` — 0 one-shot sinks or gimmes from either tee: the full fine sweep (1–89° step 1 × power 95/97/100 =
-  267 shots) plus the 162-shot human grid (5–90° step 5 × power 20–100 step 10).
-- `walls` — with every switch off, the blocked ball never passes a wall column (fine + human grids from the
-  tee and from 600/400/250/120/60 px short of the wall); the report prints the highest ball-centre y reached.
-- `gaps` — with no plate held, 0 crossings of the chasm from the tee and from 300/200/100/40 px short of the
-  lip; a lone ball leaving plate A drops the bridge the tick it moves (a plate is held only by a resting
-  ball) and never rests beyond the far lip.
-- `scripted` — the LEVELS.md intended lines (plus the L1 sand line and the L4 deck line) replay beat by beat:
-  each beat takes the FIRST grid shot satisfying its predicate (an upper bound on the line) and both balls
-  must be sunk within par + 2.
-- `stall` — holder taps (90/10, 90/15, 80/20, 100/15) re-hold the plate; a partner parked on its tee, on
-  another plate or on the bridge deck never falls.
-- `deck` — balls resting 1–24 px outside either lip never press DECK; every on-deck rest does; a lone deck
-  ball (`{deck}` held, partner on its tee) shot from the near end, the centre and 240 px short of the far lip
-  drops into the chasm on every roll of ≤ 7° at power 40–100 (`deck-lone-roll-falls`) and at least one 45°
-  lob at power 80–100 reaches the far side (`deck-lone-lob-crosses`): the rule the L4 watchOut teaches.
+- `wide` — the same search at beam 60 (`--wideBeam`, at least 60) also holes both balls within par + 3
+  (`coop-wide-solvable`). The better of the two runs is the solver minimum and calibrates par (`par-calibrated`):
+  `par − 2 ≤ minimum ≤ par`, the LEVELS.md rule "par = scripted line, at most solver minimum + 2" (D9, D10.13).
+  `PAR_SLACK_BY_ID` carries the one documented exception, `w1-03-colour-keys` at slack 3 ("Pars" below), shared
+  with the suite.
+- `solo` — `predictShot` chains (depth ≥ 10, beam 40) with the partner parked on its tee; a lone ball that ends
+  caught or loaded is a dead end (the WAITING rule would hand every turn to the parked partner). On every co-op
+  hole (a plate, a colour field, a trap or a cannon: holes 2–12) neither ball holes out and 0 first shots sink
+  (`solo-not-bypassable`, `solo-first-shot-zero`); hole 1 is solvable alone by design (`solo-reference`).
+- `aces` — 0 one-shot sinks or gimmes from either tee, partner parked, every switch off (`no-aces`): the fine
+  sweep (1–89° step 1 × power 95/97/100 = 267 shots) and the human grid (5–90° step 5 × power 20–100 step 10 =
+  162), each rightward and mirrored leftward (`ACE_GRIDS`), 858 shots per tee. Until D10.13 the sweep was
+  rightward only (429 per tee, the count in the World 1 walkthrough and final table).
+- `walls` — with every switch off, a ball a wall column blocks never gets past it (`wall-pass-zero`): it shoots from
+  its tee's side (rightward from the left, mirrored from the right), from the tees on that side and from
+  600/400/250/120/60 px short of the column wherever a ball can rest with the turn (not inside a door, on a spring,
+  caught or loaded), on the fine and the human grid; per column the highest ball centre stays more than a ball
+  radius below the wall top (`wall-top-clear`: y > 188 under a top at 200).
+- `gaps` — with no plate held (bridges absent, cannons cold), 0 shots of either ball from its tee or from
+  300/200/100/40 px short of the near lip end past the far lip (`gap-crossing-zero`); over a bridged chasm a lone
+  ball leaving a near bridge plate (partner on its tee) drops the bridge the tick it moves (a plate is held only by
+  a resting ball) and never rests beyond the far lip (`lone-plate-never-crosses`).
+- `OPT_OUTS` — the only exceptions to `walls` and `gaps`, one row each (D10.13): Booby Trap's `backboard` column is
+  not swept (a backstop behind the PERCH bowl, not a gate); Crossfire's rows from the FIRE ledge (x 0–200) are
+  exempt from `wall-top-clear` (their passes still count); the Load & Fire and Crossfire chasms get no lone-plate
+  check (a cannon crosses them, not a bridge). Each row is a criterion of its own (`opt-out: …`) that fails once it
+  no longer describes its hole (the column became a gate, no ledge row remains or one passes, the chasm gained a
+  bridge or no lit cannon lands beyond it), and the suite asserts that every skip comes from this table.
+- `scripted` — every intended line in `SCRIPTED_LINES` (the "How it plays" lines of both LEVELS.md files plus the
+  variants: the L1 sand line, the L4 deck line, the L6 rescue line, the L7 load line, the L10 spring route and the
+  L12 climb) replays beat by beat: each beat takes the FIRST grid shot satisfying its predicate (an upper bound on
+  the line), the sim's turn order (the WAITING rule included) must match the line's, and both balls must be sunk
+  within par + 2. Exactly one line per hole is `golden`.
+- `stall` — holder taps (90/10, 90/15, 80/20, 100/15) from every plate but the seats (L9 BAIT, L12 DOOR: a caught
+  holder never shoots) re-hold the plate; a partner parked on its tee, on another plate or on the bridge deck
+  never falls (`stall-taps-safe`).
+- `deck` — balls resting 1–24 px outside either lip never press DECK; every on-deck rest does (`deck-lip: …`); a
+  lone deck ball (`{deck}` held, partner on its tee) shot from the near end, the centre and 240 px short of the
+  far lip drops into the chasm on every roll of ≤ 7° at power 40–100 (`deck-lone-roll-falls`) and at least one
+  45° lob at power 80–100 reaches the far side (`deck-lone-lob-crosses`): the rule the L4 and L10 watchOut copy
+  teaches.
+- `launchers` — every spring and cannon ride of the intended lines (`LAUNCHER_CASES`, both colours where both ride,
+  with the plates the line holds at that moment fixed): a ball dropped 1 px above every pad or breech x in 0.5 px
+  steps, for 9 launch perturbations (each component at 97 / 100 / 103 %), rests holding its target plate after
+  exactly one launch, and a cannon is also fired LOADED (resting on its breech as it lights). Every spring and
+  cannon has a case and every case names the hole's own rects and plates (`launchers-cover-every-launcher`), every
+  drop lands on target (`launchers-land-on-target`), 0 re-fires and 0 drops that never launch
+  (`launchers-fire-once`).
+- `loops` — on holes with a spring, trap or cannon: single-ball flights with the switches fixed (all plates up,
+  then all held) from every restable spot every 20 px plus each plate, trap and breech centre, both colours, 94
+  shots each (5–175° step 10 × power 20–100 step 20, plus the stall taps): none is still flying when the
+  1,800-tick flight watchdog (D10.6) would end it (`loops-zero`).
+- `traps` — on holes with a trap or cannon: 400 seeded games from the tees (`--games`; angle 2–178° × power
+  10–100 from mulberry32, up to 30 shots each) plus every one-shot grid deviation from every turn of every intended
+  line, on the full sim. The send-to-tee guard never runs (`traps-tee-guard-never-runs`); every scoped reset
+  (BACK +1) lands where its ball last stood free, at most two per shot (`traps-reset-to-safe-spot`); a safe spot is
+  only ever where its ball stood free (`traps-safe-spots-free`); every stroke is a hit, a gimme, a fall or a
+  BACK +1 (`traps-strokes-accounted`); no flight reaches the watchdog and no hand-off stalls (`traps-no-watchdog`);
+  every trap and cannon holds a waiting ball at some turn (`traps-every-device-reached`); and from every distinct
+  caught or loaded state (deduped by device, the free ball's 32 px cell and the held plates) a beam search of at
+  most 4 shots gets one of the device's release or FIRE plates held, by a resting ball or from the cup
+  (`traps-rescuable`: the check that found Bait's 600–610 strip).
 
-`src/sim/__tests__/levels-solver.test.ts` runs `verifyLevel` once per level and asserts each criterion in its
-own `it` (`npm run test:levels`); `levels.test.ts` (fast) replays each hole's scripted line from the frozen log
-in `levels-golden.ts` through `runReplay` and compares the final snapshot bit for bit.
+`npm run solve -- <levelId|w1|w2|w3|all> --write-goldens` re-records the `golden` line of every selected hole
+(replayed on the 16 × 8 grid) into the generated block of `src/sim/__tests__/levels-golden.ts`, keeps the other
+holes' entries and runs no pass. Re-record only after a change that is meant to move a golden, and review the diff.
 
-### Final table (re-verification against the SIM delivery of 2026-10-02, `npm run solve -- all`)
+The slow suite is `src/sim/__tests__/levels-solver-suite.ts`: `verifyLevel` once per hole with every pass (16 × 8
+grid, beam 6, wide beam 60, depth max(8, par + 3), 600 s per search, 400 traps games) and each criterion asserted
+in its own `it`; it also re-runs every scripted line through `runReplay`, re-records the golden line and compares
+it with `levels-golden.ts`, and checks that every key of the solver's tables names a registered level. The shards
+`levels-solver-w{1,2,3}.test.ts` call it for one world each. `npm run test:levels` runs all three in parallel
+vitest workers (World 3, the heaviest, took about 14 min alone and all three about 19 min on a 4-vCPU machine);
+`npm test` excludes them; `.github/workflows/levels.yml` runs one CI job per world (45 min limit each) when
+`src/sim/**`, the solver or the build configuration changes (the workflow lists the paths), and on demand.
+`levels.test.ts` (fast) replays each hole's golden from `levels-golden.ts` through `runReplay` and compares the
+final snapshot bit for bit.
+
+### Final table (World 1: re-verification against the SIM delivery of 2026-10-02, `npm run solve -- all`)
 
 | hole | par | co-op beam 6 | wide beam 60 | solo P1 / P2 (reachableX) | aces | walls | gaps | scripted | stall | deck |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -456,7 +540,7 @@ These minimums are search results, not proofs of a floor:
 | 6 | 4 (4 / 4) | red lobs LEFT onto the PERCH (118°/83); blue holes out from its tee through the open door (29°/94); red holes out from the perch (29°/94; the cup holds FAR) | 5 · rescue 7 | 7 | **6** (7 > 4 + 2) |
 | 7 | 6 (6 / 6) | red lobs to 804; blue rests on FIRE; red BOOM onto the far plate; blue lobs into the lit funnel (BOOM); both putt | 8 · load line 8 | 8 | **8** (6 ∈ 6..8) |
 | 8 | 6 (6 / 6) | blue's spring bounce onto WINDOW; red's window lob through the red wall onto DOOR; blue moves up; both sink | 7 | 8 | **8** (6 ∈ 6..8) |
-| 9 | 6 (7 / 6) | red rolls to 611 (just outside the jaws); blue rolls onto BAIT, CAUGHT; red rolls from 611 through the door straight into the raised spring onto TOP; blue climbs from the channel; both sink from TOP | 7 | 9 | **8** (9 > 6 + 2) |
+| 9 | 6 (6 / 6) | red rolls to 611 (just outside the jaws); blue rolls onto BAIT, CAUGHT; red rolls from 611 through the door straight into the raised spring onto TOP; blue climbs from the channel; both sink from TOP | 7 | 9 | **8** (9 > 6 + 2) |
 | 10 | 5 (5 / 5) | blue rides the spring onto A; red lobs LEFT into the lit cannon onto B (129°/49); blue onto the deck; both sink | 5 · spring route 7 | 7 | **7** (5 ∈ 5..7) |
 | 11 | 6 (6 / 6) | red lobs from its tee into the cold cannon (LOADED); blue lobs LEFT onto FIRE and fires red onto FAR; red sinks; blue rolls through the door into the cannon (BOOM); blue sinks | 8 | 8 | **8** (6 ∈ 6..8) |
 | 12 | 5 (5 / 5) | red rests on FIRE; blue lobs LEFT into the lit cannon onto TOP; red lobs LEFT from the FIRE dish into the cannon (TOP keeps it lit); both chip in | fly 5 · climb 5 | 8 | **7** (8 > 5 + 2) |

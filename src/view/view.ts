@@ -9,7 +9,8 @@ import type { Aim, BallState, Level, LevelRect, MutVec, PlayerId, PressureSwitch
 import { BALL_RADIUS, MAX_POWER, VIEWPORT_H, VIEWPORT_W } from '../sim/types';
 import { waitingOf } from '../sim/devices';
 import { isRectActive } from '../sim/terrain';
-import { cannonGeometry, seatOf } from './render/devices';
+import { cannonGeometry, cannonSpan, seatOf } from './render/devices';
+import { calloutExtent } from './render/effects';
 import { PALETTE, PLAYER_VIEW } from './render/palette';
 import { fairwayYAt } from './render/surface';
 import { COPY, gateWord, switchHeldCallout } from './render/text';
@@ -59,6 +60,11 @@ export type GolferAnim = {
   watchX: number | null;
   /** Seconds since the golfer last finished a move (debounces facing flips). */
   idleSince: number;
+  /**
+   * The aim side (1 right, -1 left) its stand was last taken for. A golfer at a level edge addresses its ball
+   * from the other side, facing back at it, so its own facing cannot tell when the aim swings over.
+   */
+  standAim: 1 | -1;
 };
 export type CalloutKind =
   | 'gimme'
@@ -85,6 +91,8 @@ export type Callout = {
   ttl: number;
   kind: CalloutKind;
   sizePx: number;
+  /** Screen px it is drawn above its usual spot for its whole life: born over a live callout, it stacks on top. */
+  lift: number;
   sub?: string;
   subColour?: string;
   stars?: boolean;
@@ -151,6 +159,10 @@ export type ViewState = {
   flash: number;
   levelTime: number;
   pendingOverviewAt: number | null;
+  /**
+   * UX §3.10 "Reduced motion" (the Settings knob, else the OS preference; the loop refreshes it every frame):
+   * no shake, no particles, callouts fade only, the camera cuts, the clouds stand still.
+   */
   reducedMotion: boolean;
   /** xorshift state for confetti colours/spread (never the sim rng). */
   rng: number;
@@ -198,6 +210,8 @@ const GOLFER_BALL_CLEAR_PX = 24;
 const GOLFER_EDGE_PX = 26;
 /** Half the golfer's body width: a waiting golfer keeps its body out of a device it is not waiting in. */
 const GOLFER_HALF_W = 22;
+/** Extra cost of a watching spot for the golfer of a ball waiting in a device: it stays beside its ball unless crowded. */
+const DEVICE_WATCH_DETOUR = 50;
 /** Ahead of the active ball, the aim arc crosses a standing golfer's body for about this far. */
 const AIM_ARC_LOW_PX = 220;
 /** Behind the active golfer, its backswing club (~60 px back) would meet the partner's club (30 px ahead of it) closer than this. */
@@ -213,6 +227,8 @@ const RESPAWN_POP_DURATION = 0.2;
 const LEVEL_COMPLETE_OVERVIEW_DELAY = 0.6;
 const FLASH_DURATION = 0.034;
 const CALLOUT_TTL = 1.1;
+/** Clear gap between two stacked callouts. */
+const CALLOUT_STACK_GAP = 4;
 const CALLOUT_SIZE = 44;
 const CALLOUT_SMALL = 28;
 const CALLOUT_TINY = 20;
@@ -250,6 +266,7 @@ function golferFor(level: Level, state: SimState, playerId: PlayerId): GolferAni
     fidgetKind: 0,
     watchX: null,
     idleSince: 1,
+    standAim: facingForAim(state.players[playerId].aim),
   };
 }
 
@@ -269,13 +286,29 @@ function renderBallFor(state: SimState, playerId: PlayerId): RenderBall {
   };
 }
 
-function prefersReducedMotion(): boolean {
-  if (typeof matchMedia !== 'function') return false;
+function reducedMotionQuery(): MediaQueryList | null {
+  if (typeof matchMedia !== 'function') return null;
   try {
-    return matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return matchMedia('(prefers-reduced-motion: reduce)');
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * The Settings "Reduced motion" knob as the canvas must honour it (UX §3.10), read every frame: App mirrors the
+ * setting on `<html data-motion>` (`on` / `off` / `system`) for the CSS `--motion` knob, and the canvas follows
+ * the same rule: `on` reduces, `off` never does, `system` (or no setting yet) follows `prefers-reduced-motion`.
+ */
+export function createMotionPreference(): () => boolean {
+  let query: MediaQueryList | null | undefined;
+  return () => {
+    const knob = typeof document === 'undefined' ? undefined : document.documentElement.dataset.motion;
+    if (knob === 'on') return true;
+    if (knob === 'off') return false;
+    if (query === undefined) query = reducedMotionQuery();
+    return query?.matches ?? false;
+  };
 }
 
 export function createViewState(level: Level, state: SimState): ViewState {
@@ -308,7 +341,7 @@ export function createViewState(level: Level, state: SimState): ViewState {
     flash: 0,
     levelTime: 0,
     pendingOverviewAt: null,
-    reducedMotion: prefersReducedMotion(),
+    reducedMotion: createMotionPreference()(),
     rng: (state.config.seed ^ 0x9e3779b9) >>> 0 || 1,
     shotFromX: [state.balls[0].pos.x, state.balls[1].pos.x],
     gimmeSeen: false,
@@ -334,7 +367,9 @@ function viewRandom(view: ViewState): number {
   return x / 4294967296;
 }
 
+/** Reduced motion spawns no particles at all: no puffs, sparks, smoke, streaks or confetti (UX §3.10). */
 function spawn(view: ViewState, p: Omit<Particle, 'life'>): void {
+  if (view.reducedMotion) return;
   if (view.particles.length >= MAX_PARTICLES) view.particles.shift();
   view.particles.push({ ...p, life: p.maxLife });
 }
@@ -384,19 +419,43 @@ function outranks(a: CalloutKind, b: CalloutKind): boolean {
   return DEVICE_CALLOUTS.has(a) && MINOR_CALLOUTS.has(b);
 }
 
+type CalloutSpec = Omit<Callout, 'id' | 'bornAt' | 'ttl' | 'lift'> & { ttl?: number };
+
+/**
+ * How far a new callout is lifted to clear the live ones it would cover (a launcher landing on a plate in a
+ * sand bowl says SAND… and FIRE HELD a moment apart, at almost the same spot): it stacks on top, and keeps
+ * that lift for its whole life so it never jumps when the one under it fades.
+ */
+function calloutLift(view: ViewState, c: CalloutSpec): number {
+  if (c.worldPos === null) return 0;
+  const zoom = view.camera.zoom;
+  const box = calloutExtent(c);
+  let lift = 0;
+  for (const old of view.callouts) {
+    if (old.worldPos === null) continue;
+    const under = calloutExtent(old);
+    if (Math.abs(old.worldPos.x - c.worldPos.x) * zoom >= under.halfW + box.halfW) continue;
+    const oldY = old.worldPos.y * zoom - old.lift;
+    const newY = c.worldPos.y * zoom - lift;
+    if (newY - box.above >= oldY + under.below || newY + box.below <= oldY - under.above) continue;
+    lift = c.worldPos.y * zoom - (oldY - under.above - CALLOUT_STACK_GAP - box.below);
+  }
+  return lift;
+}
+
 /**
  * At most MAX_CALLOUTS alive and the newest replaces the oldest, except that a device moment (SNAP!, BOOM! …)
  * is never pushed out by a switch or bridge callout, and a new device moment pushes those out first (L10's
- * A HELD + BRIDGE OPEN + BOOM! in one landing keeps BOOM!).
+ * A HELD + BRIDGE OPEN + BOOM! in one landing keeps BOOM!). A callout born over a live one stacks above it.
  */
-function pushCallout(view: ViewState, c: Omit<Callout, 'id' | 'bornAt' | 'ttl'> & { ttl?: number }): void {
+function pushCallout(view: ViewState, c: CalloutSpec): void {
   while (view.callouts.length >= MAX_CALLOUTS) {
     const evictable = view.callouts.filter((old) => !outranks(old.kind, c.kind));
     const victim = evictable.find((old) => outranks(c.kind, old.kind)) ?? evictable[0];
     if (victim === undefined) return;
     view.callouts.splice(view.callouts.indexOf(victim), 1);
   }
-  view.callouts.push({ ...c, id: view.nextCalloutId, bornAt: view.timeSec, ttl: c.ttl ?? CALLOUT_TTL });
+  view.callouts.push({ ...c, id: view.nextCalloutId, bornAt: view.timeSec, ttl: c.ttl ?? CALLOUT_TTL, lift: calloutLift(view, c) });
   view.nextCalloutId += 1;
 }
 
@@ -466,37 +525,82 @@ function onGround(level: Level, stand: Stand): Stand {
   return y === null ? stand : { pos: { x: stand.pos.x, y }, facing: stand.facing };
 }
 
-/** The active golfer addresses its ball from 42 px back, or from 26 px when 42 would stand on the partner's ball. */
-function activeStand(ball: Vec, facing: 1 | -1, partnerBall: Vec | null): Stand {
-  const usual = standPoint(ball, facing);
-  if (partnerBall === null || Math.abs(usual.x - partnerBall.x) >= GOLFER_BALL_CLEAR_PX) return { pos: usual, facing };
-  return { pos: { x: ball.x - facing * GOLFER_STAND_CLOSE_PX, y: usual.y }, facing };
+/** The active golfer's stand and the side its shot goes (its facing, unless it addresses the ball from the other side). */
+type ActiveStand = Stand & { shot: 1 | -1 };
+
+/** The spots a golfer facing `facing` addresses its ball from, best first: 42 px back, then the 26 px tight address (only that one when 42 would stand on the partner's ball). */
+function addressXs(ball: Vec, facing: 1 | -1, partnerBall: Vec | null): readonly [number, ...number[]] {
+  const back = ball.x - facing * GOLFER_STAND_BACK_PX;
+  const close = ball.x - facing * GOLFER_STAND_CLOSE_PX;
+  return partnerBall === null || Math.abs(back - partnerBall.x) >= GOLFER_BALL_CLEAR_PX ? [back, close] : [close];
+}
+
+/**
+ * The active golfer addresses its ball from 42 px back, or from 26 px when 42 would stand on the partner's ball,
+ * facing the shot. Where neither spot is on the level and on the ground (a ball in the L12 pit at the left edge, deep
+ * in a right-edge back bunker aiming at the cup, at a chasm's lip), it addresses the ball from the other side, facing
+ * back at it, so the golfer and its turn marker stay on the stage the camera never pans past (D7).
+ */
+function activeStand(level: Level, switches: Readonly<Record<string, boolean>>, ball: Vec, shot: 1 | -1, partnerBall: Vec | null): ActiveStand {
+  const y = ball.y + BALL_RADIUS;
+  for (const facing of [shot, shot === 1 ? -1 : 1] as const) {
+    const x = addressXs(ball, facing, partnerBall).find((ax) => standable(level, switches, ax));
+    if (x !== undefined) return { pos: { x, y }, facing, shot };
+  }
+  // no ground within 42 px on either side (never on the shipped holes): the usual address
+  return { pos: { x: addressXs(ball, shot, partnerBall)[0], y }, facing: shot, shot };
 }
 
 type StandCandidate = Stand & { preference: number };
 
-/** Does a golfer (body half-width GOLFER_HALF_W) at x stand in a trap or on a cannon's cradle? */
-function inDevice(level: Level, x: number): boolean {
-  return level.rects.some((r) => {
-    if (r.kind === 'trap') return x > r.x - GOLFER_HALF_W && x < r.x + r.w + GOLFER_HALF_W;
-    if (r.kind !== 'cannon') return false;
-    const { x1, x2 } = cannonGeometry(r).cradleBase;
-    return x > x1 - GOLFER_HALF_W && x < x2 + GOLFER_HALF_W;
-  });
+type DeviceSpan = { readonly id: string; readonly x1: number; readonly x2: number };
+
+/** The ground every device covers (D10.8): a trap's zone; a cannon's cradle with its funnel sand (its mount). */
+function deviceSpans(level: Level): DeviceSpan[] {
+  const spans: DeviceSpan[] = [];
+  for (const r of level.rects) {
+    if (r.kind === 'trap') spans.push({ id: r.id, x1: r.x, x2: r.x + r.w });
+    else if (r.kind === 'cannon') spans.push({ id: r.id, ...cannonSpan(level, r) });
+  }
+  return spans;
+}
+
+/** The device other than `ownId` that a golfer's body (half-width GOLFER_HALF_W) at x would stand in, else null. */
+function deviceAt(level: Level, x: number, ownId: string | null): DeviceSpan | null {
+  return deviceSpans(level).find((d) => d.id !== ownId && x > d.x1 - GOLFER_HALF_W && x < d.x2 + GOLFER_HALF_W) ?? null;
+}
+
+/** On the level and on the ground: never past an edge, never over a chasm (the planks of a bridge that is out count). */
+function standable(level: Level, switches: Readonly<Record<string, boolean>>, x: number): boolean {
+  if (x < GOLFER_EDGE_PX || x > level.width - GOLFER_EDGE_PX) return false;
+  return fairwayYAt(level, x) !== null || level.rects.some((r) => r.kind === 'bridge' && x >= r.x && x <= r.x + r.w && isRectActive(r, switches));
+}
+
+/** x stepped clear of every device but `ownId`, away from the ball at `fromX`. */
+function pastDevices(level: Level, x: number, fromX: number, ownId: string): number {
+  const dir = x >= fromX ? 1 : -1;
+  let at = x;
+  for (let guard = 0; guard < level.rects.length; guard += 1) {
+    const device = deviceAt(level, at, ownId);
+    if (device === null) break;
+    at = dir > 0 ? device.x2 + GOLFER_HALF_W : device.x1 - GOLFER_HALF_W;
+  }
+  return at;
 }
 
 /**
  * How badly a waiting golfer at x crowds the scene: the active golfer and its backswing, a ball, the active
- * aim arc, the level edges, thin air over a chasm, and (unless its own ball waits in one) a device.
+ * aim arc (on the side the shot goes), the level edges, thin air over a chasm, and (unless its own ball waits
+ * in one) a device.
  */
-function crowding(level: Level, x: number, ownBall: Vec, active: Stand, activeBall: Vec, avoidDevices: boolean): number {
+function crowding(level: Level, x: number, ownBall: Vec, active: ActiveStand, activeBall: Vec, avoidDevices: boolean): number {
   let cost = 0;
   if (Math.abs(x - active.pos.x) < GOLFER_MIN_GAP_PX) cost += 100;
   if (x < GOLFER_EDGE_PX || x > level.width - GOLFER_EDGE_PX || fairwayYAt(level, x) === null) cost += 100;
-  if (avoidDevices && inDevice(level, x)) cost += 60;
+  if (avoidDevices && deviceAt(level, x, null) !== null) cost += 60;
   if (Math.abs(x - activeBall.x) < GOLFER_BALL_CLEAR_PX) cost += 50;
   if (Math.abs(x - ownBall.x) < GOLFER_BALL_CLEAR_PX) cost += 50;
-  const ahead = active.facing * (x - activeBall.x);
+  const ahead = active.shot * (x - activeBall.x);
   if (ahead > 0 && ahead < AIM_ARC_LOW_PX) cost += 10 + 20 * Math.min(1, ahead / 100);
   const behindActive = -active.facing * (x - active.pos.x);
   if (behindActive > 0 && behindActive < BACKSWING_CLEAR_PX) cost += 40;
@@ -504,13 +608,47 @@ function crowding(level: Level, x: number, ownBall: Vec, active: Stand, activeBa
 }
 
 /**
+ * Spots for the golfer of a ball waiting in device `holder` (D10): beside its ball, where a spot on ANOTHER
+ * device steps just past it and faces the ball (the L12 pit's golfer never stands on the cannon's mount, where
+ * it would look LOADED), never past an edge or over a chasm; the usual watching spots, kept off devices too,
+ * are a detour taken only when the spots beside the ball are crowded.
+ */
+function deviceBallSpots(
+  level: Level,
+  switches: Readonly<Record<string, boolean>>,
+  ball: Vec,
+  holder: string,
+  beside: readonly StandCandidate[],
+  watching: readonly StandCandidate[],
+): StandCandidate[] {
+  const spots: StandCandidate[] = [];
+  const add = (c: StandCandidate, detour: number, faceBall: boolean): void => {
+    const x = pastDevices(level, c.pos.x, ball.x, holder);
+    if (!standable(level, switches, x)) return;
+    const facing: 1 | -1 = x === c.pos.x || !faceBall ? c.facing : x < ball.x ? 1 : -1;
+    spots.push({ pos: { x, y: c.pos.y }, facing, preference: c.preference + detour });
+  };
+  for (const c of beside) add(c, 0, true);
+  for (const c of watching) add(c, DEVICE_WATCH_DETOUR, false);
+  return spots;
+}
+
+/**
  * The waiting golfer picks the least crowded of: behind its ball, a tight address behind it, in front of
  * it (facing back), or behind the active golfer (clear of its backswing) watching the shot. It never
  * stands on either ball, keeps GOLFER_MIN_GAP_PX from the active golfer when it can, and stays out of
  * the low part of the active arc (where the dots would cross its face) whenever a clear spot exists.
- * The golfer of a ball waiting in a device only takes the spots beside its own ball (D10).
+ * The golfer of a ball waiting in a device (`holder`) stands beside its own ball (D10, `deviceBallSpots`).
  */
-function waitingStand(level: Level, ball: Vec, facing: 1 | -1, active: Stand, activeBall: Vec, inDeviceBall: boolean): Stand {
+function waitingStand(
+  level: Level,
+  switches: Readonly<Record<string, boolean>>,
+  ball: Vec,
+  facing: 1 | -1,
+  active: ActiveStand,
+  activeBall: Vec,
+  holder: string | null,
+): Stand {
   const flipped: 1 | -1 = facing === 1 ? -1 : 1;
   const y = ball.y + BALL_RADIUS;
   const beside: StandCandidate[] = [
@@ -522,11 +660,11 @@ function waitingStand(level: Level, ball: Vec, facing: 1 | -1, active: Stand, ac
     { pos: { x: active.pos.x - active.facing * BACKSWING_CLEAR_PX, y: active.pos.y }, facing: active.facing, preference: 3 },
     { pos: { x: active.pos.x + active.facing * GOLFER_MIN_GAP_PX, y }, facing: active.facing === 1 ? -1 : 1, preference: 5 },
   ];
-  const candidates = inDeviceBall ? beside : [...beside, ...watching];
+  const candidates = holder === null ? [...beside, ...watching] : deviceBallSpots(level, switches, ball, holder, beside, watching);
   let best: StandCandidate | null = null;
   let bestCost = Infinity;
   for (const c of candidates) {
-    const cost = c.preference + crowding(level, c.pos.x, ball, active, activeBall, !inDeviceBall);
+    const cost = c.preference + crowding(level, c.pos.x, ball, active, activeBall, holder === null);
     if (cost < bestCost) {
       best = c;
       bestCost = cost;
@@ -536,18 +674,20 @@ function waitingStand(level: Level, ball: Vec, facing: 1 | -1, active: Stand, ac
 }
 
 /**
- * Stand point + facing of player p: the active golfer addresses its ball facing the shot; the other keeps
- * clear. A ball waiting in a trap or a cold cannon keeps its golfer beside it, on the ground there.
+ * Stand point + facing of player p: the active golfer addresses its ball facing the shot (from the other side
+ * at a level edge); the other keeps clear. A ball waiting in a trap or a cold cannon keeps its golfer beside it,
+ * on the ground there.
  */
 function standFor(level: Level, state: SimState, p: PlayerId): Stand {
   const a = state.activePlayer;
   const other: PlayerId = a === 0 ? 1 : 0;
   const activeBall = restingPos(level, state, a);
-  const active = activeStand(activeBall, facingForAim(state.players[a].aim), state.balls[other].sunk ? null : restingPos(level, state, other));
+  const partnerBall = state.balls[other].sunk ? null : restingPos(level, state, other);
+  const active = activeStand(level, state.switches, activeBall, facingForAim(state.players[a].aim), partnerBall);
   if (p === a) return active;
-  const waiting = isWaiting(level, state, p);
-  const stand = waitingStand(level, restingPos(level, state, p), facingForAim(state.players[p].aim), active, activeBall, waiting);
-  return waiting ? onGround(level, stand) : stand;
+  const holder = waitingOf(level, state.switches, state.balls[p])?.rectId ?? null;
+  const stand = waitingStand(level, state.switches, restingPos(level, state, p), facingForAim(state.players[p].aim), active, activeBall, holder);
+  return holder === null ? stand : onGround(level, stand);
 }
 
 /** A gap with no active bridge between x1 and x2? */
@@ -578,6 +718,7 @@ function startMove(g: GolferAnim, to: Vec, move: GolferMove, facing: 1 | -1): vo
 function relocateGolfer(view: ViewState, state: SimState, p: PlayerId, allowWalk: boolean): void {
   const g = view.golfers[p];
   const ball = state.balls[p];
+  g.standAim = facingForAim(state.players[p].aim);
   const { pos: to, facing } = standFor(view.level, state, p);
   if (Math.abs(to.x - g.pos.x) < 1 && Math.abs(to.y - g.pos.y) < 1 && g.facing === facing) return;
   const crossesGap = openGapBetween(view.level, state.switches, g.pos.x, to.x);
@@ -1041,7 +1182,7 @@ function updateGolfers(view: ViewState, next: SimState, dt: number): void {
     const isAiming = next.phase === 'aiming' && p === active && g.swingT >= SWING_DURATION;
     g.aiming = isAiming;
     g.power = isAiming ? aim.power / MAX_POWER : 0;
-    if (isAiming && g.walkT >= 1 && g.idleSince > FACING_FLIP_DEBOUNCE && facingForAim(aim) !== g.facing) {
+    if (isAiming && g.walkT >= 1 && g.idleSince > FACING_FLIP_DEBOUNCE && facingForAim(aim) !== g.standAim) {
       relocateGolfer(view, next, p, true);
     }
     if (next.phase === 'flying' && !next.balls[p].asleep && !next.balls[p].sunk) g.watchX = next.balls[p].pos.x;
@@ -1141,7 +1282,8 @@ function updateCamera(view: ViewState, next: SimState, dt: number): void {
   }
   if ((next.phase === 'intro' || next.phase === 'campaignResults') && !view.userCameraOverride) view.cameraMode = 'overview';
   view.cameraTarget = view.cameraMode === 'overview' ? cameraFor(view.level, next, 'overview') : followTarget(view, next);
-  const k = 1 - Math.exp(-CAMERA_LERP_RATE * dt);
+  // reduced motion cuts instead of tweening (UX §3.10)
+  const k = view.reducedMotion ? 1 : 1 - Math.exp(-CAMERA_LERP_RATE * dt);
   view.camera.x += (view.cameraTarget.x - view.camera.x) * k;
   view.camera.y += (view.cameraTarget.y - view.camera.y) * k;
   view.camera.zoom += (view.cameraTarget.zoom - view.camera.zoom) * k;

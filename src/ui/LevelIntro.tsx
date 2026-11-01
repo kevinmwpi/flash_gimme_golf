@@ -4,7 +4,9 @@
  * (global hole numbers), name, par, the NEW mechanic row (only on a hole that introduces one), hint, who
  * goes first, Tee off. Shown while FrameSummary.phase === 'intro' over the overview camera. It never
  * auto-advances (BUILD_DECISIONS D6): either player continues and the first press counts. Tapping
- * the scrim also continues.
+ * the scrim also continues. Like every card it ignores presses for its first CARD_INPUT_GRACE_MS
+ * (Pause.tsx), so the second half of a doubled press on the card before it (Next hole, Continue to
+ * World N+1) never tees off unread, here or, online, for the partner.
  */
 import React from 'react';
 import { worldTitle } from '../sim/levels/index';

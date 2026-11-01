@@ -18,6 +18,7 @@ import { medalFor } from '../sim/types';
 import { COPY, MECHANIC_COPY, trayVerdict } from './copy';
 import { Icon, IconButton, speakerState } from './Hud';
 import { MedalDisc } from './LevelResults';
+import { arrowDelta } from './radioGroup';
 import type { BestTable, UiSettings } from './storage';
 import { defaultHole, stepHole, worldStartHole } from './worlds';
 
@@ -63,13 +64,6 @@ function useServerHealth(url: string | null): ServerHealth | null {
     };
   }, [url]);
   return health;
-}
-
-/** A radio group's arrow step (ARIA radio pattern): Right/Down forward, Left/Up back, any other key 0. */
-function arrowDelta(key: string): number {
-  if (key === 'ArrowRight' || key === 'ArrowDown') return 1;
-  if (key === 'ArrowLeft' || key === 'ArrowUp') return -1;
-  return 0;
 }
 
 function Backdrop(): React.JSX.Element {
@@ -203,11 +197,13 @@ export default function Title(props: TitleProps): React.JSX.Element {
     return () => window.clearTimeout(t);
   }, [focusTray]);
 
-  // Accelerators 1/2/3; silent while any modal (Settings, its reset confirm) is open above the title.
+  // Accelerators 1/2/3; silent while any modal (Settings, its reset confirm) is open above the title, and
+  // inside the tray, whose radios read WORLD 1/2/3 and hole numbers: a digit there is not a mode pick.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.querySelector('[aria-modal="true"]') !== null) return;
+      if (e.target instanceof Node && trayRef.current?.contains(e.target) === true) return;
       if (e.key === '1') onSolo(selected);
       else if (e.key === '2') onLocal(selected);
       else if (e.key === '3' && onlineAvailable) onOnline();

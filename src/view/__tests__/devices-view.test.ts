@@ -5,6 +5,8 @@
 // labels and the off-screen ball marker.
 import { describe, expect, it, vi } from 'vitest';
 import { CANNON_LAUNCH, MACHINE_LOG, MACHINE_LOG_TICKS, cannonLevel, deviceConfig, machineLevel, trapLevel } from '../../sim/__tests__/device-fixtures';
+import { level as firstFairway } from '../../sim/levels/w1-01-first-fairway';
+import { level as springStep } from '../../sim/levels/w2-05-spring-step';
 import { level as boobyTrap } from '../../sim/levels/w2-06-booby-trap';
 import { level as loadAndFire } from '../../sim/levels/w2-07-load-and-fire';
 import { level as colourLift } from '../../sim/levels/w2-08-colour-lift';
@@ -14,12 +16,13 @@ import { predictLaunch } from '../../sim/physics';
 import { createSim, stepSim } from '../../sim/sim';
 import type { BallState, CannonRect, Level, PlayerId, SimEvent, SimState, SpringRect, TrapRect } from '../../sim/types';
 import { BALL_RADIUS, DEFAULT_AIM, DT, REST_TICKS, VIEWPORT_H, VIEWPORT_W } from '../../sim/types';
-import { cannonGeometry, trapGeometry } from '../render/devices';
+import { cannonGeometry, cannonSpan, trapGeometry } from '../render/devices';
+import { calloutExtent, drawCallouts } from '../render/effects';
 import { layoutStickers, renderFrame, type RenderScene } from '../render/index';
 import { chevronTilt, drawRect, drawWire, wirePosts } from '../render/mechanics';
 import { PALETTE } from '../render/palette';
 import { fairwayYAt } from '../render/surface';
-import { applySimEvents, cameraFor, createViewState, updateView, type ViewState } from '../view';
+import { applySimEvents, cameraFor, createViewState, updateView, worldToScreen, type ViewState } from '../view';
 
 vi.mock('../../sim/levels/index', async () => (await import('../../sim/__tests__/device-fixtures')).deviceRegistry);
 
@@ -219,6 +222,31 @@ describe('device callouts (D10)', () => {
     applySimEvents(view, [ev('sink', { playerId: 0, pos: { x: 1875, y: 400 }, strokes: 3, speed: 90 })], state);
     expect(texts()).toEqual(['SNAP!', 'IN THE HOLE!']);
   });
+
+  it('a launcher landing on a plate in a sand bowl stacks FIRE HELD above SAND… for its whole life, never over it (L7 far side)', () => {
+    const state = stateOn(loadAndFire);
+    const view = followView(loadAndFire, state, 680);
+    applySimEvents(view, [ev('enterSand', { playerId: 0, pos: { x: 1610, y: 392 }, rectId: 'landing' })], state);
+    view.timeSec += 0.25;
+    applySimEvents(view, [ev('switchOn', { switchId: 'fire-far', byPlayer: 0, pos: { x: 1640, y: 398 } })], state);
+    const centres = (): Map<string, { x: number; y: number }> => {
+      const { ctx, calls } = recorder();
+      drawCallouts(ctx, view, (p) => worldToScreen(view, p));
+      // the colour pass of each outlined text is the fillText at (0, 0) under the callout's own translate
+      return new Map(calls.filter((c) => c.name === 'fillText' && c.args[2] === 0).map((c) => [c.args[0] as string, at(c)]));
+    };
+    for (const age of [0, 0.3]) {
+      view.timeSec += age;
+      const drawn = centres();
+      const sand = drawn.get('SAND…');
+      const held = drawn.get('FIRE HELD');
+      if (sand === undefined || held === undefined) throw new Error('both callouts are drawn');
+      const a = calloutExtent({ text: 'SAND…', sizePx: 28 });
+      const b = calloutExtent({ text: 'FIRE HELD', sizePx: 20 });
+      expect(Math.abs(sand.x - held.x)).toBeLessThan(a.halfW + b.halfW);
+      expect(held.y + b.below, `FIRE HELD clears SAND… ${age} s on`).toBeLessThanOrEqual(sand.y - a.above);
+    }
+  });
 });
 
 // ---- teleports ----------------------------------------------------------------------------------------------
@@ -350,6 +378,85 @@ describe('golfers and devices (D10)', () => {
     const x = view.golfers[1].pos.x;
     expect(x <= snare.x - 22 || x >= snare.x + snare.w + 22).toBe(true);
   });
+
+  it("the golfer of a ball caught in L12's pit never stands on the cannon's mount (that reads as LOADED): off it, facing its ball", () => {
+    const cannon = rectOf(grandMachine, 'cannon');
+    const mount = cannonSpan(grandMachine, cannon);
+    expect(mount.x1).toBeLessThan(cannon.x);
+    expect(mount.x2).toBeGreaterThan(cannon.x + cannon.w);
+    for (const caught of [0, 1] as const) {
+      const other = caught === 0 ? 1 : 0;
+      const balls: [BallState, BallState] = [rested(0, 0), rested(0, 0)];
+      balls[caught] = rested(22, 628, { lastRest: grandMachine.starts[caught] });
+      balls[other] = rested(grandMachine.starts[other].x, grandMachine.starts[other].y);
+      const view = createViewState(grandMachine, stateOn(grandMachine, { activePlayer: other, balls }));
+      const g = view.golfers[caught];
+      expect(g.pos.x <= mount.x1 - 22 || g.pos.x >= mount.x2 + 22, `${caught === 0 ? 'red' : 'blue'} golfer at ${g.pos.x}`).toBe(true);
+      expect(g.pos.y).toBe(fairwayYAt(grandMachine, g.pos.x));
+      expect(g.facing).toBe(-1);
+    }
+    // a LOADED ball's golfer still stands on the mount, beside its cannon
+    const loaded = withBalls(stateOn(grandMachine, { activePlayer: 1 }), rested(cannon.x + cannon.w / 2, cannon.y - BALL_RADIUS), rested(350, 608));
+    const x = createViewState(grandMachine, loaded).golfers[0].pos.x;
+    expect(x > mount.x1 - 22 && x < mount.x2 + 22).toBe(true);
+  });
+
+  /** The golfer's body (44 px wide) and so its turn marker (24 px, drawn at its feet) wholly on the stage. */
+  const onStage = (view: ViewState, p: PlayerId): boolean => {
+    const feet = worldToScreen(view, view.golfers[p].pos);
+    return feet.x - 22 >= 0 && feet.x + 22 <= VIEWPORT_W;
+  };
+
+  it("L12's pit retry: the freed ball's golfer addresses it from the mount side, facing back at it, on the stage whichever way it aims", () => {
+    // the real hand-off (real sim: red lobs 104° / 100 into the pit, blue rolls 20° / 20 onto FIRE)
+    const pit = { x: 24.52, y: 627.95 };
+    const caught = withBalls(stateOn(grandMachine, { activePlayer: 1 }), rested(pit.x, pit.y, { lastRest: { x: 300, y: 608 } }), rested(350, 608));
+    const players: SimState['players'] = [
+      { strokes: 1, aim: { angle: -1.8151, power: 100 } },
+      { strokes: 1, aim: { angle: -0.3491, power: 20 } },
+    ];
+    const freed = withBalls(stateOn(grandMachine, { players, switches: { fire: true, door: false, top: false } }), rested(pit.x, pit.y), rested(488.63, 627.95));
+    const view = createViewState(grandMachine, caught);
+    applySimEvents(
+      view,
+      [
+        ev('switchOn', { switchId: 'fire', byPlayer: 1, pos: { x: 510, y: 640 } }, 411),
+        ev('trapFreed', { playerId: 0, pos: pit, rectId: 'pit' }, 411),
+        ev('turnStart', { playerId: 0, readyInTicks: 27, sameAsBefore: false }, 412),
+      ],
+      freed,
+    );
+    const g = view.golfers[0];
+    // red's carried-over leftward lob, then the retry lob back into the cannon (70°) and a flat 45° (it hits the mount)
+    for (const aim of [{ angle: -1.8151, power: 100 }, { angle: -1.2217, power: 60 }, { angle: -0.7854, power: 55 }]) {
+      const aiming: SimState = { ...freed, players: [{ strokes: 1, aim }, players[1]] };
+      for (let i = 0; i < 60; i += 1) updateView(view, aiming, aiming, 1, DT);
+      const where = `aim ${aim.angle}: golfer at ${g.pos.x}`;
+      expect(view.camera.x, 'the camera never pans past the edge (D7)').toBe(0);
+      expect(onStage(view, 0), where).toBe(true);
+      expect(g.facing, where).toBe(-1);
+      expect(g.pos.x - pit.x, `${where}: off its ball`).toBeGreaterThanOrEqual(26);
+      expect(g.walkT, `${where}: settled, no re-stand when the aim swings over`).toBe(1);
+    }
+  });
+
+  it('a ball deep in a right-edge back bunker, aiming back at the cup, is addressed from the cup side, facing back at it (L5 and World 1)', () => {
+    for (const level of [springStep, firstFairway]) {
+      const bunker = level.rects.find((r) => r.id === 'back-bunker');
+      if (bunker === undefined) throw new Error(`${level.id} has a back bunker`);
+      const x = bunker.x + bunker.w - 14;
+      const partnerX = level.hole.x - 160;
+      const ground = (at: number): number => (fairwayYAt(level, at) ?? level.hole.rimY) - BALL_RADIUS;
+      const state = withBalls(stateOn(level), rested(x, ground(x)), rested(partnerX, ground(partnerX)));
+      const atCup: SimState = { ...state, players: [{ strokes: 0, aim: { angle: -2.356, power: 40 } }, state.players[1]] };
+      const view = createViewState(level, atCup);
+      const g = view.golfers[0];
+      expect(onStage(view, 0), `${level.id}: golfer at ${g.pos.x}`).toBe(true);
+      expect(g.pos.x, level.id).toBeLessThanOrEqual(level.width - 26);
+      expect(x - g.pos.x, `${level.id}: in front of its ball, off it`).toBeGreaterThanOrEqual(26);
+      expect(g.facing, level.id).toBe(1);
+    }
+  });
 });
 
 // ---- art ---------------------------------------------------------------------------------------------------
@@ -421,6 +528,32 @@ describe('device art (D10.4, D10.8)', () => {
     expect(loaded.every((c) => (c.alpha as number) < (lit[0]?.alpha as number))).toBe(true);
   });
 
+  it("a LOADED cannon's faint arc is the flight it fires on: L10's crosses the bridge its FIRE plate raises and rests on B", () => {
+    const cannon = rectOf(skyBridge, 'cannon');
+    const plateB = switchOf(skyBridge, 'b');
+    const bridge = skyBridge.rects.find((r) => r.kind === 'bridge');
+    const gap = skyBridge.terrain.gaps[0];
+    if (bridge === undefined || gap === undefined) throw new Error('Sky Bridge has a bridge over its gap');
+    const breech = { x: cannon.x + cannon.w / 2, y: cannon.y - BALL_RADIUS };
+    // blue waits LOADED in the cold cannon (no plate held, so no bridge), red aims from its tee
+    const loaded = withBalls(stateOn(skyBridge, { activePlayer: 0 }), rested(280, 608), rested(breech.x, breech.y, { lastRest: { x: 330, y: 608 } }));
+    const { ctx, calls } = recorder();
+    renderFrame(ctx, scene(loaded, followView(skyBridge, loaded, 0)));
+    const dots = calls.filter((c) => c.name === 'arc' && c.args[2] === 3.5).map((c) => ({ x: c.args[0] as number, y: c.args[1] as number }));
+    expect(dots.length).toBeGreaterThan(10);
+    // the flight the cannon fires when red rests on A (its first FIRE plate), which raises the bridge too
+    const fired = predictLaunch(skyBridge, { a: true, b: false, deck: false }, breech, cannon.launch, 1).points;
+    for (const d of dots) expect(fired.some((p) => p.x === d.x && p.y === d.y)).toBe(true);
+    const overGap = dots.filter((d) => d.x > gap.x1 && d.x < gap.x2);
+    expect(overGap.length).toBeGreaterThan(0);
+    for (const d of overGap) expect(d.y, 'never down into the chasm').toBeLessThan(bridge.y);
+    const ring = calls.filter((c) => c.name === 'arc' && c.args[2] === 12 && near(c.args[1] as number, plateB.surfaceY - BALL_RADIUS, 2));
+    expect(ring).toHaveLength(1);
+    const ringX = ring[0]?.args[0] as number;
+    expect(ringX).toBeGreaterThanOrEqual(plateB.x);
+    expect(ringX).toBeLessThanOrEqual(plateB.x + plateB.w);
+  });
+
   it('wires reach a trap hinge and a cannon fuse lamp; a wire across a chasm stays inside the frame', () => {
     const snare = rectOf(boobyTrap, 'trap');
     const hinges = wirePosts(boobyTrap, snare);
@@ -451,6 +584,16 @@ describe('device art (D10.4, D10.8)', () => {
     for (const c of deep.calls.filter((k) => k.name === 'lineTo')) expect(c.args[1] as number).toBeLessThanOrEqual(VIEWPORT_H - 10);
   });
 
+  it('a colour field is striped in its own colour, opaque, so a red field over the sky reads red, not switch-purple (L8, L11)', () => {
+    const field = colourLift.rects.find((r) => r.id === 'red-field');
+    if (field === undefined) throw new Error('Colour Lift has a red field');
+    const { ctx, calls } = recorder();
+    drawRect(ctx, field, true, 1);
+    const stripes = calls.filter((c) => c.name === 'stroke' && c.strokeStyle === PALETTE.p1 && c.alpha === 1);
+    expect(stripes.length).toBeGreaterThan(field.h / 16);
+    expect(calls.some((c) => c.name === 'stroke' && String(c.strokeStyle).startsWith('rgba(255,255,255'))).toBe(false);
+  });
+
   it('keeps the clip budget at or under 8 per frame with traps, a seat and a cannon on screen', () => {
     const state = stateOn(grandMachine);
     const view = createViewState(grandMachine, state);
@@ -466,6 +609,29 @@ describe('device art (D10.4, D10.8)', () => {
 
 describe('device labels (D10.8)', () => {
   const texts = (level: Level, state: SimState, camX: number): string[] => layoutStickers(recorder().ctx, state, followView(level, state, camX)).map((s) => s.text);
+
+  it("a device label beside a waiting golfer steps just over its cap, and a device label never dodges below its prop (L6 caught, L10 tee)", () => {
+    const snare = rectOf(boobyTrap, 'trap');
+    const floorY = trapGeometry(boobyTrap, snare).floorY;
+    const caught = withBalls(stateOn(boobyTrap, { activePlayer: 1 }), rested(410, 628, { lastRest: { x: 540, y: 608 } }), rested(590, 608));
+    const view = createViewState(boobyTrap, caught);
+    view.camera = { ...cameraFor(boobyTrap, caught, 'follow') };
+    const trap = layoutStickers(recorder().ctx, caught, view).find((s) => s.key === `rect:${snare.id}`);
+    if (trap === undefined) throw new Error('TRAP · ARMED is placed');
+    const anchor = floorY - 48;
+    expect(trap.y + trap.h / 2, 'never down onto the trap').toBeLessThanOrEqual(floorY - 24);
+    // red's golfer stands beside its caught ball: the label clears its cap, about 100 px up, not the 145 px of a full aiming box
+    const golfer = view.golfers[0].pos;
+    expect(Math.abs(golfer.x - 410)).toBeLessThanOrEqual(42);
+    expect(anchor - trap.y).toBeLessThan(100);
+    const cannon = rectOf(skyBridge, 'cannon');
+    const tee = stateOn(skyBridge, { activePlayer: 1 });
+    for (const stageScale of [1, 0.5]) {
+      const label = layoutStickers(recorder(stageScale).ctx, tee, followView(skyBridge, tee, 0)).find((s) => s.key === `rect:${cannon.id}`);
+      if (label === undefined) throw new Error('CANNON · COLD is placed');
+      expect(label.y + label.h / 2, `stage scale ${stageScale}: never down onto the grass under the golfers`).toBeLessThanOrEqual(cannon.y);
+    }
+  });
 
   it('TRAP · ARMED / TRAP · OPEN and CANNON · COLD / CANNON · LIT follow the switches', () => {
     expect(texts(trapLevel, stateOn(trapLevel), 100)).toContain('TRAP · ARMED');
@@ -489,19 +655,47 @@ describe('device labels (D10.8)', () => {
     expect([...view.stickerPulse.keys()]).toEqual(['switch:free']);
   });
 
-  it("a colour field that rises off the top of the screen keeps its label and badge in the visible playfield (L8's red field)", () => {
+  it("a colour field that rises off the top of the screen keeps its label, and its badge under that label, in the visible playfield (L8's red field, 1280 and phone)", () => {
     const field = colourLift.rects.find((r) => r.id === 'red-field');
-    expect(field?.y).toBeLessThan(0);
+    if (field === undefined) throw new Error('Colour Lift has a red field');
+    expect(field.y).toBeLessThan(0);
     const state = stateOn(colourLift);
-    const view = followView(colourLift, state, 640);
-    const label = layoutStickers(recorder().ctx, state, view).find((s) => s.key === 'rect:red-field');
-    expect(label?.text).toBe('RED ONLY');
-    expect((label?.y ?? 0) - (label?.h ?? 0) / 2).toBeGreaterThanOrEqual(68);
-    const { ctx, calls } = recorder();
-    renderFrame(ctx, scene(state, view));
-    const x = (field?.x ?? 0) + (field?.w ?? 0) / 2;
-    const badgeY = (68 + (field?.y ?? 0) + (field?.h ?? 0)) / 2;
-    expect(calls.some((c) => c.name === 'roundRect' && c.args[0] === x - 38 && c.args[1] === badgeY - 14 && c.args[2] === 76)).toBe(true);
+    const x = field.x + field.w / 2;
+    for (const stageScale of [1, 0.5]) {
+      const view = followView(colourLift, state, 640);
+      const band = 12 + 48 * Math.min(1.7, Math.max(1, 0.9 / stageScale)) + 8;
+      const label = layoutStickers(recorder(stageScale).ctx, state, view).find((s) => s.key === 'rect:red-field');
+      if (label === undefined) throw new Error(`RED ONLY is placed at stage scale ${stageScale}`);
+      expect(label.text).toBe('RED ONLY');
+      expect(label.y - label.h / 2).toBeGreaterThanOrEqual(band);
+      const { ctx, calls } = recorder(stageScale);
+      renderFrame(ctx, scene(state, view));
+      // the badge's paper (76 x 28, over its ink shadow 3 px lower), drawn in world px: camera y 0, zoom 1
+      const papers = calls.filter((c) => c.name === 'roundRect' && c.args[0] === x - 38 && c.args[2] === 76 && c.args[3] === 28).map((c) => c.args[1] as number);
+      expect(papers.length, `stage scale ${stageScale}`).toBe(2);
+      const top = Math.min(...papers);
+      expect(top, `badge below RED ONLY at stage scale ${stageScale}`).toBeGreaterThanOrEqual(label.y + label.h / 2);
+      expect(top + 28, 'badge above the bottom emitter').toBeLessThanOrEqual(field.y + field.h - 14);
+    }
+  });
+
+  it("L8's blue field, with the WINDOW standing on it, hangs BLUE ONLY beside the field, never in the window red lobs through", () => {
+    const field = colourLift.rects.find((r) => r.id === 'blue-field');
+    const window = colourLift.rects.find((r) => r.id === 'window-gate');
+    if (field === undefined || window === undefined) throw new Error('Colour Lift has a blue field under its window');
+    expect(window.y + window.h).toBe(field.y);
+    for (const held of [false, true]) {
+      const state = stateOn(colourLift, { activePlayer: 1, switches: { window: held, door: false } });
+      for (const stageScale of [1, 0.5]) {
+        const label = layoutStickers(recorder(stageScale).ctx, state, followView(colourLift, state, 0)).find((s) => s.key === 'rect:blue-field');
+        if (label === undefined) throw new Error('BLUE ONLY is placed');
+        const where = `${held ? 'open' : 'shut'} window, stage scale ${stageScale}`;
+        const clearOfWindow = label.x + label.w / 2 <= window.x || label.x - label.w / 2 >= window.x + window.w || label.y + label.h / 2 <= window.y || label.y - label.h / 2 >= window.y + window.h;
+        expect(clearOfWindow, where).toBe(true);
+        expect(label.x + label.w / 2, where).toBeLessThanOrEqual(field.x);
+        expect(Math.abs(label.y - (field.y + 4)), `${where}: level with the top emitter`).toBeLessThan(10);
+      }
+    }
   });
 });
 

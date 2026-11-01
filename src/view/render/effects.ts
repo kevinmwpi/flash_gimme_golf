@@ -2,8 +2,9 @@
 /**
  * Particles, world-anchored callouts and the ink screen flash (ARCH.md §1.9, VISUAL.md §13-§14).
  * Particles are flat discs / squares / streaks with a 3 px ink outline when >= 6 px and vanish without
- * alpha fade (Flash style). Callouts are screen-space display text at the anchor, 60 px up, with the
- * scale-pop / hold / rise-and-fade timeline; `prefers-reduced-motion` fades only.
+ * alpha fade (Flash style). Callouts are screen-space display text at the anchor, 60 px up (plus the lift
+ * that stacks one born over a live one), with the scale-pop / hold / rise-and-fade timeline; reduced motion
+ * fades only.
  */
 import type { Vec } from '../../sim/types';
 import { VIEWPORT_H, VIEWPORT_W } from '../../sim/types';
@@ -51,6 +52,14 @@ export function drawParticles(ctx: CanvasRenderingContext2D, particles: readonly
     circle(ctx, p.pos.x, p.pos.y, p.size / 2);
     fillStroke(ctx, p.colour, outlined ? OUTLINE_SMALL : 0);
   }
+}
+
+/**
+ * Screen extent of a callout's text around its centre at scale 1: the display font runs about 0.62 em per
+ * glyph and a line about 1.4 em tall; a sub-line (LOCKED! + RED ONLY) hangs 0.8 em under it.
+ */
+export function calloutExtent(c: Pick<Callout, 'text' | 'sizePx' | 'sub'>): { halfW: number; above: number; below: number } {
+  return { halfW: (c.text.length * c.sizePx * 0.62) / 2, above: c.sizePx * 0.7, below: c.sizePx * (c.sub === undefined ? 0.7 : 1.15) };
 }
 
 type CalloutPhase = { scale: number; alpha: number; rise: number };
@@ -105,8 +114,8 @@ function drawCallout(ctx: CanvasRenderingContext2D, c: Callout, view: ViewState,
   const phase = calloutPhase(age, c.ttl, view.reducedMotion);
   if (phase.alpha <= 0) return;
   const anchor = toScreen(c.worldPos);
-  const approxHalfW = (c.text.length * c.sizePx * 0.62) / 2;
-  let y = anchor.y - CALLOUT_RISE_PX - phase.rise;
+  const approxHalfW = calloutExtent(c).halfW;
+  let y = anchor.y - CALLOUT_RISE_PX - phase.rise - c.lift;
   if (landing !== null) {
     const l = toScreen(landing);
     if (overlaps(anchor.x, y, approxHalfW * 2, c.sizePx * 1.4, l.x, l.y, 22)) y -= CALLOUT_LANDING_DODGE_PX;

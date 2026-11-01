@@ -38,6 +38,11 @@ export type RectDrawOptions = {
   /** 'dynamic' skips the parts the cached terrain layer already holds. */
   parts?: 'all' | 'dynamic';
   gate?: GateAnim | undefined;
+  /**
+   * World y a colour field's badge stays below: the top of the visible playfield under the HUD band and under
+   * the field's own label when that label slid down into the playfield (D10.8). Default GATE_BADGE_TOP_Y.
+   */
+  badgeTop?: number;
 };
 
 const SAND_DEPTH = 16;
@@ -62,6 +67,12 @@ const GATE_BLOCK_SOLID_T = 0.05;
 const GATE_BLOCK_POP_T = 0.15;
 /** A field that rises off the top of the screen (L8's red wall) keeps its badge in the visible playfield (D10.8). */
 const GATE_BADGE_TOP_Y = 68;
+/** The badge's centre stays this far above the field's bottom: its 14 px half-height over the bottom emitter's 14 px. */
+const GATE_BADGE_FOOT = 28;
+/** The both-outcome badge: a 76 x 28 paper over its ink shadow 3 px lower (VISUAL §4). */
+export const GATE_BADGE_W = 76;
+const GATE_BADGE_H = 28;
+const GATE_BADGE_SHADOW = 3;
 const SWITCH_CAP_UP = 14;
 const SWITCH_CAP_DOWN = 6;
 /** Drawn height above `surfaceY` of a raised plate (cap 14 + base 4 proud). */
@@ -342,12 +353,26 @@ function miniBall(ctx: CanvasRenderingContext2D, x: number, y: number, colour: s
   ctx.fill();
 }
 
+/** Centre y of a colour field's badge: mid-way down the field's visible part below `badgeTop`, clear of its bottom emitter. */
+function gateBadgeY(rect: ColourGateRect, badgeTop: number): number {
+  const bottom = rect.y + rect.h;
+  const visibleTop = Math.max(rect.y, badgeTop);
+  return Math.min(visibleTop + (bottom - visibleTop) / 2, bottom - GATE_BADGE_FOOT);
+}
+
+/** World box of a colour field's badge, paper and shadow: labels keep off it (D10.8). */
+export function gateBadgeBox(rect: ColourGateRect, badgeTop: number): { x1: number; y1: number; x2: number; y2: number } {
+  const x = rect.x + rect.w / 2;
+  const by = gateBadgeY(rect, badgeTop);
+  return { x1: x - GATE_BADGE_W / 2, y1: by - GATE_BADGE_H / 2, x2: x + GATE_BADGE_W / 2, y2: by + GATE_BADGE_H / 2 + GATE_BADGE_SHADOW };
+}
+
 /** Paper badge mid-field: [owner ball + mint check] [other ball + ink cross]. */
 function drawGateBadge(ctx: CanvasRenderingContext2D, x: number, by: number, owner: 0 | 1, blockedPop: number): void {
-  roundRect(ctx, x - 38, by - 11, 76, 28, 8);
+  roundRect(ctx, x - GATE_BADGE_W / 2, by - GATE_BADGE_H / 2 + GATE_BADGE_SHADOW, GATE_BADGE_W, GATE_BADGE_H, 8);
   ctx.fillStyle = INK;
   ctx.fill();
-  roundRect(ctx, x - 38, by - 14, 76, 28, 8);
+  roundRect(ctx, x - GATE_BADGE_W / 2, by - GATE_BADGE_H / 2, GATE_BADGE_W, GATE_BADGE_H, 8);
   fillStroke(ctx, PALETTE.paper, OUTLINE_SMALL);
   miniBall(ctx, x - 24, by, PLAYER_VIEW[owner].col);
   ctx.beginPath();
@@ -383,8 +408,11 @@ function gateBlockedPop(gate: GateAnim | undefined): number {
   return 1 + 0.6 * Math.sin((gate.t / GATE_BLOCK_POP_T) * Math.PI);
 }
 
-/** Two emitters, striped translucent field, both-outcome badge. */
-function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gate: GateAnim | undefined): void {
+/**
+ * Two emitters, a translucent field striped in its own colour, both-outcome badge centred in the field's
+ * visible part below `badgeTop`.
+ */
+function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gate: GateAnim | undefined, badgeTop: number): void {
   const owner: 0 | 1 = rect.colour === 'red' ? 0 : 1;
   const col = PLAYER_VIEW[owner].col;
   const colSh = PLAYER_VIEW[owner].sh;
@@ -400,7 +428,8 @@ function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gat
   ctx.globalAlpha = gateFieldAlpha(gate);
   ctx.fillRect(x - halfW, top, halfW * 2, y - top);
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,.55)';
+  // opaque stripes in the field's own colour: over the sky the translucent red fill alone reads switch-purple
+  ctx.strokeStyle = col;
   ctx.lineWidth = 4;
   for (let sy = top - 10 - (scroll % 16); sy < y + 20; sy += 16) {
     ctx.beginPath();
@@ -425,8 +454,7 @@ function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gat
     ctx.fillStyle = PALETTE.white;
     ctx.fill();
   }
-  const visibleTop = Math.max(top, GATE_BADGE_TOP_Y);
-  drawGateBadge(ctx, x, visibleTop + (y - visibleTop) / 2, owner, gateBlockedPop(gate));
+  drawGateBadge(ctx, x, gateBadgeY(rect, badgeTop), owner, gateBlockedPop(gate));
 }
 
 // ---- bridge ------------------------------------------------------------------------------------
@@ -716,7 +744,7 @@ export function drawRect(
       drawFanColumn(ctx, rect, anim, active);
       break;
     case 'colourGate':
-      drawColourGate(ctx, rect, opts.gate);
+      drawColourGate(ctx, rect, opts.gate, opts.badgeTop ?? GATE_BADGE_TOP_Y);
       break;
     case 'bridge':
       drawBridge(ctx, rect, active, anim, opts);

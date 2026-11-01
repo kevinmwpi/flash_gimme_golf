@@ -18,6 +18,7 @@ import type { PlayerId, WorldId } from '../sim/types';
 import { COPY, lobbyError, nameOf, otherPlayer, type LobbyErrorCopy, type LobbyErrorKind } from './copy';
 import { Icon } from './Hud';
 import { ConfirmDialog } from './Pause';
+import { stepRadio } from './radioGroup';
 import { inviteUrlFor, normaliseRoomCode } from './url';
 import { firstHoleOf, worldOfHole } from './worlds';
 
@@ -154,11 +155,21 @@ function HostCard({ code, lobby, ready, onSetLevel, onStart, onCancel }: { code:
     if (ready) document.querySelector<HTMLButtonElement>('.start-btn')?.focus();
   }, [ready]);
   const statusText = ready ? COPY.lobby.partnerJoined(1) : seenReady ? COPY.lobby.partnerLeft(1) : COPY.lobby.waitingPartner;
-  /** The picker shows the server's choice (lobbyState); a world pick starts at that world's first hole. */
+  /**
+   * The picker shows the server's choice (lobbyState); a world pick starts at that world's first hole (a click on
+   * the shown world keeps its hole). Both rows are radio groups with one tab stop each (the chosen radio, else the
+   * world's first hole) whose arrow keys always send the radio they land on: before the echo of an earlier
+   * press, the shown choice is stale.
+   */
   const world = worldOfHole(lobby.levelId);
+  const holes = levelsOfWorld(world);
+  const tabHole = holes.some((l) => l.id === lobby.levelId) ? lobby.levelId : holes[0]?.id;
+  const startWorld = (w: WorldId | undefined): void => {
+    const first = w === undefined ? null : firstHoleOf(w);
+    if (first !== null) onSetLevel(first);
+  };
   const pickWorld = (w: WorldId): void => {
-    const first = firstHoleOf(w);
-    if (w !== world && first !== null) onSetLevel(first);
+    if (w !== world) startWorld(w);
   };
 
   return (
@@ -195,16 +206,48 @@ function HostCard({ code, lobby, ready, onSetLevel, onStart, onCancel }: { code:
       </div>
       <div className="start-at">
         <span className="lab">{COPY.lobby.startAt}</span>
-        <div className="holes worlds" role="radiogroup" aria-label={COPY.lobby.world}>
+        <div
+          className="holes worlds"
+          role="radiogroup"
+          aria-label={COPY.lobby.world}
+          onKeyDown={(e) => stepRadio(e, (i) => startWorld(WORLDS[i]))}
+        >
           {WORLDS.map((w) => (
-            <button key={w} type="button" role="radio" aria-checked={w === world} aria-label={worldTitle(w)} className={`hole${w === world ? ' on' : ''}`} onClick={() => pickWorld(w)}>
+            <button
+              key={w}
+              type="button"
+              role="radio"
+              aria-checked={w === world}
+              aria-label={worldTitle(w)}
+              tabIndex={w === world ? 0 : -1}
+              className={`hole${w === world ? ' on' : ''}`}
+              onClick={() => pickWorld(w)}
+            >
               {w === world ? worldTitle(w) : COPY.lobby.worldTab(w)}
             </button>
           ))}
         </div>
-        <div className="holes" role="radiogroup" aria-label={COPY.lobby.startAt}>
-          {levelsOfWorld(world).map((level) => (
-            <button key={level.id} type="button" role="radio" aria-checked={lobby.levelId === level.id} className={`hole${lobby.levelId === level.id ? ' on' : ''}`} onClick={() => onSetLevel(level.id)}>
+        <div
+          className="holes"
+          role="radiogroup"
+          aria-label={COPY.lobby.startAt}
+          onKeyDown={(e) =>
+            stepRadio(e, (i) => {
+              const level = holes[i];
+              if (level !== undefined) onSetLevel(level.id);
+            })
+          }
+        >
+          {holes.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              role="radio"
+              aria-checked={lobby.levelId === level.id}
+              tabIndex={level.id === tabHole ? 0 : -1}
+              className={`hole${lobby.levelId === level.id ? ' on' : ''}`}
+              onClick={() => onSetLevel(level.id)}
+            >
               {COPY.lobby.hole(level.order)}
             </button>
           ))}

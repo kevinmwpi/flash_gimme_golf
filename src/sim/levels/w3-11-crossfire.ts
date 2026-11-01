@@ -5,9 +5,15 @@
  * Keys leapfrog fired through a cannon. Behind the tees a full-height BLUE field (230-270) guards the
  * FIRE ledge (0-200, 100 px up), so only blue can reach FIRE. Ahead of them a RED field (700-740)
  * stands on a DOOR (held by FAR) in front of the cannon pit, so only red can lob into the CANNON (breech
- * 780-840 at y 640, sand pit sides 741-779 / 841-879) until FAR opens the door. The cannon fires along
+ * 780-840 at y 640, sand pit sides 741-779 / 841-899) until FAR opens the door. The cannon fires along
  * (440, -730) across a 560 px chasm (900-1460) into the FAR bowl on a plateau 220 px up. Red shoots
  * first. The cup holds FAR (D2).
+ *
+ * The pit's right side rises straight on to the chasm lip at (900, 610); Appendix A put a 20 px flat at
+ * 880-900 (y 620) there. Blue gets right of the red field only through the door, which only FAR holds
+ * open, so a ball resting on that flat when red left FAR was boxed in (door shut, cannon cold, FIRE and
+ * FAR out of reach): a softlock the scoped reset cannot end. Now nothing between the door and the chasm
+ * holds a resting ball but the breech, where the lit cannon fires it or the cold one LOADS it.
  *
  * Intended line (par 8): red moves up toward the red field (x 600-660) -> blue lobs LEFT through its
  * field onto the FIRE ledge (the cannon lights) -> red lobs through the red field into the pit and is
@@ -55,10 +61,9 @@ export const level: Level = compileLevel({
           [200, 520],
           [201, 620], // floor: blue field at 230-270, tees 420 / 470, red field + door at 700-740
           [740, 620],
-          [780, 640], // cannon pit: sand sides 741-779 / 841-879, breech 780-840
+          [780, 640], // cannon pit: sand sides 741-779 / 841-899, breech 780-840
           [840, 640],
-          [880, 620],
-          [GAP_X1, 620],
+          [GAP_X1, 610], // the right side runs on to the chasm lip: no restable flat right of the door
         ],
         720,
       ),
@@ -82,7 +87,7 @@ export const level: Level = compileLevel({
     { kind: 'blocker', id: 'door-gate', centerX: RED_X, h: DOOR_FOOT - DOOR_TOP, bottom: DOOR_FOOT, switchIds: ['far'], activeWhen: false, label: 'DOOR' },
     { kind: 'sand', id: 'pit-l', x1: 741, x2: 779 },
     { kind: 'cannon', id: 'cannon', centerX: 810, w: 60, launch: { x: 440, y: -730 }, fireIds: ['fire', 'far'], label: 'CANNON' },
-    { kind: 'sand', id: 'pit-r', x1: 841, x2: 879 },
+    { kind: 'sand', id: 'pit-r', x1: 841, x2: 899 },
     { kind: 'sand', id: 'landing', x1: 1480, x2: 1720 },
     { kind: 'sand', id: 'back-bunker', x1: 1910, x2: 1960 },
   ],

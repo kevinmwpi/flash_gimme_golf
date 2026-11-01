@@ -1,11 +1,12 @@
 // OWNER: ui
 /**
  * Pause menu (UX.md §3.6) plus the two modal primitives every card shares: `Modal` (viewport-space
- * scrim + paper card, focus trap, Esc, focus restore, scroll cue on short viewports) and `ConfirmDialog`. Local/solo: the loop stops
- * stepping; online: the sim keeps running and the header says so. Restart is host-only online and
- * announced to the guest by the sim's `levelRestart` event (Callouts toasts it).
+ * scrim + paper card, focus trap, Esc, focus restore, scroll cue on short viewports, entry grace) and
+ * `ConfirmDialog`. Local/solo: the loop stops stepping; online: the sim keeps running and the header
+ * says so. Restart is host-only online and announced to the guest by the sim's `levelRestart` event
+ * (Callouts toasts it).
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PlayerId, SimMode } from '../sim/types';
 import type { InputDevice } from '../view/view';
 import { COPY, otherPlayer } from './copy';
@@ -19,7 +20,7 @@ export type ModalProps = {
   labelledBy: string;
   /** Esc / gamepad B */
   onClose?: (() => void) | undefined;
-  /** tap on the scrim (LevelIntro continues; Pause resumes) */
+  /** tap on the scrim (LevelIntro continues; Pause resumes); ignored inside the entry grace (CARD_INPUT_GRACE_MS) */
   onScrimClick?: (() => void) | undefined;
   /** card width preset */
   size?: 'narrow' | 'default' | 'wide' | 'xwide';
@@ -72,9 +73,74 @@ function useScrollCue(cardRef: React.RefObject<HTMLDivElement | null>): void {
   }, [cardRef]);
 }
 
+/**
+ * A card ignores presses for this long after it opens, and a held Enter/Space never acts on it. A card opened by a
+ * press on another card (Next hole, Retry, See results, Continue to World N+1, Play again, Restart) would otherwise
+ * take the second half of a doubled click, tap or Enter on its scrim or autofocused button: the intro card that
+ * teaches a hole was gone before anyone read it (BUILD_DECISIONS D6), and online the first continue from either
+ * seat counts, so one seat's slip took it from both. The card animates in for 220 ms; Escape and Tab work at once.
+ */
+export const CARD_INPUT_GRACE_MS = 400;
+
+/** The keys that activate a focused button. */
+const ACTIVATION_KEYS: ReadonlySet<string> = new Set(['Enter', ' ']);
+
+/**
+ * The entry grace (CARD_INPUT_GRACE_MS), from the commit that shows the card. Window capture listeners see the
+ * card's events before React does, so an ignored press never reaches the scrim, a button or the click sound, and
+ * never moves focus off the autofocused button. A pointer click counts from its press: one that went down inside
+ * the grace stays ignored when released after it. Enter/Space inside the grace, or repeating, is cancelled on
+ * keydown, so the focused button never activates.
+ */
+function useEntryGrace(overlayRef: React.RefObject<HTMLDivElement | null>): void {
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    if (overlay === null) return;
+    const openedAt = performance.now();
+    const settled = (): boolean => performance.now() - openedAt >= CARD_INPUT_GRACE_MS;
+    const inCard = (e: Event): boolean => e.target instanceof Node && overlay.contains(e.target);
+    /** the last pointer press on the card went down inside the grace (read by its mousedown and its click) */
+    let pressedEarly = false;
+    const onPointerDown = (e: PointerEvent): void => {
+      if (!inCard(e)) return;
+      pressedEarly = !settled();
+      // The scrim acts on pointerdown (Modal's onScrimClick).
+      if (pressedEarly && e.target === overlay) e.stopPropagation();
+    };
+    // An ignored press keeps focus where it is: one on the scrim would blur the autofocused button, and a later
+    // Enter would then reach nothing.
+    const onMouseDown = (e: MouseEvent): void => {
+      if (pressedEarly && inCard(e)) e.preventDefault();
+    };
+    const onClick = (e: MouseEvent): void => {
+      if (!inCard(e)) return;
+      const early = !settled() || (e.detail > 0 && pressedEarly);
+      pressedEarly = false;
+      if (!early) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (ACTIVATION_KEYS.has(e.key) && inCard(e) && (e.repeat || !settled())) e.preventDefault();
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('click', onClick, true);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [overlayRef]);
+}
+
 export function Modal({ labelledBy, onClose, onScrimClick, size = 'default', scrim = 'light', role = 'dialog', className, children }: ModalProps): React.JSX.Element {
+  const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   useScrollCue(cardRef);
+  useEntryGrace(overlayRef);
 
   useEffect(() => {
     const card = cardRef.current;
@@ -116,6 +182,7 @@ export function Modal({ labelledBy, onClose, onScrimClick, size = 'default', scr
 
   return (
     <div
+      ref={overlayRef}
       className={`overlay overlay-${scrim}`}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget && onScrimClick !== undefined) onScrimClick();
@@ -150,6 +217,11 @@ export type ConfirmDialogProps = {
   onCancel(): void;
 };
 
+/**
+ * A `danger` confirm (quit, leave the room, reset bests) focuses its cancel button, the least destructive action
+ * (WAI-ARIA alertdialog), so a held or doubled Space/Enter that opened it never also confirms it; others focus
+ * the confirm.
+ */
 export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, danger = false, onConfirm, onCancel }: ConfirmDialogProps): React.JSX.Element {
   return (
     <Modal labelledBy="confirm-title" onClose={onCancel} size="narrow" scrim="dark" role="alertdialog">
@@ -158,10 +230,10 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, danger =
       </h2>
       <p className="body">{body}</p>
       <div className="button-row">
-        <button type="button" className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm} data-autofocus>
+        <button type="button" className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm} data-autofocus={danger ? undefined : true}>
           {confirmLabel}
         </button>
-        <button type="button" className="btn btn-paper" onClick={onCancel} data-sfx="back">
+        <button type="button" className="btn btn-paper" onClick={onCancel} data-sfx="back" data-autofocus={danger ? true : undefined}>
           {cancelLabel}
         </button>
       </div>

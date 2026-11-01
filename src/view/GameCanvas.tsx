@@ -4,8 +4,9 @@
  * DPR changes, ResizeObserver on the wrapper), the fixed-step loop with a PERSISTENT pending command
  * queue (drained by the first step of a frame, accumulating while paused, setAim coalesced in place),
  * the online substitution (GameClient.interpolated / drainEvents / renderTime, snap on
- * discontinuities, local echo of the aim), ONE input poll per frame, the ViewState, the aim preview
- * (real predictShot, memoised) and the renderFrame call. React never re-renders per frame: HUD data
+ * discontinuities, local echo of the aim), ONE input poll per frame, the ViewState (with the Settings
+ * reduced-motion knob refreshed every frame), the aim preview (real predictShot, memoised) and the
+ * renderFrame call. React never re-renders per frame: HUD data
  * arrives through `onFrame` (10 Hz, plus every phase change) and `onEvents`; the power meter is
  * written as CSS custom properties on `hudRef` every frame.
  */
@@ -18,10 +19,11 @@ import { isRectActive, switchMaskOf } from '../sim/terrain';
 import type { Aim, Level, PlayerCommand, PlayerId, SimConfig, SimEvent, SimPhase, SimState, StepResult, Vec } from '../sim/types';
 import { DT, MAX_POWER, MIN_POWER, VIEWPORT_H, VIEWPORT_W } from '../sim/types';
 import type { AudioSystem } from './audio';
-import { createInputSystem, type InputSystem, type MissKind, type PointerDrag, type UiAction } from './input/index';
+import { controllingSeat, createInputSystem, type InputSystem, type MissKind, type PointerDrag, type UiAction } from './input/index';
 import { renderFrame } from './render/index';
 import {
   applySimEvents,
+  createMotionPreference,
   createViewState,
   pulseMissRings,
   setCameraMode,
@@ -239,15 +241,19 @@ function fanActive(level: Level, sim: SimState): boolean {
   return false;
 }
 
-/** Memoised `predictShot` for the active slot (ARCH §2.1): local aim when a local seat owns it, else the sim's. */
-function createAimPreviewer(): (sim: SimState, level: Level, localAim: Aim | null) => AimPreview | null {
+/**
+ * Memoised `predictShot` for the active slot (ARCH §2.1): local aim when a local seat owns it, else the sim's.
+ * `remote` (the partner's live aim online: faded, with its AIMING tag) comes from the seats, never from a
+ * missing local aim: input polls before the step, so on the frame a turn starts the local aim is not seeded
+ * yet, and a local game would flash `RED AIMING` at every hand-off.
+ */
+function createAimPreviewer(): (sim: SimState, level: Level, localAim: Aim | null, remote: boolean) => AimPreview | null {
   let key = '';
   let cached: AimPreview | null = null;
-  return (sim, level, localAim) => {
+  return (sim, level, localAim, remote) => {
     if (sim.phase !== 'aiming') return null;
     const p = sim.activePlayer;
     const aim = localAim ?? sim.players[p].aim;
-    const remote = localAim === null;
     const [b0, b1] = sim.balls;
     const next = `${sim.levelId}|${p}|${aim.angle}|${aim.power}|${switchMaskOf(level, sim.switches)}|${b0.pos.x}|${b0.pos.y}|${b1.pos.x}|${b1.pos.y}|${remote ? 1 : 0}`;
     if (next === key) return cached;
@@ -325,6 +331,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   const previewFor = createAimPreviewer();
   const tickAim = createAimTicker();
   const trackMiss = createMissTracker();
+  const reducedMotion = createMotionPreference();
   const pending: PlayerCommand[] = [];
   let acc = 0;
   let last = performance.now();
@@ -402,6 +409,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     enqueue(pending, frameIn.commands);
     handleUi(frameIn.uiActions);
     for (const action of externalUiActions?.current.splice(0) ?? NO_ACTIONS) applyUi(action);
+    view.reducedMotion = reducedMotion();
     const alpha = session.kind === 'local' ? stepLocal(now) : stepOnline(session.client, now);
     syncLevel();
     updateView(view, prev, sim, alpha, frameDt);
@@ -410,7 +418,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     if (frameIn.miss !== null && !paused) pulseMissRings(view, sim);
     const miss = paused ? null : trackMiss(frameIn.miss, frameIn.drag !== null, now);
     const localAim = input.localAim();
-    view.aimPreview = previewFor(sim, level, localAim);
+    view.aimPreview = previewFor(sim, level, localAim, controllingSeat(sim, seats) === null);
     tickAim(audio, sim, localAim);
     audio.setFan(fanActive(level, sim), FAN_INTENSITY);
     ctx.setTransform(transformScale, 0, 0, transformScale, 0, 0);
