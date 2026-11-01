@@ -7,7 +7,9 @@ sequences run with real `SimEvent` shapes, zero page errors; every sound rendere
 levels in section 2; the AM voices probed for envelope leakage (section 3); the music scheduler probed for stalls and
 hidden tabs (section 7); the section 1 surface compiled with the project's `tsc` 5.9.3 under `--strict --lib dom`.
 
-Section 10 lists what changed since v1 and why, item by item against the critique.
+Section 10 lists what changed since v1 and why, item by item against the critique. Section 11 adds Worlds 2-3
+(BUILD_DECISIONS D10.11): the trap, cannon, reset and skip voices, one bed per world and the fan-stop fix; it amends
+sections 2, 3, 7 and 8 where it says so.
 
 ## 0. Direction in one paragraph
 
@@ -410,3 +412,155 @@ Alternative if the owner prefers SFX-only: delete the `music` object, `duck()` a
 | Polyphony keyed by player; multi-tick scheduling | `admit(name, key, at)` with `name:playerId` keys; `at = base + tickOffset * DT` (cap 250 ms); sentinel-based slot release; jingles use `at + 0.35` | demo "both balls fellOffWorld" / "ticks 0 and 2" |
 | Typecheck | `declare global` for `webkitAudioContext`; `OscOpts/NoiseOpts/NoteOpts/SfxOpts/FilterOpts/LfoOpts`; `createAudio({ seed, compressor })` | `tsc` exit 0 |
 | Risks | music bus -15 dB (re-measured); compressor knee 6 + measured transient/makeup effect documented; `setTimeout` removed from voice bookkeeping and jingle delays; `delaySec` for online; shimmer octave/level and campaignComplete length fixed; Settings reduced to mute + music + volume; iOS checklist kept explicit; `TUNE` literals for the fatigue list | sections 3, 5, 7 |
+
+## 11. Worlds 2-3: traps, cannons, skipped turns, one bed per world (BUILD_DECISIONS D10.4, D10.11)
+
+What World 2 (Lift & Lock) and World 3 (Sky Machines) add, in the same rules as sections 0-3: each device gets its
+own timbre family, no failure sound is punishing, nothing new loops (a LIT cannon and an ARMED trap stay visual
+only), and every fixed pitch, beds included, stays on the white-key set so the C-major cues never clash. Code:
+`src/view/audio.ts`; tests: `src/view/__tests__/audio.test.ts` (11.5); measurements: 11.6.
+
+Surface additions: `SfxName` and `Sfx` gain `trapCaught`, `trapFreed`, `trapReturn`, `cannonLoad`, `cannonFire`,
+`turnSkipped(playerId)` and `flightTimeout` (`play(name)` maps each by name; `turnSkipped` plays red's note);
+`MusicBed` gains `setTrack(world: WorldId)` and `readonly track: WorldId`; audio.ts exports `MUSIC_TRACKS` and the
+`MusicTrack` type. No new persistence key, no new App or GameCanvas call.
+
+### 11.1 New SFX
+
+Same columns as section 2; peak / loudest-50-ms RMS dBFS at volume 0.8 through the shipped chain, measured as 11.6
+says (a warmed compressor, so compare them with each other and with the re-measured existing sounds quoted here, not
+with section 2's column).
+
+| Event -> sfx | Recipe | Jitter | Poly, key | Peak / RMS |
+|---|---|---|---|---|
+| **trapCaught** (rest in armed jaws, or the trap re-armed around a resting ball) | "SNAP!", soft: no buzz, no falling minor interval. Snap: noise bandpass 2.6 kHz Q1.4 A1 D18 -14 dB. Jaw thunk: sine 190 to 95 Hz over 40 ms D50 -13 dB. Clink at +30 ms: sine E6 1318.5 Hz D140 `TUNE.trapClink` = -16 dB with sine C7 2093 Hz D80 at -22 dB; settle tick: sine E6 at +110 ms D60 -24 dB. | +/-25 c | 2 / 250, player | -22.3 / -33.2 |
+| **trapFreed** (a release held, or the cup started holding one) | "FREE!". At the event: latch noise highpass 2.2 kHz Q0.7 D10 -14 dB; jaws swinging open, noise bandpass 1.5 to 4 kHz over 120 ms Q2 A5 D120 -20 dB; ring sine C7 at +10 ms D60 -22 dB. Chime: triangle E5 at +140 ms D80 -14 dB, then A5 at +220 ms D160 -13 dB (LP 3 kHz): the release plate's E4-A4 confirm one octave up, after it. | none | 2 / 200, player | -22.3 / -33.2 |
+| trapFreed `{chime: false}` (on a sink or gimme tick) | Latch, swing and ring only. | none | shared | -22.3 / -41.6 |
+| **trapReturn** (scoped reset, BACK +1) | The reverse of fellOffWorld's falling whistle: triangle 260 to 1040 Hz over 240 ms, LP 2.5 kHz, A10 D220 S50 % hold 240 R40, -12 dB, multiplicative tremolo 14 Hz depth 0.3. Pop of the ball reappearing at +280 ms (`popVoice`): sine 660 to 330 Hz over 40 ms D60 -12 dB + noise highpass 3 kHz D12 -18 dB. | none | 2 / 400, player | -20.7 / -29.2 (fellOffWorld -17.7 / -26.0) |
+| **cannonLoad** (rest on a cold breech) | "LOADED!". Iron tok: sine 220 to 110 Hz over 50 ms D80 -10 dB + square 165 Hz LP 900 Hz D50 -18 dB. Two ratchet clicks: noise highpass 3 kHz D8 at +90 ms (-15 dB) and +150 ms (-17 dB). | +/-20 c | 2 / 250, player | -18.0 / -30.8 |
+| **cannonFire** (a lit breech fires, on entry or the tick a loaded ball's cannon lights) | "BOOM!", its own low thoom, never the spring boing (the sim emits `cannonFire` instead of `spring`). Thoom: sine 120 to 42 Hz over 220 ms, A2 D320, -3 dB. Punch: triangle 240 to 90 Hz over 80 ms LP 1.2 kHz D90 -10 dB. Blast: noise lowpass 1.4 kHz to 250 Hz over 350 ms Q0.7, playbackRate 0.7, A2 D180 S25 % hold 200 R250, -8 dB. Smoke hiss at +120 ms: noise bandpass 700 Hz Q0.6, A60 D350 S30 % hold 400 R400, -24 dB. Nothing above about 3 kHz. At the event tick, no fuse delay (the BOOM! puff and shake land with it). | +/-30 c | 2 / 300, player | -12.2 / -19.3 (spring -9.6 / -18.6) |
+| **turnSkipped** `{playerId}` (the waiting ball) | The skipped ball's own note, muffled, a gentle "not you": triangle C5 (red) or G5 (blue), LP 900 Hz, A2 D70, `TUNE.turnSkipped` = -12 dB. The shooter's ding follows 120 ms later (11.2). | none | 1 / 300, name | -22.5 / -34.6; note + ding -16.2 / -26.7 against the ding alone -16.0 / -26.7: it adds nothing to the hand-off's level |
+| **flightTimeout** (the 30 s watchdog put a moving ball back on its safe spot, no penalty) | A soft puff, noise bandpass 900 Hz Q0.8 A10 D100 -18 dB, and the reappearing pop (`popVoice`) at +40 ms, -16 dB. Deliberately not trapReturn's warble, which means +1. The solver's loops pass proves the watchdog never fires on the shipped holes. | none | 2 / 400, player | -23.8 / -38.8 |
+
+### 11.2 Router rules (additions to section 2)
+
+- `routeEvent` is exhaustive: its `default` branch assigns the event to `never`, so an event type the sim adds fails
+  `npm run typecheck` until it is routed or listed as silent. Silent on purpose: `levelStart`, `playStart`, and
+  `bridgeToggle` for kinds outside the whitelist below.
+- **Skipped turn.** The sim emits `turnSkipped` (the waiting ball) in the same tick as, and just before, the `turnStart`
+  it explains, and that `turnStart` has `sameAsBefore: true` (the free ball shoots again). The router plays the skipped
+  ball's muffled note at the event time and forces the shooter's ding `TURN_SKIP_LEAD_SEC` = 120 ms later. A
+  `sameAsBefore` hand-off without a skip keeps World 1's whoosh-only rule (partner sank). Every skip sounds, as every
+  skip shows the banner (D10.10).
+- **BACK +1 lead.** A skip note or turn ding within `TRAP_RETURN_LEAD_SEC` = 350 ms after a `trapReturn` waits for its
+  warble and pop (`handOffAt`). The lead is kept on the audio clock (`lastReturnAt`), not by tick, because a reset that
+  changes a switch defers its `turnStart` to a later tick (ARCH R5, D10.5), often in the next frame (Bait: the reset
+  ball leaves the BAIT plate and the door closes).
+- **trapFreed on a hole-out tick.** When the cup starting to hold a release frees a ball, the `sink` / `gimme` on that
+  tick carries the moment: trapFreed drops its chime and keeps its latch (the batch pre-scan `batchOf` collects the
+  hole-out ticks and the skip ticks).
+- **bridgeToggle whitelist.** The wooden slide is voiced only for rects that appear or vanish: `bridge`, `blocker`
+  (doors) and `fan` (`SLIDE_KINDS`). The sim never emits `bridgeToggle` for a trap or a cannon (D10.4); the guard stays
+  so a device state change can never play the slide. Their moments are trapCaught / trapFreed / cannonFire plus the
+  plate's own confirm.
+- **cannonFire timing.** A loaded ball fires one tick after its FIRE plate's `switchOn` (plates press on the presser's
+  `ballRest` tick), so the thoom overlaps the switch confirm by design. Neither is delayed: online audio is aligned to
+  render time with `delaySec` = 0.
+- **Waiting is silent.** CAUGHT and LOADED sound once, when they begin; the HUD chip carries them from then on.
+- **The fan stops when a game is left** (NEXT_STEPS #6). GameCanvas's loop `dispose()` calls `setFan(false, …)` (the
+  intensity is ignored when stopping), and `setFan`'s stop path no longer waits for `ready()` (only the start does), so
+  the stop also works while the context is suspended or interrupted (iOS after a call). Worlds 2-3 have no fans
+  (LEVELS.md decision 5); the engine and tests still do.
+
+### 11.3 Mixing and the fatigue watch
+
+- Levels sit inside section 3's bands: the trap and skip cues at confirmation level (about -22 dBFS, under switchOn's
+  -16.5), cannonLoad with the switches (-18), cannonFire a hero hit under the spring, trapReturn under fellOffWorld,
+  flightTimeout the quietest of the teleports.
+- Two new `TUNE` literals join the watch list: `turnSkipped: -12` (every skipped turn; Bait can hand the climber turn
+  after turn) and `trapClink: -16` (every catch; most of Booby Trap's short lobs end in the snare). Either can be pulled
+  6 dB in one edit without losing the moment (the banner and the ding carry a skip, the SNAP! callout a catch). Playtest
+  watch: whether either grates by hole 9.
+- Busy ticks, measured with real event batches: seat catch (rollStop + trapCaught + switchOn + door) -15.3 / -27.4;
+  release by a plate (rollStop + switchOn + trapFreed with chime) -14.9 / -31.5; release by the cup (sink + switchOn +
+  trapFreed without chime) -10.9 / -21.9, against World 1's sink + cup switch at -11.7 / -21.9; BACK +1 tick
+  (trapReturn + switchOff + door + skip note + ding) -16.2 / -26.7; L10's chain reaction (rollStop + switchOn + bridge
+  + cannonFire one tick later) -10.6 / -19.0. That chain is the loudest moment in the game, 1.1 dB above the gold
+  jingle and 1.3 dB under the same chain with a spring (-9.3). At volume 1.0 it measures -4.1 dBFS, as does the release
+  by the cup (the gold jingle -4.6): no clipping. Section 3's policy stands: if playtests find these hot, lower
+  `SFX_BUS_DB`, never the per-voice numbers.
+
+### 11.4 One bed per world
+
+| World | Centre | Progression (2 bars each, 16-bar cycle) | BPM | Pad LP | Plucks (`play` mode) | Pluck odds: bar downbeat / other beats / resting bars, per 8th [on, and] | Plucks/s expected | Measured peak / RMS (title and play) |
+|---|---|---|---|---|---|---|---|---|
+| 1 Teach | C major | Cmaj7 - Am7 - Fmaj7 - G6 (section 7, unchanged) | 84 | 900 Hz | triangle LP 2.4 kHz D320 -22 dB + sine octave D120 -32 dB | [0.5, 0.5] / [0.3, 0.3] / 0.08 | 0.79 | -27.6 / -36.5 |
+| 2 Lift & Lock | D Dorian | Dm7 - Em7 - Fmaj7 - G6: the bass climbs D-E-F-G, the lift | 96 | 800 Hz | square LP 1.8 kHz D180 -24 dB + sine octave D80 -34 dB, leaning on the offbeat 8th like clockwork: the lock | [0.25, 0.45] / [0.15, 0.45] / 0.08 | 0.81 | -26.9 / -35.4 |
+| 3 Sky Machines | F | Fmaj7 - G6 - Em7 - Am7 (IV-V-iii-vi that never lands on C, so it floats) | 76 | 1100 Hz | triangle LP 2.2 kHz D600 -24 dB + sine octave D250 -30 dB, sparse and long | [0.45, 0.2] / [0.25, 0.15] / 0.05 | 0.47 | -28.1 / -36.8 |
+
+Chords (pad tones; bass; shimmer; pluck pool), World 2: Dm7 D4 F4 A4 C5; D3; A5; C5 D5 F5 G5 A5. Em7 E4 G4 B4 D5; E3;
+B5; D5 E5 G5 A5 B5. Fmaj7 F4 A4 C5 E5; F3; C5; C5 E5 F5 G5 A5. G6 G4 B4 D5 E5; G3; D5; D5 E5 G5 A5 B5. World 3: Fmaj7
+F4 A4 C5 E5; F3; G5; C5 E5 G5 A5 B5. G6 G4 B4 D5 E5; G3; A5; D5 E5 G5 A5 B5. Em7 E4 G4 B4 D5; E3; B5; B4 D5 E5 G5 A5.
+Am7 A3 C4 E4 G4; A2; E5; C5 D5 E5 G5 A5. World 1 is section 7's table.
+
+- **White keys only.** Every pad, shimmer and pluck pitch is a white key at or below B5 and every bass a white key at or
+  below 220 Hz, with no dominant 7th anywhere. The fixed cues are white keys (player notes C5 / G5, the switch E4-A4
+  confirm, the gimme and sink chimes, the C-major jingles), so a bed in another key (D major's C#) would sour each of
+  them. Tested as data.
+- **Same budget and section 7 checklist on every track.** One scheduler reads the track at schedule time: 4 chords of 4
+  pad tones (8 detuned triangles + sub + shimmer per chord), bass on beats 1 and 3, at most two plucks a beat, every
+  timbre lowpassed below 2.5 kHz (the pad cutoff tops out at 1.3 kHz with its drift), no percussion, nothing above B5,
+  sub-0.5 Hz modulation, and at most about one pluck a second on average (the table's expected rates; tested), 12-18
+  dB under the SFX.
+- **Who picks the track (amends section 7's "who calls what").** Every `levelStart` (createSim, a level change, a
+  restart, a `?state=` resume's synthetic one, an online client's first) selects the hole's world in `trackBed`, before
+  the ready() gate. The id is resolved with `hasLevel` + `levelById` (an unknown id, such as the tests' `'x'`, keeps the
+  current track; loop.test.ts's registry mock provides both). Within a world it is a no-op, so one bed runs unbroken
+  across a world's holes and its intro and results cards; the router's in-game mode changes (play on playStart /
+  turnStart / ballHit, title on level or campaign complete) go through an internal path that never moves the track.
+  The shell's existing `music.setMode('title')` (App, on every screen outside a game: Title, Lobby, rejoin) also returns
+  the bed to World 1, the game's theme, so the Title and the Lobby always play World 1, and World 1's bed still flows
+  from the Title into hole 1 without a restart.
+- **Track change.** `setTrack(world)` while playing: `halt(TRACK_XFADE_SEC = 0.8)` fades the old pad (one booked but not
+  yet sounding is cancelled outright, section 7's invariant) and `start()` restarts the beat clock on the new track's
+  first chord in the same mode, whose pad's 1.2 s attack overlaps the fade. Bass and plucks the old track already booked
+  (at most 150 ms ahead in a visible tab) ring out on their own decay. Before unlock, or with music off, the world is
+  only recorded. Measured (11.6) on switches W1 to W2, W2 to W3, W3 to W1, W1 to W3 and W3 to the Title, 10 s into a
+  bed: the 100 ms peaks go from the old bed's -34..-44 dBFS just before, to -32..-37 at the switch (the new bass
+  onset over the fading pad), then the new bed's -29..-38 as its pad comes in. The loudest moment in the 3 s after any
+  switch, -28.4, is under every bed's own steady peak (-26.9..-28.1): no burst.
+
+### 11.5 Tests (`src/view/__tests__/audio.test.ts`)
+
+- Every `SfxName` is admitted on its own, one voice each (played back to back, the names after the 24th hit
+  `GLOBAL_MAX_VOICES`, so the old loop never exercised them); the name list is checked against `SfxName` both ways.
+- Each device event reaches its own voice at the event time, keyed per ball (both balls on one tick sound twice); a
+  cannon never plays the spring; the trapFreed chime and its sink / gimme suppression; the skip note then the forced
+  ding at +120 ms (and no ding for a plain partner-sank continuation); the BACK +1 lead on the same tick and on a
+  deferred tick in the next frame; the bridgeToggle whitelist; L10's chain keeps all four cues.
+- The fan stops while the context is suspended, and still starts only on a running one.
+- Track data: every bed pitch on the white-key set at or below B5, basses at or below 220 Hz, section 7's budget on
+  every track, World 1 unchanged.
+- Track choice: the shipped campaigns open on their world's bed (real sim, before unlock); a world chosen before unlock
+  starts on its first chord; the crossfade (fade end, new first chord, mode kept, no hold before a first automation
+  event); a switch before the first chord sounds cancels it; same-world and unknown ids leave the bed alone; in-game
+  title keeps the world, the shell's title returns to World 1; music off only records; per world, the bass walks every
+  other beat at the track's tempo on the sounding chord's root, and every pluck has the track's timbre, lands on a beat
+  or its "and" and comes from the sounding chord's pool.
+- The shipped devices through the real sim (crafted drops on the holes that introduce them, fed to `handleEvents` one
+  step at a time as GameCanvas does): Booby Trap's catch, a skipped turn (the waiting ball's note, then the shooter's
+  ding 120 ms later, from the real same-tick batch) and the release with its chime; Load & Fire's load, then the thoom
+  the tick after the partner lands on FIRE, with no spring and no bridgeToggle anywhere.
+- Mutation check (scratch copy): each of 24 one-line regressions in audio.ts, reverting one rule of this section, fails
+  at least one test.
+
+### 11.6 How 11.1-11.4 were measured
+
+The real `src/view/audio.ts`, bundled with esbuild (IIFE), rendered in headless Chromium through an
+`OfflineAudioContext` behind a proxied `window.AudioContext` (state running, a fake clock, `setInterval` captured so the
+music scheduler is driven by hand every 50 ms of the fake clock): 44.1 kHz mono, volume 0.8, the shipped chain. SFX
+and event batches are scheduled at t = 0.6 s, after the compressor has settled; at render start Chrome reads transients
+2-4.5 dB lower, which is why section 2's column (render start, an earlier build) runs quieter than the warmed
+re-measures here (spring -9.6 / -18.6, switchOn -16.5 / -32.0, hazardBlock -13.1 / -25.9, turnStart ding -16.2 /
+-27.0; the gold jingle reads -11.7 / -17.8 both ways). Beds: 48 s per track and mode. Volume 1.0 checks use
+`setVolume(1)`. The harness is a scratch tool, not in the repo, like section 4's scripts.
