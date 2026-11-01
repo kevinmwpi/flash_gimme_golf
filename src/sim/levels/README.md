@@ -70,12 +70,14 @@ an x), quantises compiled y values with `quantize2` and derives `mechanicsPresen
 
 Walls are stacked: the field (200–520) stands on the door (520–640), the L2 cap (200–350) on the window
 (350–520) on the door. A wall foot sinks `WALL_EMBED_PX` (20) below the fairway so a door that closes on a
-resting ball ejects it SIDEWAYS (nearest face) and never down into the dirt (D2). `validateLevel` accepts a
-wall that stands on the fairway (foot within `[fairway − 2, fairway + 20]`) or on another wall rect, so the
-Bait and Grand Machine doors stand FLUSH on their channel floors (D10.12; a door closing on a ball in its
-doorway still ejects it sideways, `devices.test.ts`). Rect ids and switch ids are disjoint within a level
-(`door-gate`, `window-gate`), and a cannon's funnel sand keeps its `props` order around the breech (pads are
-looked up in `rects` order).
+resting ball ejects it SIDEWAYS (nearest face) and never down into the dirt (D2). A window stacked on another
+wall needs no embed (L2's on its DOOR, L8's on the blue field): the ejection skips every face whose exit point
+lies inside terrain or another solid rect, so a window shutting on a ball parked on the wall below leaves it
+sideways too (`levels.test.ts`). `validateLevel` accepts a wall that stands on the fairway (foot within
+`[fairway − 2, fairway + 20]`) or on another wall rect, so the Bait and Grand Machine doors stand FLUSH on their
+channel floors (D10.12; a door closing on a ball in its doorway still ejects it sideways, `devices.test.ts`).
+Rect ids and switch ids are disjoint within a level (`door-gate`, `window-gate`), and a cannon's funnel sand
+keeps its `props` order around the breech (pads are looked up in `rects` order).
 
 ### Validity rules (`validateLevel`, all tested in `levels.test.ts` and `devices.test.ts`)
 
@@ -175,11 +177,17 @@ found a softlock (D10.12). Three holes change:
   then left FAR, blue was boxed in: the door was shut, the cannon cold, FIRE behind the blue field and FAR across
   the chasm, and the scoped reset never ends that. Now nothing between the door and the chasm holds a resting
   ball except the breech, where a lit cannon fires it and a cold one LOADS it (`levels.test.ts` drops a ball at
-  every x there). Red cannot come back to rest free on the near side either: 0 of 64,792 leftward shots from
-  eight spots on the far plateau (1° × 1 power) do, and 1,886 end LOADED. So when the door shuts on blue in the
-  doorway and pushes it into the cold pit, red is still on the plateau and fires blue by holding FAR again or by
-  sinking. The launcher rows and the golden line are unchanged, and every solver criterion on the hole passes
-  (`traps-rescuable` 18 / 18).
+  every x there). The launcher rows and the golden line are unchanged, and every solver criterion on the hole
+  passes (`traps-rescuable` 18 / 18).
+- **L11 Crossfire, known residual (not fixed, documented).** Blue LOADED in the cold cannon while red rests free
+  on the near side cannot be undone: red gets every turn (WAITING rule) but can reach neither FIRE (behind the
+  blue field) nor FAR (across the chasm), so only the host's *Restart hole* ends it. Reaching it takes two
+  deliberate wrong-way shots back across the 560 px chasm: red lobbing back from FAR (948 of 395,280 leftward
+  shots) or from the 20 px plateau flat at 1460–1480 (140 of 1,132,560 fine-grid shots), and then blue lobbing
+  back from FAR into the pit, or the door shutting on blue in the doorway. Seeded random play, the solver's
+  traps pass and 3,120 noisy Monte Carlo games never reached it. A red-only FIRE plate on the door's top was
+  tried as a rescue and rejected: from the best spot only 0.48 % of a 1° × 1-power grid fires blue, and it
+  would put a second FIRE sticker inside the red field on every normal playthrough. Revisit with playtest data.
 - **Ids.** Rect ids and switch ids are disjoint (D10.8): L8 `window` → `window-gate` and `door` → `door-gate`;
   L9, L11 and L12 `door` → `door-gate` (L5 and L6 already used `door-gate`).
 - **Vocabulary** (D2). The Appendix's `wall` is a permanent blocker; its `devices` are `trap` / `cannon` props

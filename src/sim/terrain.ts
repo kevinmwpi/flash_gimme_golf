@@ -266,17 +266,21 @@ export function collidersFor(colliders: readonly Collider[], playerId: PlayerId)
 
 // ---- contacts -------------------------------------------------------------------------------------
 
-function insideAnyPiece(p: Vec, colliders: readonly Collider[]): boolean {
-  for (const c of colliders) if (c.kind === 'terrain' && pointInPiece(c.piece, p)) return true;
+/** True when p is inside a terrain piece or inside a solid rect other than `self` (this ball's colliders). */
+function insideOtherSolid(p: Vec, self: LevelRect, colliders: readonly Collider[]): boolean {
+  for (const c of colliders) {
+    if (c.kind === 'terrain' ? pointInPiece(c.piece, p) : c.rect !== self && rectContains(c.rect, p)) return true;
+  }
   return false;
 }
 
 type Face = { normal: Vec; depth: number };
 
 /**
- * Ejection for a centre INSIDE an AABB: the nearest face whose exit point is not inside terrain
- * (a door standing on the fairway closes on a parked ball: it must leave sideways, never through
- * the floor). Falls back to the nearest face.
+ * Ejection for a centre INSIDE an AABB: the nearest face whose exit point is not inside terrain or
+ * another solid rect (a door standing on the fairway, or a window stacked on a wall a ball can rest
+ * on, closes on a parked ball: it must leave sideways, never into the floor or the wall below).
+ * Falls back to the nearest face.
  */
 function rectEscape(rect: LevelRect, p: Vec, colliders: readonly Collider[]): Face {
   const faces: Face[] = [
@@ -289,7 +293,7 @@ function rectEscape(rect: LevelRect, p: Vec, colliders: readonly Collider[]): Fa
   for (const face of faces) {
     const reach = face.depth + BALL_RADIUS;
     const exit: Vec = { x: p.x + face.normal.x * reach, y: p.y + face.normal.y * reach };
-    if (!insideAnyPiece(exit, colliders)) return face;
+    if (!insideOtherSolid(exit, rect, colliders)) return face;
   }
   return faces[0] ?? { normal: UP, depth: 0 };
 }

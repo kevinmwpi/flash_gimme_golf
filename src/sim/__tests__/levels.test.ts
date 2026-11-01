@@ -28,13 +28,13 @@ import {
   worldOf,
   worldTitle,
 } from '../levels/index';
-import { predictLaunch } from '../physics';
+import { evaluateSwitches, predictLaunch } from '../physics';
 import { encodeSnapshot } from '../serialize';
 import { createSim, runReplay, stepSim } from '../sim';
 import { rectContains, rectSwitchIds, surfaceYAt, surfaceYOnPiece } from '../terrain';
 import * as simTypes from '../types';
-import type { BlockerRect, CannonRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig, TrapRect, Vec } from '../types';
-import { BALL_RADIUS, GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, VIEWPORT_H } from '../types';
+import type { BallState, BlockerRect, CannonRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig, SimEvent, TrapRect, Vec } from '../types';
+import { BALL_RADIUS, GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, REST_TICKS, VIEWPORT_H } from '../types';
 import { GOLDEN_LINES, goldenConfig } from './levels-golden';
 
 /** The wall height LEVELS.md verified against the 6.5 shot speed (vacuum apex 341 + radius 12 + margin). */
@@ -332,19 +332,32 @@ describe('levels', () => {
     ]);
   });
 
-  it('every device names a labelled first plate (the HUD chip "CAUGHT · needs <LABEL>", D10.10) and the cup holds one of its plates', () => {
+  it('every device names all its labelled plates (the HUD chip "CAUGHT · needs <LABELS>", D10.10) and the cup holds one of them', () => {
     const chips: string[] = [];
     for (const level of LEVELS) {
       for (const rect of level.rects.filter(isDevice)) {
-        const first = level.switches.find((s) => s.id === rectSwitchIds(rect)[0]);
-        expect(first, `${level.id}/${rect.id}`).toBeDefined();
-        expect(first?.label, `${level.id}/${rect.id}`).toBeTruthy();
-        expect(releaseLabel(level, rect)).toBe(first?.label);
+        for (const id of rectSwitchIds(rect)) {
+          const plate = level.switches.find((s) => s.id === id);
+          expect(plate, `${level.id}/${rect.id}/${id}`).toBeDefined();
+          expect(plate?.label, `${level.id}/${rect.id}/${id}`).toBeTruthy();
+          expect(releaseLabel(level, rect), `${level.id}/${rect.id}`).toContain(plate?.label ?? '?');
+        }
         expect(rectSwitchIds(rect), `${level.id}/${rect.id}`).toContain(level.cupHoldsSwitch);
         chips.push(`${level.order}:${rect.id}:${releaseLabel(level, rect)}`);
       }
     }
-    expect(chips).toEqual(['6:snare:FREE', '7:cannon:FIRE', '9:bait-trap:TOP', '10:cannon:A', '11:cannon:FIRE', '12:pit:FIRE', '12:cannon:FIRE', '12:door-seat:TOP']);
+    // Every release is named: the first-listed one is not always the one the partner can reach (L6 FREE sits behind
+    // the door once blue is past it; red can never reach L11's FIRE), so the chip lists them all.
+    expect(chips).toEqual([
+      '6:snare:FREE or FAR',
+      '7:cannon:FIRE',
+      '9:bait-trap:TOP',
+      '10:cannon:A, B or DECK',
+      '11:cannon:FIRE or FAR',
+      '12:pit:FIRE or TOP',
+      '12:cannon:FIRE or TOP',
+      '12:door-seat:TOP',
+    ]);
   });
 
   it('launchers keep the vectors and pads the launcher re-verification measured (levels README): breech or pad x-range, y and launch', () => {
@@ -424,6 +437,48 @@ describe('levels', () => {
     expect(strays).toEqual([]);
     expect(loaded).toBeGreaterThan(0);
     expect(fired).toBe(loaded);
+  });
+
+  it('a WINDOW shutting on a red ball parked on the wall below it ejects the ball sideways and the next shot is taken (L2 on its DOOR, L8 on the blue field)', () => {
+    // Parked mid-window, 12 px above the wall below, the window's bottom face is the nearest exit, but it leads into that
+    // wall: the ejection must take a side face (D2). Otherwise the wall pushes the ball back up, it wakes every few ticks,
+    // every wake restarts the hand-off and the turn flips between the players forever with no shot accepted.
+    const parked = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+    for (const [level, awayDeg] of [
+      [L2, 10],
+      [L8, 150],
+    ] as const) {
+      const win = level.rects.find((r) => r.id === 'window-gate');
+      const plate = level.switches.find((s) => s.id === 'window');
+      if (win === undefined || plate === undefined) throw new Error(`${level.id} lost its window`);
+      for (const dx of [-6, 0, 6]) {
+        // red comes to rest on the wall below, inside the OPEN window
+        const drop = predictLaunch(level, { window: true }, { x: win.x + win.w / 2 + dx, y: win.y + win.h - BALL_RADIUS - 2 }, { x: 0, y: 0 }, 0);
+        const spot = drop.points[drop.points.length - 1];
+        expect(drop.outcome, `${level.id} ${dx}`).toBe('rest');
+        if (spot === undefined) throw new Error('no rest');
+        expect(rectContains(win, spot), `${level.id} ${dx}`).toBe(true);
+        // blue holds WINDOW and shoots away from it: the window shuts on red
+        const balls: [BallState, BallState] = [parked(spot), parked({ x: plate.x + plate.w / 2, y: plate.surfaceY - BALL_RADIUS })];
+        const aiming = stepSim(createSim(configFor(level)).state, [{ type: 'continue', playerId: 0 }]).state;
+        const start = { ...aiming, balls, activePlayer: 1 as const, switches: evaluateSwitches(level, aiming.switches, balls), turnDelayTicks: 0 };
+        expect(start.switches.window, `${level.id} ${dx}`).toBe(true);
+        const angle = (-awayDeg * Math.PI) / 180;
+        let state = stepSim(start, [{ type: 'setAim', playerId: 1, angle: Math.round(angle * 1e4) / 1e4, power: 100 }, { type: 'shoot', playerId: 1 }]).state;
+        const events: SimEvent[] = [];
+        for (let t = 0; t < 1200; t += 1) {
+          const r = stepSim(state, []);
+          events.push(...r.events);
+          state = r.state;
+        }
+        expect(events.filter((e) => e.type === 'turnStart'), `${level.id} ${dx}`).toHaveLength(1);
+        expect(state.phase).toBe('aiming');
+        expect(state.balls[0].asleep).toBe(true);
+        expect(rectContains(win, state.balls[0].pos), `${level.id} ${dx}: red ${state.balls[0].pos.x},${state.balls[0].pos.y}`).toBe(false);
+        const next = stepSim(state, [{ type: 'shoot', playerId: state.activePlayer }]);
+        expect(next.events.map((e) => e.type)).toContain('ballHit');
+      }
+    }
   });
 
   it('every plate uses the single switch accent colour (pairs differ by label, not hue)', () => {
