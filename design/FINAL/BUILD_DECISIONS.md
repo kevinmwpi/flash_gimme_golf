@@ -162,8 +162,9 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   and touch). A press on the partner's ball still reports "wrong ball". The rubber band is drawn from the ball, offset by
   the drag. Taps under the dead zone never shoot, and releasing back at the press point still cancels. D7's
   compression stays as the safety net for presses on an edge ball. Copy and coach teach "drag back anywhere".
-- **D10.10 Waiting cues.** HUD chip `CAUGHT · needs <LABEL>` / `LOADED · needs <LABEL>`, where LABEL is the label of the
-  device's FIRST switch id (levels list the partner-reachable release first). It is derived from SimState every frame,
+- **D10.10 Waiting cues.** HUD chip `CAUGHT · needs <LABELS>` / `LOADED · needs <LABELS>`, where LABELS names the
+  device's release plates, every distinct label in authored order ('FREE or FAR', 'A, B or DECK'), because the
+  first-listed plate is not always the one the partner can reach. It is derived from SimState every frame,
   never from events. Every skipped turn shows the turn banner with the line "Red is caught — Blue shoots again" (or "is
   loaded"), and the live region reads it. The holder (stall-tap) tip never shows while either ball is waiting, and never
   names a plate whose only consumers are traps or cannons. A plate that also drives a door or bridge (L10's A raises the
@@ -180,9 +181,25 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   back bunker and plate B), re-verified by the launcher checks, or where verification found a defect: Bait's BAIT plate
   spans 490-610 (Appendix A: 490-600), the trap's whole restable floor, because a ball resting at 600-610 was caught
   without holding the door and its partner could never progress (a softlock the scoped reset cannot end while the
-  partner can still shoot). A plate inside a trap must cover that trap's restable floor.
+  partner can still shoot). A plate inside a trap must cover that trap's restable floor. Crossfire's cannon
+  pit side runs on to the chasm lip (Appendix A: a 20 px flat at 880-900) for the same reason: a ball resting
+  on that flat when red left FAR could reach neither FIRE nor FAR. One rare state stays a known residual
+  (levels README): blue LOADED in Crossfire's cold cannon with red free on the near side, reachable only by
+  two deliberate shots back across the chasm; only a host restart ends it. Two touching windows or doors:
+  a door closing on a ball ejects it through a face whose exit is clear of terrain AND of other solid
+  rects (a window stacked on a wall a ball can rest on froze Colour Lift and, latently, Two Doors).
 - **D10.13 Verification.** The solver adds `launchers`, `loops` and `traps` passes and explicit opt-outs (backboards and
   ledge-only columns for `walls`, cannon-crossed gaps for `gaps`). Pars are calibrated as D9 and LEVELS.md require
   (solver minimum <= par <= minimum + 2): Booby Trap 7 -> 6 (minimum 4: once red holds the perch, blue can hole out
   from its tee through the open door), Bait 9 -> 8 and Grand Machine 8 -> 7; course pars 28 / 29 / 30. The slow suite
   is split per world and runs as a CI matrix.
+- **D10.14 UI and visual amendments from the review (2026-11-01; UX.md and VISUAL.md are amended by this list).**
+  Every card (intro, results, world results, dialogs) ignores presses for its first 400 ms (`CARD_INPUT_GRACE_MS`) and
+  never acts on a held Enter/Space; Escape and Tab work at once. The drag coach never takes presses except its 'Got
+  it' button. The HUD band follows `--hud-scale` (12 + 48·s + 8) on canvas and DOM alike; on rows of 900 logical px
+  or less (`.row-narrow`) a waiting chip's status hangs under it as a paper sticker and the band grows to keep it
+  clear. HOLDS covers cup-wired plates while a ball rests on them. Lobby START AT rows are ARIA radio groups with a
+  roving tabindex. Hint and coach copy follow the page's last input device (keyboard players get keyboard copy).
+  Colour-field stripes are drawn in the field's own colour; a field with a door or window standing on it hangs its
+  label beside the field; the 6-label cap counts labels slid onto the screen; labels keep clear of the HUD-scaled
+  top and bottom bands. The canvas reads the same reduced-motion setting as the CSS (`<html data-motion>`).

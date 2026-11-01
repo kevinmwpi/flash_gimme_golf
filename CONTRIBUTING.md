@@ -50,18 +50,27 @@ the contracts for everything else.
 
 ## Adding a hole
 
-1. Create `src/sim/levels/w1-0N-<slug>.ts` exporting `export const level: Level = compileLevel({...})`.
-   The id **is** the file name without `.ts`; the test suite asserts it.
-2. Fill every field: `name`, `par` (>= 3), `hint`, `aha`, `watchOut` (shown as the "Stuck?" tip),
-   `firstPlayer`, exactly one `mechanicsIntroduced`, `width` (1280 or wider; height is always 720),
-   `wind: 0` in World 1, terrain polylines, props, plates and `startXs` / `holeX`.
-3. Make it readable: every plate and every switch-driven door, window or bridge carries a short
-   `label` that matches the hint copy. Keep every plate at least 500 px from the cup so a gimme can
-   never concede a holder, and build switch puzzles so that **both** balls can get across (two
-   plates, or the cup wired to a switch with `cupHoldsSwitch`).
-4. Register it in `src/sim/levels/index.ts` in campaign order. Level-id literals live only in that
-   directory; the UI goes through `LEVELS`, `WORLD1_IDS` and `campaignFrom`.
-5. Prove it: `npm test` runs `validateLevel` over every registered hole; `npm run solve -- <id>` must
-   find a co-op line within par + 3 and must **not** find a solo line that skips the puzzle; then
+1. Create `src/sim/levels/w<world>-<NN>-<slug>.ts` (NN is the global hole number, `order`, 01-12 today)
+   exporting `export const level: Level = compileLevel({...})`. The id **is** the file name without `.ts`;
+   the test suite asserts it.
+2. Fill every field: `name`, `world`, `order`, `par` (>= 3), `hint` (<= 220 characters), `aha`, `watchOut`
+   (shown as the "Stuck?" tip), `firstPlayer`, `mechanicsIntroduced` (exactly one in World 1, at most one
+   elsewhere; empty hides the intro card's NEW row), `width` (1280 or wider; height is always 720),
+   `wind: 0` (every world), terrain polylines, props, plates and `startXs` / `holeX`. Rect ids and switch
+   ids must not collide (`door-gate` beside a `door` plate).
+3. Make it readable: every plate and every switch-driven door, window, bridge, trap and cannon carries a
+   short `label` that matches the hint copy. Keep every plate edge more than `GIMME_RADIUS +
+   NEAR_CUP_RADIUS` from the cup (in World 1, at least 500 px) so a gimme can never concede a holder, and
+   build switch puzzles so that **both** balls can get across (two plates, or the cup wired to a switch
+   with `cupHoldsSwitch`). A trap or cannon lists its release / FIRE plates in `releaseIds` / `fireIds`,
+   the one the partner usually reaches first; the HUD chip names them all. A plate inside a trap must
+   cover the trap's whole restable floor (BUILD_DECISIONS D10.12).
+4. Register it in `src/sim/levels/index.ts` in campaign order (and in its world's id list). Level-id
+   literals live only in that directory, the solver tables and the golden lines; the UI goes through
+   `LEVELS`, `WORLD_IDS`, `campaignFrom` and `worldTitle`.
+5. Prove it: `npm test` runs `validateLevel` and the level rules over every registered hole;
+   `npm run solve -- <id>` runs every solver pass (co-op line within par + 3 and a calibrated par, no solo
+   bypass, no aces, walls and gaps, launchers, flight loops, rescuable traps and cannons); add its
+   scripted line and record its golden with `npm run solve -- <id> --write-goldens`; then
    `npm run test:levels`. Record the shot speed you verified at (`SHOT_SPEED_PER_POWER` in
    `types.ts`) in the level file's header comment.
