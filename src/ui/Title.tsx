@@ -2,19 +2,24 @@
 /**
  * Title screen (UX.md §3.1; VISUAL.md §16; mockup-title.html): the ONLY start screen. Logo with the
  * two-tone team ball as the O, tagline sticker, three coloured mode buttons (accelerators 1/2/3), the
- * World 1 level tray with best medals recomputed from storage via `medalFor`, the online-server pill
+ * level tray with best medals recomputed from storage via `medalFor`, the online-server pill
  * (non-blocking health fetch, never gates the menu), version pill, mute and settings corners, and the
  * shared-game card when the page was opened from a `?state=` link. Viewport-space DOM over an SVG
- * backdrop in the game's palette (clouds drift unless motion is reduced).
+ * backdrop in the game's palette (clouds drift unless motion is reduced). The tray (BUILD_DECISIONS
+ * D10.1/D10.2) shows one world at a time: a World 1/2/3 picker headed by the registry's world titles,
+ * then that world's four tiles with their global hole numbers. Arrow keys walk every hole of the game
+ * (stepping past a world's last hole opens the next world); the default selection is the first hole
+ * with no best. Nothing is locked.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { LEVELS } from '../sim/levels/index';
-import type { Level, PlayerId } from '../sim/types';
+import { WORLDS, levelById, levelsOfWorld, worldTitle } from '../sim/levels/index';
+import type { Level, PlayerId, WorldId } from '../sim/types';
 import { medalFor } from '../sim/types';
 import { COPY, MECHANIC_COPY, trayVerdict } from './copy';
 import { Icon, IconButton, speakerState } from './Hud';
 import { MedalDisc } from './LevelResults';
 import type { BestTable, UiSettings } from './storage';
+import { defaultHole, stepHole, worldStartHole } from './worlds';
 
 export type SharedCard = { kind: 'ok'; holeNumber: number; teamStrokes: number; toPlay: PlayerId } | { kind: 'invalid' };
 
@@ -60,9 +65,11 @@ function useServerHealth(url: string | null): ServerHealth | null {
   return health;
 }
 
-function defaultSelection(bests: BestTable): string {
-  const firstUnplayed = LEVELS.find((l) => bests[l.id] === undefined);
-  return (firstUnplayed ?? LEVELS[0])?.id ?? '';
+/** A radio group's arrow step (ARIA radio pattern): Right/Down forward, Left/Up back, any other key 0. */
+function arrowDelta(key: string): number {
+  if (key === 'ArrowRight' || key === 'ArrowDown') return 1;
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return -1;
+  return 0;
 }
 
 function Backdrop(): React.JSX.Element {
@@ -156,7 +163,7 @@ function LevelTile({ level, best, selected, onSelect, onActivate }: { level: Lev
           onActivate();
         }
       }}
-      aria-label={`${COPY.title.levelSelect}: ${level.order}. ${level.name}, ${COPY.title.par(level.par)}, ${best === undefined ? COPY.title.notPlayed : `${COPY.title.team(best.teamStrokes)}, ${trayVerdict(best.teamStrokes, level.par)}`}`}
+      aria-label={`${COPY.title.levelSelect}: ${level.order}. ${level.name}, ${worldTitle(level.world)}, ${COPY.title.par(level.par)}, ${best === undefined ? COPY.title.notPlayed : `${COPY.title.team(best.teamStrokes)}, ${trayVerdict(best.teamStrokes, level.par)}`}`}
     >
       <span className="num" aria-hidden="true">
         {level.order}
@@ -180,10 +187,11 @@ function LevelTile({ level, best, selected, onSelect, onActivate }: { level: Lev
 
 export default function Title(props: TitleProps): React.JSX.Element {
   const { bests, settings, shared, onlineAvailable, healthUrl, version, muted, audioLocked, focusTray, onToggleMute, onSolo, onLocal, onOnline, onOpenSettings, onContinueShared, onDismissShared } = props;
-  const [selected, setSelected] = useState(() => defaultSelection(bests));
+  const [selected, setSelected] = useState(() => defaultHole(bests));
+  const world = levelById(selected).world;
   const health = useServerHealth(onlineAvailable ? healthUrl : null);
   const defaultButton = useRef<HTMLButtonElement>(null);
-  const trayRef = useRef<HTMLDivElement>(null);
+  const trayRef = useRef<HTMLElement>(null);
   const [announced, setAnnounced] = useState('');
   const speaker = speakerState(audioLocked, muted);
 
@@ -208,13 +216,24 @@ export default function Title(props: TitleProps): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, onlineAvailable, onSolo, onLocal, onOnline]);
 
+  /** Focus follows a keyboard move once React has rendered it (the new tile may belong to another world). */
+  const focusInTray = (selector: string): void => {
+    window.requestAnimationFrame(() => trayRef.current?.querySelector<HTMLElement>(selector)?.focus());
+  };
   const moveSelection = (delta: number): void => {
-    const index = LEVELS.findIndex((l) => l.id === selected);
-    const next = LEVELS[(index + delta + LEVELS.length) % LEVELS.length];
-    if (next !== undefined) {
-      setSelected(next.id);
-      window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.tile.cur')?.focus());
-    }
+    setSelected(stepHole(selected, delta));
+    focusInTray('.tile.cur');
+  };
+  /** A world pick selects that world's first hole without a best (else its first hole); the shown world is a no-op. */
+  const pickWorld = (w: WorldId): void => {
+    if (w !== world) setSelected(worldStartHole(w, bests));
+  };
+  const stepWorld = (delta: number): void => {
+    const index = WORLDS.indexOf(world);
+    const next = WORLDS[(index + delta + WORLDS.length) % WORLDS.length];
+    if (next === undefined) return;
+    pickWorld(next);
+    focusInTray('.world-tab.on');
   };
 
   return (
@@ -279,28 +298,48 @@ export default function Title(props: TitleProps): React.JSX.Element {
           </button>
         </nav>
 
-        <section className="tray" aria-label={COPY.title.levelSelect}>
+        <section ref={trayRef} className="tray" aria-label={COPY.title.levelSelect}>
           <div className="head">
-            <span className="badge">{COPY.title.world}</span>
-            <span>{COPY.title.worldSub(LEVELS.length)}</span>
+            <div
+              className="world-tabs"
+              role="radiogroup"
+              aria-label={COPY.title.worldPick}
+              onKeyDown={(e) => {
+                const delta = arrowDelta(e.key);
+                if (delta === 0) return;
+                e.preventDefault();
+                stepWorld(delta);
+              }}
+            >
+              {WORLDS.map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  role="radio"
+                  aria-checked={w === world}
+                  aria-label={worldTitle(w)}
+                  tabIndex={w === world ? 0 : -1}
+                  className={`world-tab${w === world ? ' on' : ''}`}
+                  onClick={() => pickWorld(w)}
+                >
+                  {w === world ? worldTitle(w) : COPY.title.worldTab(w)}
+                </button>
+              ))}
+            </div>
             <span className="legend">{COPY.title.medalLegend}</span>
           </div>
           <div
-            ref={trayRef}
             className="levels"
             role="radiogroup"
             aria-label={COPY.title.levelSelect}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                e.preventDefault();
-                moveSelection(1);
-              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                moveSelection(-1);
-              }
+              const delta = arrowDelta(e.key);
+              if (delta === 0) return;
+              e.preventDefault();
+              moveSelection(delta);
             }}
           >
-            {LEVELS.map((level) => (
+            {levelsOfWorld(world).map((level) => (
               <LevelTile key={level.id} level={level} best={bests[level.id]} selected={selected === level.id} onSelect={() => setSelected(level.id)} onActivate={() => onSolo(level.id)} />
             ))}
           </div>

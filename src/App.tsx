@@ -4,8 +4,9 @@
  * (LocalSession with crypto.getRandomValues seeds; OnlineSessionView from the client's config once
  * the status reaches `playing`), mounts GameCanvas + the stage-space HUD layer + the viewport-space
  * cards. Overlays are driven by FrameSummary.phase and ClientStatus, never by an event alone; events
- * only feed the banner/toasts (including the holder tip) and the best table; the chips' holds come
- * from FrameSummary.holds (SimState-derived). Boot precedence
+ * only feed the banner/toasts (including the holder tip) and the best table; the chips' holds and
+ * CAUGHT / LOADED cues come from FrameSummary.holds / .waiting (SimState-derived). A session plays one
+ * world; its results card continues into the next one (BUILD_DECISIONS D10.2). Boot precedence
  * (main.tsx reads and strips the URL first): fg.reconnect -> rejoin; ?room= -> lobby auto-join once;
  * ?state= -> title with the shared card (broken link -> "older version" card); else title.
  */
@@ -33,6 +34,7 @@ import { HOLDER_TIP_MS, UNKNOWN_SPOTS, advanceSpots, holderTipSwitch, spotsOf, t
 import { tapSpeaker } from './ui/speaker';
 import { clearBests, loadBests, loadOnboarded, loadSettings, saveBest, saveOnboarded, saveSettings, type BestTable, type UiSettings } from './ui/storage';
 import { inviteUrlFor, isRoomCode } from './ui/url';
+import { continueTarget } from './ui/worlds';
 import type { AudioSystem } from './view/audio';
 import GameCanvas, { waitingChipOf, type FrameSummary, type LocalSession, type OnlineSessionView } from './view/GameCanvas';
 import type { UiAction } from './view/input/index';
@@ -387,6 +389,8 @@ type GameScreenProps = {
   onQuit(): void;
   onLevelSelect(): void;
   onPlayAgainLocal(): void;
+  /** "Continue to World N+1" in a local session: a new session from that hole (D10.2: one world per session) */
+  onContinueLocal(levelId: string): void;
   onCreateRoom(): void;
   /**
    * the onboarding coach is on screen or about to be (hole 1's first-run intro card and first aiming turn);
@@ -424,7 +428,7 @@ function netOverlayFor(status: ClientStatus): NetOverlayKind | null {
 }
 
 function GameScreen(props: GameScreenProps): React.JSX.Element {
-  const { session, audio, audioState, settings, bests, onBest, clientStatus, toasts, pushToast, popToast, onToggleMute, onOpenSettings, settingsOpen, onQuit, onLevelSelect, onPlayAgainLocal, onCreateRoom, onCoachVisible } = props;
+  const { session, audio, audioState, settings, bests, onBest, clientStatus, toasts, pushToast, popToast, onToggleMute, onOpenSettings, settingsOpen, onQuit, onLevelSelect, onPlayAgainLocal, onContinueLocal, onCreateRoom, onCoachVisible } = props;
   const online = session.kind === 'online';
   const seat: PlayerId | null = online ? session.seat : null;
   const seats = useMemo(() => (online ? seatsFor('online', session.seat) : session.seats), [online, session]);
@@ -456,14 +460,15 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const localContinue = useRef(false);
   const holderTipShown = useRef<string | null>(null);
   /**
-   * Where each ball last came to rest, from SimEvents, for the holder tip only. A local mount knows
-   * the state (shared links included); online starts unknown. `mount` also names the mount's own
-   * levelStart (createSim's, or sharedSession's synthetic one), which must not reset the spots to the
-   * tees if it ever reaches the subscription (today GameCanvas emits it before GameScreen subscribes).
+   * Where each ball last came to rest (and whether a device holds it), from SimEvents, for the holder
+   * tip only. A local mount knows the state (shared links included); online starts unknown. `mount`
+   * also names the mount's own levelStart (createSim's, or sharedSession's synthetic one), which must
+   * not reset the spots to the tees if it ever reaches the subscription (today GameCanvas emits it
+   * before GameScreen subscribes).
    */
   const [mount] = useState<{ spots: Spots; levelId: string | null; tick: number }>(() =>
     session.kind === 'local'
-      ? { spots: spotsOf(session.initial.state.balls), levelId: session.initial.state.levelId, tick: session.initial.state.tick }
+      ? { spots: spotsOf(levelById(session.initial.state.levelId), session.initial.state), levelId: session.initial.state.levelId, tick: session.initial.state.tick }
       : { spots: UNKNOWN_SPOTS, levelId: null, tick: -1 },
   );
   const spotsRef = useRef<Spots>(mount.spots);
@@ -706,10 +711,17 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const partnerAway = online && clientStatus.kind === 'playing' && !clientStatus.peerConnected;
   const partnerDeadline = partnerAway ? (clientStatus.peerDeadlineMs ?? null) : null;
   const reconnectSeconds = clientStatus.kind === 'reconnecting' ? Math.max(0, Math.ceil((clientStatus.deadlineMs - now) / 1000)) : partnerDeadline === null ? null : Math.max(0, Math.ceil((partnerDeadline - now) / 1000));
-  const showCoach = !coachDismissed && holeNumber === 1 && summary?.phase === 'aiming' && !paused;
+  /**
+   * The drag coach teaches a player who was never onboarded on hole 1 and on the first hole of a session,
+   * so an invitee whose room starts in World 2 or 3 still learns to aim (UX.md §5.5).
+   */
+  const coachHole = holeNumber === 1 || levelIndex === 0;
+  const showCoach = !coachDismissed && coachHole && summary?.phase === 'aiming' && !paused;
   const aimKeyHeld = useAimKeysHeld(showCoach);
-  /** Includes the hole-1 intro: a toast pushed under the intro card would still be up when the coach appears. */
-  const coachPending = !coachDismissed && holeNumber === 1 && (summary?.phase === 'intro' || summary?.phase === 'aiming');
+  /** Includes the coached hole's intro: a toast pushed under the intro card would still be up when the coach appears. */
+  const coachPending = !coachDismissed && coachHole && (summary?.phase === 'intro' || summary?.phase === 'aiming');
+  /** Where this world's results card continues (one world per session, D10.2); null after the last world. */
+  const next = continueTarget(level.world);
   useEffect(() => {
     onCoachVisible(coachPending);
     return () => onCoachVisible(false);
@@ -793,7 +805,7 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           mode={mode}
           seat={seat}
           device={device}
-          firstRun={firstRun}
+          onboarding={firstRun && coachHole}
           onContinue={() => sendMeta('continue', 'intro')}
         />
       )}
@@ -814,6 +826,8 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
       )}
       {summary?.phase === 'campaignResults' && flags.campaign !== null && (
         <CampaignResults
+          world={level.world}
+          nextWorld={next?.world ?? null}
           rows={flags.campaign.rows}
           coursePar={flags.campaign.coursePar}
           total={flags.campaign.total}
@@ -822,6 +836,11 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           seat={seat}
           isHost={isHost}
           waitingForHost={online}
+          onContinue={() => {
+            if (next === null) return;
+            if (session.kind === 'online') session.client.playAgain(next.levelId);
+            else onContinueLocal(next.levelId);
+          }}
           onPlayAgain={() => (session.kind === 'online' ? session.client.playAgain() : onPlayAgainLocal())}
           onLevelSelect={guarded(leaveToLevelSelect)}
           onTitle={guarded(quit)}
@@ -1023,10 +1042,14 @@ export default function App({ audio, boot, version }: AppProps): React.JSX.Eleme
     setBests({});
   }, []);
 
-  const playAgainLocal = useCallback(() => {
+  /**
+   * A fresh local session in the current mode: from `levelId` ("Continue to World N+1"), else from the
+   * finished campaign's first hole ("Play again"); campaignFrom keeps either inside one world (D10.2).
+   */
+  const newLocalSession = useCallback((levelId?: string) => {
     setScreen((s) => {
       if (s.kind !== 'game' || s.session.kind !== 'local') return s;
-      const first = s.session.config.levelIds[0];
+      const first = levelId ?? s.session.config.levelIds[0];
       if (first === undefined) return s;
       return { kind: 'game', session: localSession(s.session.config.mode === 'solo' ? 'solo' : 'local', first) };
     });
@@ -1150,7 +1173,8 @@ export default function App({ audio, boot, version }: AppProps): React.JSX.Eleme
           settingsOpen={settingsOpen}
           onQuit={toTitle}
           onLevelSelect={toLevelSelect}
-          onPlayAgainLocal={playAgainLocal}
+          onPlayAgainLocal={newLocalSession}
+          onContinueLocal={newLocalSession}
           onCreateRoom={createRoom}
           onCoachVisible={setCoachShowing}
         />

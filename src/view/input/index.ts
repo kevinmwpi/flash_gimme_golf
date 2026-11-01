@@ -41,10 +41,9 @@ export type PointerDrag = { offset: Vec; cancel: boolean; clamped: boolean };
 /**
  * A press that grabbed nothing (UX.md §5.2 "Miss feedback"). View-only: the sim never sees it. The
  * pointer reports 'wrongBall' for a press on the partner's ball and 'notYourTurn' for a press by a
- * seat that is not aiming; since D10.9 made a press anywhere else a drag it no longer reports 'miss'
- * (off the ball), which the HUD still maps to copy.
+ * seat that is not aiming; every other press on the aiming seat's turn starts a drag (D10.9).
  */
-export type MissKind = 'miss' | 'wrongBall' | 'notYourTurn';
+export type MissKind = 'wrongBall' | 'notYourTurn';
 
 export type InputFrame = {
   commands: PlayerCommand[];

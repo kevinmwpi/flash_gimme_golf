@@ -1,12 +1,14 @@
 // OWNER: ui
 /**
- * Campaign results (UX.md §3.8; VISUAL.md §15): course total vs course par, five-column scorecard
- * (Hole · Par · Team · ± · Medal) with a TOTAL row, per-player totals in grey, PERFECT ROUND ribbon when
- * every hole is gold, DOM confetti (none under reduced motion), Play again / Level select / Title.
- * Shown while phase === 'campaignResults'. Online: the host sends playAgain; the guest waits.
+ * World results (UX.md §3.8; VISUAL.md §15; BUILD_DECISIONS D10.2): "WORLD N COMPLETE", the world's total vs
+ * its course par, five-column scorecard (Hole · Par · Team · ± · Medal) with a TOTAL row, per-player totals
+ * in grey, PERFECT ROUND ribbon when every hole is gold, DOM confetti (none under reduced motion), then
+ * Continue to World N+1 (while a next world exists), Play again (same world), Level select, Title. Shown
+ * while phase === 'campaignResults'. Online: the host sends playAgain (with the next world's first hole
+ * to continue); the guest waits.
  */
 import React from 'react';
-import type { Level, LevelResult, Medal, PlayerId, SimMode } from '../sim/types';
+import type { Level, LevelResult, Medal, PlayerId, SimMode, WorldId } from '../sim/types';
 import { COPY, golfDelta, otherPlayer } from './copy';
 import { MedalDisc } from './LevelResults';
 import { Modal } from './Pause';
@@ -14,6 +16,10 @@ import { Modal } from './Pause';
 export type CampaignRow = { level: Level; result: LevelResult };
 
 export type CampaignResultsProps = {
+  /** the world this session played (one world per session, D10.2) */
+  world: WorldId;
+  /** the world "Continue" starts, or null after the last world */
+  nextWorld: WorldId | null;
   rows: readonly CampaignRow[];
   coursePar: number;
   total: number;
@@ -23,6 +29,7 @@ export type CampaignResultsProps = {
   isHost: boolean;
   /** online guest: the host has not pressed Play again yet */
   waitingForHost: boolean;
+  onContinue(): void;
   onPlayAgain(): void;
   onLevelSelect(): void;
   onTitle(): void;
@@ -58,7 +65,7 @@ function Confetti(): React.JSX.Element {
 }
 
 export default function CampaignResults(props: CampaignResultsProps): React.JSX.Element {
-  const { rows, coursePar, total, medal, mode, seat, isHost, waitingForHost, onPlayAgain, onLevelSelect, onTitle } = props;
+  const { world, nextWorld, rows, coursePar, total, medal, mode, seat, isHost, waitingForHost, onContinue, onPlayAgain, onLevelSelect, onTitle } = props;
   const counts = rows.reduce(
     (acc, r) => {
       acc[r.result.medal] += 1;
@@ -78,7 +85,7 @@ export default function CampaignResults(props: CampaignResultsProps): React.JSX.
       <Modal labelledBy="campaign-title" size="xwide" scrim="light" className="campaign-card">
         <div className="campaign-head">
           <div className="campaign-headline">
-            <p className="eyebrow">{COPY.campaign.title}</p>
+            <p className="eyebrow">{COPY.campaign.title(world)}</p>
             {perfect && <span className="sticker sticker-perfect">{COPY.campaign.perfect}</span>}
             <h2 id="campaign-title" className="card-title display-l">
               {COPY.campaign.team(total, coursePar)}
@@ -135,6 +142,15 @@ export default function CampaignResults(props: CampaignResultsProps): React.JSX.
             waitingForHost ? (
               <span className="body muted-text">{COPY.toast.waitingNewRound(host)}</span>
             ) : null
+          ) : nextWorld !== null ? (
+            <>
+              <button type="button" className="btn btn-primary btn-wide" onClick={onContinue} data-autofocus>
+                {COPY.campaign.nextWorld(nextWorld)}
+              </button>
+              <button type="button" className="btn btn-paper" onClick={onPlayAgain}>
+                {COPY.campaign.playAgain}
+              </button>
+            </>
           ) : (
             <button type="button" className="btn btn-primary btn-wide" onClick={onPlayAgain} data-autofocus>
               {COPY.campaign.playAgain}
