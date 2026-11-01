@@ -440,6 +440,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
       disposeLayout();
       document.removeEventListener('visibilitychange', onVisibility);
       input.detach();
+      latest.current.audio.setFan(false, FAN_INTENSITY);
     },
   };
 }

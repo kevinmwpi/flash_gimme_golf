@@ -7,8 +7,11 @@
  */
 import type { Aim, BallState, Level, LevelRect, MutVec, PlayerId, PressureSwitch, SimEvent, SimState, Vec } from '../sim/types';
 import { BALL_RADIUS, MAX_POWER, VIEWPORT_H, VIEWPORT_W } from '../sim/types';
+import { waitingOf } from '../sim/devices';
 import { isRectActive } from '../sim/terrain';
+import { cannonGeometry, seatOf } from './render/devices';
 import { PALETTE, PLAYER_VIEW } from './render/palette';
+import { fairwayYAt } from './render/surface';
 import { COPY, gateWord, switchHeldCallout } from './render/text';
 
 export type CameraMode = 'follow' | 'overview';
@@ -69,7 +72,10 @@ export type CalloutKind =
   | 'bumper'
   | 'sand'
   | 'fan'
-  | 'bridge';
+  | 'bridge'
+  | 'trap'
+  | 'back'
+  | 'cannon';
 export type Callout = {
   id: number;
   text: string;
@@ -106,6 +112,8 @@ export type DragVisual = { pointer: Vec; cancel: boolean; clamped: boolean };
 export type AimCamera = { player: PlayerId; ball: Vec; cam: Camera };
 export type GateAnim = { kind: 'pass' | 'block'; t: number };
 export type CupAnim = { kick: number; squash: number; pulse: number; wiggle: number };
+/** A trap's jaws on one ball: they snapped shut on it (`trapCaught`) or sprang open off it at `at` (`trapFreed`) `t` s ago. */
+export type JawAnim = { kind: 'snap' | 'free'; rectId: string; at: Vec; t: number };
 
 export type ViewState = {
   level: Level;
@@ -150,6 +158,17 @@ export type ViewState = {
   shotFromX: [number, number];
   gimmeSeen: boolean;
   nextCalloutId: number;
+  /**
+   * The ball a spring or cannon launched (D10.7): the follow camera stays on it, even through the partner's
+   * turn, until the next turnStart (also once it rests, so the camera never whips back for a tick).
+   */
+  followBall: PlayerId | null;
+  /** Per slot: the ball rode a spring or cannon since its golfer last moved, so the golfer pops after it (never a long hop). */
+  deviceLift: [boolean, boolean];
+  /** Per slot: the trap jaws' snap / spring-open on that ball. */
+  jaws: [JawAnim | null, JawAnim | null];
+  /** View seconds at the last turnStart: the turn banner (UI, ~1.6 s) may cover the top of the stage until then. */
+  turnAt: number;
 };
 
 /** Follow camera keeps the active ball at this fraction of the viewport width (aiming right / left). */
@@ -177,6 +196,8 @@ const GOLFER_MIN_GAP_PX = 64;
 const GOLFER_BALL_CLEAR_PX = 24;
 /** Golfers stand at least this far inside the level edges (the follow camera never shows past them). */
 const GOLFER_EDGE_PX = 26;
+/** Half the golfer's body width: a waiting golfer keeps its body out of a device it is not waiting in. */
+const GOLFER_HALF_W = 22;
 /** Ahead of the active ball, the aim arc crosses a standing golfer's body for about this far. */
 const AIM_ARC_LOW_PX = 220;
 /** Behind the active golfer, its backswing club (~60 px back) would meet the partner's club (30 px ahead of it) closer than this. */
@@ -195,9 +216,18 @@ const CALLOUT_TTL = 1.1;
 const CALLOUT_SIZE = 44;
 const CALLOUT_SMALL = 28;
 const CALLOUT_TINY = 20;
+/** Device moments (SNAP!, FREE!, BACK +1, LOADED!, BOOM!) are never pushed out by a switch or bridge callout (D10). */
+const DEVICE_CALLOUTS: ReadonlySet<CalloutKind> = new Set<CalloutKind>(['trap', 'back', 'cannon']);
+const MINOR_CALLOUTS: ReadonlySet<CalloutKind> = new Set<CalloutKind>(['switch', 'bridge']);
+/** BOOM!: a short shake and a smoke puff blown out of the muzzle (rises: negative gravity). */
+const CANNON_SHAKE_PX = 4;
+const CANNON_SHAKE_SEC = 0.12;
+const SMOKE_PUFFS = 7;
+const SMOKE_GRAVITY = -60;
+const SMOKE_LIFE = 0.5;
 
-function golferFor(state: SimState, playerId: PlayerId, width: number): GolferAnim {
-  const { pos: stand, facing } = standFor(state, playerId, width);
+function golferFor(level: Level, state: SimState, playerId: PlayerId): GolferAnim {
+  const { pos: stand, facing } = standFor(level, state, playerId);
   const pos = { x: stand.x, y: stand.y };
   return {
     pos,
@@ -260,7 +290,7 @@ export function createViewState(level: Level, state: SimState): ViewState {
     shake: { amp: 0, t: 0, dur: 1 },
     particles: [],
     trails: [[], []],
-    golfers: [golferFor(state, 0, level.width), golferFor(state, 1, level.width)],
+    golfers: [golferFor(level, state, 0), golferFor(level, state, 1)],
     renderBalls: [renderBallFor(state, 0), renderBallFor(state, 1)],
     padAnims: new Map(),
     switchAnims: new Map(),
@@ -283,6 +313,10 @@ export function createViewState(level: Level, state: SimState): ViewState {
     shotFromX: [state.balls[0].pos.x, state.balls[1].pos.x],
     gimmeSeen: false,
     nextCalloutId: 1,
+    followBall: null,
+    deviceLift: [false, false],
+    jaws: [null, null],
+    turnAt: -Infinity,
   };
 }
 
@@ -345,10 +379,44 @@ function shake(view: ViewState, amp: number, dur: number): void {
   view.shake = { amp, t: dur, dur };
 }
 
+/** Does a callout of kind `a` keep its slot against one of kind `b` when the cap is hit? Device moments outrank switch / bridge words. */
+function outranks(a: CalloutKind, b: CalloutKind): boolean {
+  return DEVICE_CALLOUTS.has(a) && MINOR_CALLOUTS.has(b);
+}
+
+/**
+ * At most MAX_CALLOUTS alive and the newest replaces the oldest, except that a device moment (SNAP!, BOOM! …)
+ * is never pushed out by a switch or bridge callout, and a new device moment pushes those out first (L10's
+ * A HELD + BRIDGE OPEN + BOOM! in one landing keeps BOOM!).
+ */
 function pushCallout(view: ViewState, c: Omit<Callout, 'id' | 'bornAt' | 'ttl'> & { ttl?: number }): void {
-  while (view.callouts.length >= MAX_CALLOUTS) view.callouts.shift();
+  while (view.callouts.length >= MAX_CALLOUTS) {
+    const evictable = view.callouts.filter((old) => !outranks(old.kind, c.kind));
+    const victim = evictable.find((old) => outranks(c.kind, old.kind)) ?? evictable[0];
+    if (victim === undefined) return;
+    view.callouts.splice(view.callouts.indexOf(victim), 1);
+  }
   view.callouts.push({ ...c, id: view.nextCalloutId, bornAt: view.timeSec, ttl: c.ttl ?? CALLOUT_TTL });
   view.nextCalloutId += 1;
+}
+
+/** BOOM!'s smoke: puffs blown out of the muzzle along the launch that drift up as they slow (negative gravity). */
+function spawnSmoke(view: ViewState, at: Vec, dir: Vec): void {
+  for (let i = 0; i < SMOKE_PUFFS; i += 1) {
+    const spread = (viewRandom(view) - 0.5) * 0.9;
+    const speed = 60 + 120 * viewRandom(view);
+    const c = Math.cos(spread);
+    const s = Math.sin(spread);
+    spawn(view, {
+      pos: { x: at.x, y: at.y },
+      vel: { x: (dir.x * c - dir.y * s) * speed, y: (dir.x * s + dir.y * c) * speed },
+      maxLife: SMOKE_LIFE * (0.7 + 0.3 * viewRandom(view)),
+      size: 10 + 8 * viewRandom(view),
+      colour: i % 3 === 0 ? PALETTE.cloudSh : PALETTE.cloud,
+      gravity: SMOKE_GRAVITY,
+      shape: 'disc',
+    });
+  }
 }
 
 function squashBall(rb: RenderBall, amount: number, angle: number): void {
@@ -378,9 +446,24 @@ function standPoint(ball: Vec, facing: 1 | -1): Vec {
 
 type Stand = { pos: Vec; facing: 1 | -1 };
 
-/** Where a ball is addressed from: a sunk ball at the cup, otherwise its last rest (never a mid-flight position). */
-function restingPos(ball: Readonly<BallState>): Vec {
-  return ball.sunk ? ball.pos : ball.lastRest;
+/** Is slot p's ball waiting in an armed trap or a cold cannon (sim/devices.ts)? */
+function isWaiting(level: Level, state: SimState, p: PlayerId): boolean {
+  return waitingOf(level, state.switches, state.balls[p]) !== null;
+}
+
+/**
+ * Where a ball is addressed from: a sunk ball at the cup, a ball waiting in a trap or a cold cannon where it
+ * sits (its safe spot is elsewhere, D10.5), otherwise its last rest (never a mid-flight position).
+ */
+function restingPos(level: Level, state: SimState, p: PlayerId): Vec {
+  const ball: Readonly<BallState> = state.balls[p];
+  return ball.sunk || isWaiting(level, state, p) ? ball.pos : ball.lastRest;
+}
+
+/** A golfer beside a waiting ball stands on the ground at its own x (trap dishes and cannon funnels slope). */
+function onGround(level: Level, stand: Stand): Stand {
+  const y = fairwayYAt(level, stand.pos.x);
+  return y === null ? stand : { pos: { x: stand.pos.x, y }, facing: stand.facing };
 }
 
 /** The active golfer addresses its ball from 42 px back, or from 26 px when 42 would stand on the partner's ball. */
@@ -392,11 +475,25 @@ function activeStand(ball: Vec, facing: 1 | -1, partnerBall: Vec | null): Stand 
 
 type StandCandidate = Stand & { preference: number };
 
-/** How badly a waiting golfer at x crowds the scene: the active golfer and its backswing, a ball, the active aim arc, the level edges. */
-function crowding(x: number, ownBall: Vec, active: Stand, activeBall: Vec, width: number): number {
+/** Does a golfer (body half-width GOLFER_HALF_W) at x stand in a trap or on a cannon's cradle? */
+function inDevice(level: Level, x: number): boolean {
+  return level.rects.some((r) => {
+    if (r.kind === 'trap') return x > r.x - GOLFER_HALF_W && x < r.x + r.w + GOLFER_HALF_W;
+    if (r.kind !== 'cannon') return false;
+    const { x1, x2 } = cannonGeometry(r).cradleBase;
+    return x > x1 - GOLFER_HALF_W && x < x2 + GOLFER_HALF_W;
+  });
+}
+
+/**
+ * How badly a waiting golfer at x crowds the scene: the active golfer and its backswing, a ball, the active
+ * aim arc, the level edges, thin air over a chasm, and (unless its own ball waits in one) a device.
+ */
+function crowding(level: Level, x: number, ownBall: Vec, active: Stand, activeBall: Vec, avoidDevices: boolean): number {
   let cost = 0;
   if (Math.abs(x - active.pos.x) < GOLFER_MIN_GAP_PX) cost += 100;
-  if (x < GOLFER_EDGE_PX || x > width - GOLFER_EDGE_PX) cost += 100;
+  if (x < GOLFER_EDGE_PX || x > level.width - GOLFER_EDGE_PX || fairwayYAt(level, x) === null) cost += 100;
+  if (avoidDevices && inDevice(level, x)) cost += 60;
   if (Math.abs(x - activeBall.x) < GOLFER_BALL_CLEAR_PX) cost += 50;
   if (Math.abs(x - ownBall.x) < GOLFER_BALL_CLEAR_PX) cost += 50;
   const ahead = active.facing * (x - activeBall.x);
@@ -411,21 +508,25 @@ function crowding(x: number, ownBall: Vec, active: Stand, activeBall: Vec, width
  * it (facing back), or behind the active golfer (clear of its backswing) watching the shot. It never
  * stands on either ball, keeps GOLFER_MIN_GAP_PX from the active golfer when it can, and stays out of
  * the low part of the active arc (where the dots would cross its face) whenever a clear spot exists.
+ * The golfer of a ball waiting in a device only takes the spots beside its own ball (D10).
  */
-function waitingStand(ball: Vec, facing: 1 | -1, active: Stand, activeBall: Vec, width: number): Stand {
+function waitingStand(level: Level, ball: Vec, facing: 1 | -1, active: Stand, activeBall: Vec, inDeviceBall: boolean): Stand {
   const flipped: 1 | -1 = facing === 1 ? -1 : 1;
   const y = ball.y + BALL_RADIUS;
-  const candidates: StandCandidate[] = [
+  const beside: StandCandidate[] = [
     { pos: standPoint(ball, facing), facing, preference: 0 },
     { pos: { x: ball.x - facing * GOLFER_STAND_CLOSE_PX, y }, facing, preference: 2 },
     { pos: standPoint(ball, flipped), facing: flipped, preference: 4 },
+  ];
+  const watching: StandCandidate[] = [
     { pos: { x: active.pos.x - active.facing * BACKSWING_CLEAR_PX, y: active.pos.y }, facing: active.facing, preference: 3 },
     { pos: { x: active.pos.x + active.facing * GOLFER_MIN_GAP_PX, y }, facing: active.facing === 1 ? -1 : 1, preference: 5 },
   ];
+  const candidates = inDeviceBall ? beside : [...beside, ...watching];
   let best: StandCandidate | null = null;
   let bestCost = Infinity;
   for (const c of candidates) {
-    const cost = c.preference + crowding(c.pos.x, ball, active, activeBall, width);
+    const cost = c.preference + crowding(level, c.pos.x, ball, active, activeBall, !inDeviceBall);
     if (cost < bestCost) {
       best = c;
       bestCost = cost;
@@ -434,15 +535,19 @@ function waitingStand(ball: Vec, facing: 1 | -1, active: Stand, activeBall: Vec,
   return best === null ? { pos: standPoint(ball, facing), facing } : { pos: best.pos, facing: best.facing };
 }
 
-/** Stand point + facing of player p: the active golfer addresses its ball facing the shot; the other keeps clear. */
-function standFor(state: SimState, p: PlayerId, width: number): Stand {
+/**
+ * Stand point + facing of player p: the active golfer addresses its ball facing the shot; the other keeps
+ * clear. A ball waiting in a trap or a cold cannon keeps its golfer beside it, on the ground there.
+ */
+function standFor(level: Level, state: SimState, p: PlayerId): Stand {
   const a = state.activePlayer;
-  const activeBallState = state.balls[a];
-  const activeBall = restingPos(activeBallState);
-  const partner = state.balls[a === 0 ? 1 : 0];
-  const active = activeStand(activeBall, facingForAim(state.players[a].aim), partner.sunk ? null : restingPos(partner));
+  const other: PlayerId = a === 0 ? 1 : 0;
+  const activeBall = restingPos(level, state, a);
+  const active = activeStand(activeBall, facingForAim(state.players[a].aim), state.balls[other].sunk ? null : restingPos(level, state, other));
   if (p === a) return active;
-  return waitingStand(restingPos(state.balls[p]), facingForAim(state.players[p].aim), active, activeBall, width);
+  const waiting = isWaiting(level, state, p);
+  const stand = waitingStand(level, restingPos(level, state, p), facingForAim(state.players[p].aim), active, activeBall, waiting);
+  return waiting ? onGround(level, stand) : stand;
 }
 
 /** A gap with no active bridge between x1 and x2? */
@@ -466,17 +571,21 @@ function startMove(g: GolferAnim, to: Vec, move: GolferMove, facing: 1 | -1): vo
   g.facing = facing;
 }
 
-/** Send a golfer to stand behind its ball (VISUAL.md §6 walk / hop / pop rules). */
+/**
+ * Send a golfer to stand behind its ball (VISUAL.md §6 walk / hop / pop rules). A ball that rode a spring or
+ * a cannon (a 380 px lift, a 1,600 px crossing) takes its golfer along with a pop, never a walk or a long hop.
+ */
 function relocateGolfer(view: ViewState, state: SimState, p: PlayerId, allowWalk: boolean): void {
   const g = view.golfers[p];
   const ball = state.balls[p];
-  const { pos: to, facing } = standFor(state, p, view.level.width);
+  const { pos: to, facing } = standFor(view.level, state, p);
   if (Math.abs(to.x - g.pos.x) < 1 && Math.abs(to.y - g.pos.y) < 1 && g.facing === facing) return;
   const crossesGap = openGapBetween(view.level, state.switches, g.pos.x, to.x);
   const ballCrossed = openGapBetween(view.level, state.switches, view.shotFromX[p], ball.lastRest.x);
   const far = Math.abs(to.x - g.pos.x) > VIEWPORT_W * 0.6;
   let move: GolferMove = 'walk';
-  if (crossesGap) move = ballCrossed ? 'hop' : 'pop';
+  if (view.deviceLift[p]) move = 'pop';
+  else if (crossesGap) move = ballCrossed ? 'hop' : 'pop';
   else if (!allowWalk || far) move = 'pop';
   startMove(g, to, move, facing);
 }
@@ -495,6 +604,9 @@ function resetAnims(view: ViewState): void {
   view.aimCamera = null;
   view.missRings = null;
   view.pendingOverviewAt = null;
+  view.followBall = null;
+  view.deviceLift = [false, false];
+  view.jaws = [null, null];
 }
 
 /** Miss feedback (UX.md §5.2): three rings expand from the active ball for MISS_RINGS_SEC. */
@@ -529,13 +641,41 @@ function resetForLevel(view: ViewState, state: SimState): void {
   for (const p of [0, 1] as const) {
     view.renderBalls[p] = renderBallFor(state, p);
     view.renderBalls[p].snapNextFrame = true;
-    view.golfers[p] = golferFor(state, p, view.level.width);
+    view.golfers[p] = golferFor(view.level, state, p);
   }
   view.cameraMode = state.phase === 'intro' ? 'overview' : 'follow';
   view.userCameraOverride = false;
 }
 
 // ---- events -----------------------------------------------------------------------------------
+
+/** Sticker (and sticker-pulse) keys are namespaced, so a rect and a plate can never share one (D10.8). */
+export function rectStickerKey(id: string): string {
+  return `rect:${id}`;
+}
+
+export function switchStickerKey(id: string): string {
+  return `switch:${id}`;
+}
+
+/** A trap whose plate sits inside it (a seat) is labelled by that plate's combined sticker (D10.8). */
+function deviceStickerKey(level: Level, rectId: string): string {
+  const rect = rectById(level, rectId);
+  const seat = rect !== undefined && rect.kind === 'trap' ? seatOf(level, rect) : null;
+  return seat === null ? rectStickerKey(rectId) : switchStickerKey(seat.id);
+}
+
+/** A ball moved without flying (scoped reset, flight watchdog): a puff where it was, then it pops in at its safe spot. */
+function teleport(view: ViewState, p: PlayerId, from: Vec): void {
+  const rb = view.renderBalls[p];
+  spawnPuffs(view, from, 6, PALETTE.white, 120, [4, 7], 0.3, false);
+  rb.snapNextFrame = true;
+  rb.scale = 0;
+  rb.hop = null;
+  rb.inSand = false;
+  view.trails[p].length = 0;
+  view.jaws[p] = null;
+}
 
 const PUFF_COLOUR: Record<string, string> = {
   grass: PALETTE.white,
@@ -557,12 +697,18 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
     case 'playStart':
       view.cameraMode = 'follow';
       view.userCameraOverride = false;
+      view.followBall = null;
       relocateGolfer(view, state, state.activePlayer, false);
       break;
     case 'turnStart':
+      view.followBall = null;
+      view.turnAt = view.timeSec;
       relocateGolfer(view, state, e.playerId, true);
       relocateGolfer(view, state, e.playerId === 0 ? 1 : 0, false);
+      view.deviceLift = [false, false];
       view.golfers[e.playerId].watchX = null;
+      break;
+    case 'turnSkipped':
       break;
     case 'ballHit': {
       const g = view.golfers[e.playerId];
@@ -588,11 +734,13 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
       spawnPuffs(view, e.pos, 6, PALETTE.sand, 110, [4, 7], 0.3);
       squashBall(view.renderBalls[e.playerId], 1.15, 0);
       view.renderBalls[e.playerId].inSand = true;
-      view.stickerPulse.set(e.rectId, 0);
+      view.stickerPulse.set(rectStickerKey(e.rectId), 0);
       pushCallout(view, { text: COPY.callouts.sand, worldPos: e.pos, colour: PALETTE.sand, kind: 'sand', sizePx: CALLOUT_SMALL });
       break;
     case 'spring':
       view.padAnims.set(e.rectId, 0);
+      view.followBall = e.playerId;
+      view.deviceLift[e.playerId] = true;
       spawnPuffs(view, e.pos, 8, PALETTE.sun, 200, [5, 5], 0.4);
       shake(view, 3, 0.12);
       pushCallout(view, { text: COPY.callouts.spring, worldPos: e.pos, colour: PALETTE.sun, kind: 'spring', sizePx: CALLOUT_SIZE });
@@ -612,7 +760,7 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
     case 'hazardBlock': {
       const col = e.colour === 'red' ? PALETTE.p1 : PALETTE.p2;
       view.gateAnims.set(e.rectId, { kind: 'block', t: 0 });
-      view.stickerPulse.set(e.rectId, 0);
+      view.stickerPulse.set(rectStickerKey(e.rectId), 0);
       spawnPuffs(view, e.pos, 5, col, 160, [4, 6], 0.3, false);
       squashBall(view.renderBalls[e.playerId], 0.7, 0);
       view.golfers[e.playerId].sadT = 0;
@@ -630,7 +778,7 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
     }
     case 'switchOn': {
       const sw = switchById(level, e.switchId);
-      view.stickerPulse.set(e.switchId, 0);
+      view.stickerPulse.set(switchStickerKey(e.switchId), 0);
       for (let i = 0; i < 4; i += 1) {
         spawn(view, {
           pos: { x: e.pos.x + (i < 2 ? -30 : 30), y: e.pos.y - 6 - (i % 2) * 8 },
@@ -698,6 +846,45 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
       view.flash = FLASH_DURATION;
       shake(view, 6, 0.25);
       pushCallout(view, { text: COPY.callouts.oob, worldPos: e.respawnPos, colour: PALETTE.bump, kind: 'oob', sizePx: CALLOUT_SIZE });
+      break;
+    }
+    case 'trapCaught':
+      view.jaws[e.playerId] = { kind: 'snap', rectId: e.rectId, at: e.pos, t: 0 };
+      view.stickerPulse.set(deviceStickerKey(level, e.rectId), 0);
+      spawnPuffs(view, { x: e.pos.x, y: e.pos.y + BALL_RADIUS }, 4, PALETTE.white, 90, [3, 5], 0.25);
+      pushCallout(view, { text: COPY.callouts.snap, worldPos: e.pos, colour: PALETTE.coil, kind: 'trap', sizePx: CALLOUT_SIZE });
+      break;
+    case 'trapFreed':
+      view.jaws[e.playerId] = { kind: 'free', rectId: e.rectId, at: e.pos, t: 0 };
+      view.stickerPulse.set(deviceStickerKey(level, e.rectId), 0);
+      pushCallout(view, { text: COPY.callouts.free, worldPos: e.pos, colour: PALETTE.mint, kind: 'trap', sizePx: CALLOUT_SIZE });
+      break;
+    case 'trapReturn':
+      teleport(view, e.playerId, e.pos);
+      pushCallout(view, { text: e.toTee ? COPY.callouts.backToTee : COPY.callouts.back, worldPos: e.respawnPos, colour: PALETTE.bump, kind: 'back', sizePx: CALLOUT_SIZE });
+      break;
+    case 'flightTimeout':
+      teleport(view, e.playerId, e.pos);
+      break;
+    case 'cannonLoad':
+      view.stickerPulse.set(rectStickerKey(e.rectId), 0);
+      spawnPuffs(view, { x: e.pos.x, y: e.pos.y + BALL_RADIUS }, 4, PALETTE.sand, 90, [3, 5], 0.25);
+      pushCallout(view, { text: COPY.callouts.loaded, worldPos: e.pos, colour: PALETTE.sun, kind: 'cannon', sizePx: CALLOUT_SMALL });
+      break;
+    case 'cannonFire': {
+      const rect = rectById(level, e.rectId);
+      const g = rect !== undefined && rect.kind === 'cannon' ? cannonGeometry(rect) : null;
+      const muzzle = g === null ? e.pos : g.muzzle;
+      const speed = Math.sqrt(e.launch.x * e.launch.x + e.launch.y * e.launch.y) || 1;
+      view.padAnims.set(e.rectId, 0);
+      view.stickerPulse.set(rectStickerKey(e.rectId), 0);
+      view.followBall = e.playerId;
+      view.deviceLift[e.playerId] = true;
+      view.trails[e.playerId].length = 0;
+      view.renderBalls[e.playerId].inSand = false;
+      spawnSmoke(view, muzzle, { x: e.launch.x / speed, y: e.launch.y / speed });
+      shake(view, CANNON_SHAKE_PX, CANNON_SHAKE_SEC);
+      pushCallout(view, { text: COPY.callouts.boom, worldPos: muzzle, colour: PALETTE.bump, kind: 'cannon', sizePx: CALLOUT_SIZE });
       break;
     }
     case 'ballRest':
@@ -875,6 +1062,7 @@ function tween(map: Map<string, number>, key: string, target: number, rate: numb
 function updateMechanicAnims(view: ViewState, next: SimState, dt: number): void {
   ageMapTimers(view.padAnims, dt);
   ageMapTimers(view.stickerPulse, dt);
+  for (const jaw of view.jaws) if (jaw !== null) jaw.t += dt;
   for (const [k, g] of view.gateAnims) {
     g.t += dt;
     if (g.t > 1) view.gateAnims.delete(k);
@@ -935,7 +1123,7 @@ function updateCallouts(view: ViewState): void {
 function followTarget(view: ViewState, next: SimState): Camera {
   if (next.phase !== 'aiming') {
     view.aimCamera = null;
-    return cameraFor(view.level, next, 'follow');
+    return cameraFor(view.level, next, 'follow', view.followBall ?? next.activePlayer);
   }
   const player = next.activePlayer;
   const ball = next.balls[player].pos;
@@ -1006,11 +1194,11 @@ export function screenToWorld(view: ViewState, p: Vec): Vec {
   return { x: p.x / view.camera.zoom + view.camera.x, y: p.y / view.camera.zoom + view.camera.y };
 }
 
-function followCamera(level: Level, state: SimState): Camera {
-  const ball = state.balls[state.activePlayer];
+function followCamera(level: Level, state: SimState, player: PlayerId): Camera {
+  const ball = state.balls[player];
   const aim = state.players[state.activePlayer].aim;
   const aimingRight = facingForAim(aim) === 1;
-  const aiming = state.phase === 'aiming';
+  const aiming = state.phase === 'aiming' && player === state.activePlayer;
   const fraction = aiming && !aimingRight ? FOLLOW_FRACTION_LEFT : FOLLOW_FRACTION_RIGHT;
   const wanted = ball.pos.x - VIEWPORT_W * fraction;
   const maxX = Math.max(0, level.width - VIEWPORT_W);
@@ -1018,17 +1206,17 @@ function followCamera(level: Level, state: SimState): Camera {
 }
 
 /**
- * follow: active ball at 45% width (55% when aiming left), y fixed 0, zoom 1, always clamped to the
- * level (no overscan, BUILD_DECISIONS D7: the pointer scales full power to the stage room instead);
- * overview: zoom = min(1280/width, 1), centred, ground at ~70%
- * height.
+ * follow: the followed ball (default the active one; the view passes the ball a spring or cannon
+ * launched, D10.7) at 45% width (55% when the active ball aims left), y fixed 0, zoom 1, always clamped
+ * to the level (no overscan, BUILD_DECISIONS D7: the pointer scales full power to the stage room
+ * instead); overview: zoom = min(1280/width, 1), centred, ground at ~70% height.
  */
-export function cameraFor(level: Level, state: SimState, mode: CameraMode): Camera {
+export function cameraFor(level: Level, state: SimState, mode: CameraMode, followPlayer: PlayerId = state.activePlayer): Camera {
   if (mode === 'overview') {
     const zoom = Math.min(VIEWPORT_W / level.width, 1);
     const x = (level.width - VIEWPORT_W / zoom) / 2;
     const y = level.hole.rimY - (VIEWPORT_H * OVERVIEW_GROUND_FRACTION) / zoom;
     return { x, y, zoom };
   }
-  return followCamera(level, state);
+  return followCamera(level, state, followPlayer);
 }

@@ -226,6 +226,38 @@ describe('fixed-step loop', () => {
     expect(s?.device).toBeDefined();
   });
 
+  it('FrameSummary.waiting names the device holding each ball and its first release plate, from SimState (D10.10)', async () => {
+    level.current = {
+      ...fixture,
+      id: 'test-devices',
+      rects: [
+        { kind: 'trap', id: 'snare', x: 380, y: 560, w: 80, h: 40, switchIds: ['free'], label: 'TRAP' },
+        { kind: 'cannon', id: 'cannon', x: 500, y: 600, w: 40, h: 10, switchIds: ['fire', 'free'], launch: { x: 400, y: -700 }, label: 'CANNON' },
+      ],
+      switches: [
+        { id: 'free', x: 800, w: 100, surfaceY: 600, colour: '#b57bee', label: 'FREE' },
+        { id: 'fire', x: 1000, w: 100, surfaceY: 600, colour: '#b57bee', label: 'FIRE' },
+      ],
+    };
+    const r = await mount();
+    r.frame(1000);
+    expect(r.summaries[0]?.waiting).toEqual([
+      { reason: 'caught', release: 'FREE' },
+      { reason: 'loaded', release: 'FIRE' },
+    ]);
+  });
+
+  it('leaving the game (unmount) stops the fan loop it was driving', async () => {
+    level.current = { ...fixture, id: 'test-fan', rects: [{ kind: 'fan', id: 'fan', x: 500, y: 300, w: 48, h: 300 }] };
+    const r = await mount();
+    const setFan = vi.spyOn(r.audio, 'setFan');
+    r.frame(1000);
+    expect(setFan).toHaveBeenLastCalledWith(true, 1);
+    act(() => r.root.unmount());
+    expect(setFan).toHaveBeenLastCalledWith(false, 1);
+    expect(setFan).toHaveBeenCalledTimes(2);
+  });
+
   it('the stage wrapper gets --stage-scale and the hud gets --power / --angle-deg / --aim-ready', async () => {
     const r = await mount();
     r.frame(1000);
