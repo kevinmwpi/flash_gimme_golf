@@ -164,10 +164,10 @@ export const COPY = Object.freeze({
       holds: (label: string) => `HOLDS ${label}`,
       /** Sunk ball that keeps a cup-wired switch pressed (D2); short enough for the 160 px chip. */
       holdsFromCup: (label: string) => `CUP HOLDS ${label}`,
-      /** D10.10: a ball resting in an armed trap, named by the label of the trap's first release plate. */
-      caught: (label: string) => `CAUGHT · needs ${label}`,
-      /** D10.10: a ball resting on a cold cannon's breech, named by the label of its first FIRE plate. */
-      loaded: (label: string) => `LOADED · needs ${label}`,
+      /** D10.10: a ball resting in an armed trap, naming every release plate ('FREE or FAR'). */
+      caught: (labels: string) => `CAUGHT · needs ${labels}`,
+      /** D10.10: a ball resting on a cold cannon's breech, naming every FIRE plate ('A, B or DECK'). */
+      loaded: (labels: string) => `LOADED · needs ${labels}`,
     }),
   }),
   hint: Object.freeze({
@@ -454,21 +454,22 @@ export type ChipStatusInput = {
   holdsLabel: string | null;
   /** The level wires the cup to a switch, so a sunk ball holds it. */
   cupHoldsLabel: string | null;
-  /** The device this resting ball waits in and its first release plate's label (FrameSummary.waiting, D10.10). */
+  /** The device this resting ball waits in and the labels of its release plates (FrameSummary.waiting, D10.10). */
   waiting: { readonly reason: WaitReason; readonly release: string } | null;
 };
 
 /**
- * Player chip status line (D2, D10.10): CUP HOLDS <label> / IN THE CUP / CAUGHT · needs <label> /
- * LOADED · needs <label> / AIMING / HOLDS <label> / WAITING. A caught ball on a seat plate (BAIT, DOOR)
- * still holds that plate but reads CAUGHT: the chip names what the partner has to do.
+ * Player chip status line (D2, D10.10): CUP HOLDS <label> / IN THE CUP / CAUGHT · needs <labels> /
+ * LOADED · needs <labels> / AIMING / HOLDS <label> / WAITING. A caught ball on a seat plate (BAIT, DOOR)
+ * still holds that plate but reads CAUGHT: the chip names what the partner has to do. The release text comes
+ * from devices.releaseLabel already in the plates' (upper-case) labels joined with a lower-case 'or'.
  */
 export function chipStatus(input: ChipStatusInput): string {
   const s = COPY.hud.status;
   if (input.sunk) return input.cupHoldsLabel === null ? s.inCup : s.holdsFromCup(input.cupHoldsLabel);
   if (input.waiting !== null) {
-    const label = input.waiting.release.toUpperCase();
-    return input.waiting.reason === 'caught' ? s.caught(label) : s.loaded(label);
+    const labels = input.waiting.release;
+    return input.waiting.reason === 'caught' ? s.caught(labels) : s.loaded(labels);
   }
   if (input.active && (input.phase === 'aiming' || input.phase === 'flying')) return s.aiming;
   if (input.holdsLabel !== null) return s.holds(input.holdsLabel);

@@ -244,7 +244,7 @@ describe('fixed-step loop', () => {
     expect(s?.device).toBeDefined();
   });
 
-  it('FrameSummary.waiting names the device holding each ball and its first release plate, from SimState (D10.10)', async () => {
+  it('FrameSummary.waiting names the device holding each ball and every release plate, from SimState (D10.10)', async () => {
     level.current = {
       ...fixture,
       id: 'test-devices',
@@ -261,7 +261,7 @@ describe('fixed-step loop', () => {
     r.frame(1000);
     expect(r.summaries[0]?.waiting).toEqual([
       { reason: 'caught', release: 'FREE' },
-      { reason: 'loaded', release: 'FIRE' },
+      { reason: 'loaded', release: 'FIRE or FREE' },
     ]);
   });
 

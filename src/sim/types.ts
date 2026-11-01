@@ -180,9 +180,11 @@ export type LevelRect =
 export type LevelRectKind = LevelRect['kind'];
 
 /**
- * Pressure plate. Pressed while ANY non-sunk ball is in ground contact with its centre x inside
- * [x, x+w] and its bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY`. Released the very
- * tick the presser leaves (no latching). Levels pair switches so the holder can also cross.
+ * Pressure plate. HELD while a RESTING (asleep, not sunk) ball has its centre x inside [x, x+w], its
+ * bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY` and, as its ground, a terrain piece (or, for
+ * a deck plate, the `onRectId` rect): a ball rolling or bouncing across a plate never presses it, and a
+ * caught ball still holds the plate it rests on (a trap seat). Released the very tick the holder moves
+ * (no latching). Levels pair switches so the holder can also cross.
  */
 export type PressureSwitch = {
   readonly id: string;
@@ -301,12 +303,14 @@ export type PlayerState = {
 export type BallState = {
   pos: Vec;
   vel: Vec;
-  /** True once at rest (REST_TICKS consecutive slow grounded ticks). Woken if support vanishes
-   *  or an active fan contains the ball. */
+  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls hold plates and
+   *  wait in devices. Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
+   *  closed on it (a door), it rests on the breech of a cannon that is now lit (it fires), or its support
+   *  vanished. */
   asleep: boolean;
   /** True once in the cup (sunk or gimme). pos is then {hole.x, hole.rimY + 10} and the ball is skipped. */
   sunk: boolean;
-  /** Ground/rect-top contact during the last tick (drives switches + rest test). */
+  /** Ground/rect-top contact during the last tick (drives the rest test; plates read `asleep`). */
   grounded: boolean;
   /** Consecutive ticks that satisfied the rest test; asleep when it reaches REST_TICKS. */
   restTicks: number;

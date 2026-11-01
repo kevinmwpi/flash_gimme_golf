@@ -89,9 +89,17 @@ export function releaseIdsOf(level: Level, rect: LevelRect): { switchIds: readon
   return { switchIds, cup };
 }
 
-/** Label (or upper-cased id) of the FIRST switch in `rect.switchIds`: the chip text `CAUGHT · needs <LABEL>`. */
+/**
+ * Every plate that releases or fires a device, by upper-cased label (else id), distinct and in authored order:
+ * the chip text `CAUGHT · needs <LABELS>` ('FREE or FAR', 'A, B or DECK'). All of them, not only the first,
+ * because which one the partner can reach depends on where it stands (D10.10).
+ */
 export function releaseLabel(level: Level, rect: LevelRect): string {
-  const first = rectSwitchIds(rect)[0];
-  if (first === undefined) return '';
-  return level.switches.find((sw) => sw.id === first)?.label ?? first.toUpperCase();
+  const labels: string[] = [];
+  for (const id of rectSwitchIds(rect)) {
+    const label = (level.switches.find((sw) => sw.id === id)?.label ?? id).toUpperCase();
+    if (!labels.includes(label)) labels.push(label);
+  }
+  if (labels.length <= 1) return labels[0] ?? '';
+  return `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1] ?? ''}`;
 }

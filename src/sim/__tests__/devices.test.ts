@@ -202,7 +202,7 @@ describe('device queries (devices.ts)', () => {
     expect(waitingOf(cannonLevel, { fire: false }, { ...inBreech, asleep: false })).toBeNull();
   });
 
-  it('releaseIdsOf names the plates and whether the cup holds one; releaseLabel is the first plate label (else its id)', () => {
+  it('releaseIdsOf names the plates and whether the cup holds one; releaseLabel names every plate by label (else its id)', () => {
     expect(releaseIdsOf(trapLevel, SNARE)).toEqual({ switchIds: ['free'], cup: true });
     expect(releaseIdsOf(machineLevel, rectOf(machineLevel, 'trap'))).toEqual({ switchIds: ['free'], cup: false });
     expect(releaseLabel(trapLevel, SNARE)).toBe('FREE');
@@ -210,6 +210,10 @@ describe('device queries (devices.ts)', () => {
     const unlabelled: Level = { ...cannonLevel, switches: cannonLevel.switches.map(({ label: _ignored, ...sw }) => sw) };
     expect(releaseLabel(unlabelled, CANNON)).toBe('FIRE');
     expect(releaseLabel(trapLevel, { ...SNARE, switchIds: ['plate-b'] })).toBe('PLATE-B');
+    // several plates: distinct labels in authored order, so the chip never names only one the partner cannot reach
+    expect(releaseLabel(trapLevel, { ...SNARE, switchIds: ['free', 'plate-b'] })).toBe('FREE or PLATE-B');
+    expect(releaseLabel(trapLevel, { ...SNARE, switchIds: ['free', 'plate-b', 'plate-c'] })).toBe('FREE, PLATE-B or PLATE-C');
+    expect(releaseLabel(trapLevel, { ...SNARE, switchIds: ['free', 'free'] })).toBe('FREE');
   });
 });
 

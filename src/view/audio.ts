@@ -1227,7 +1227,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       osc(out, { type: 'sine', freq: 120 * j, freqEnd: 42 * j, glide: 0.22, at, a: 0.002, d: 0.32, gain: dB(-3) });
       osc(out, { type: 'triangle', freq: 240 * j, freqEnd: 90 * j, glide: 0.08, at, a: 0.001, d: 0.09, gain: dB(-10), filter: { type: 'lowpass', freq: 1200 } });
       noise(out, { at, a: 0.002, d: 0.18, s: 0.25, dur: 0.2, r: 0.25, gain: dB(-8), rate: 0.7, filter: { type: 'lowpass', freq: 1400, freqEnd: 250, sweep: 0.35, q: 0.7 } });
-      noise(out, { at: at + 0.12, a: 0.06, d: 0.35, s: 0.3, dur: 0.4, r: 0.4, gain: dB(-24), filter: { type: 'bandpass', freq: 700, q: 0.6 } });
+      // a + d must not pass dur: envelope() books the sustain at dur, which would cut a decay still running
+      noise(out, { at: at + 0.12, a: 0.06, d: 0.34, s: 0.3, dur: 0.4, r: 0.4, gain: dB(-24), filter: { type: 'bandpass', freq: 700, q: 0.6 } });
     },
     turnSkipped(playerId = 0, o = {}) {
       const v = begin('turnSkipped', o, 0.12);

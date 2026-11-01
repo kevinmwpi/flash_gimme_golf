@@ -88,7 +88,8 @@ describe('ui copy', () => {
     expect(chip({ waiting: { reason: 'caught', release: 'TOP' }, holdsLabel: 'BAIT' })).toBe('CAUGHT · needs TOP');
     // A ball that comes to rest caught on its own shot reads CAUGHT before the hand-off ends the flight.
     expect(chip({ waiting: { reason: 'caught', release: 'FREE' }, active: true, phase: 'flying' })).toBe('CAUGHT · needs FREE');
-    expect(chip({ waiting: { reason: 'loaded', release: 'a' } })).toBe('LOADED · needs A');
+    expect(chip({ waiting: { reason: 'loaded', release: 'A, B or DECK' } })).toBe('LOADED · needs A, B or DECK');
+    expect(chip({ waiting: { reason: 'caught', release: 'FREE or FAR' } })).toBe('CAUGHT · needs FREE or FAR');
     expect(chip({ waiting: { reason: 'caught', release: 'FREE' }, sunk: true, cupHoldsLabel: 'FAR' })).toBe('CUP HOLDS FAR');
   });
 
