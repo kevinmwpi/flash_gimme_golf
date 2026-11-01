@@ -183,13 +183,16 @@ export function isPermanentRect(rect: LevelRect): boolean {
   return rectSwitchIds(rect).length === 0;
 }
 
-/** No switch => always active. `switchIds` (OR) overrides `switchId`. Default activeWhen: blocker false, else true. */
+/**
+ * No switch => always active. `switchIds` (OR) overrides `switchId`. Default activeWhen: blocker and trap
+ * false (a door is shut and a trap ARMED until a plate is held), else true (a cannon is LIT while held).
+ */
 export function isRectActive(rect: LevelRect, switches: Readonly<Record<string, boolean>>): boolean {
   const ids = rectSwitchIds(rect);
   if (ids.length === 0) return true;
   let pressed = false;
   for (const id of ids) if (switches[id] === true) pressed = true;
-  return pressed === (rect.activeWhen ?? rect.kind !== 'blocker');
+  return pressed === (rect.activeWhen ?? (rect.kind !== 'blocker' && rect.kind !== 'trap'));
 }
 
 export function activeRects(level: Level, switches: Readonly<Record<string, boolean>>): readonly LevelRect[] {
@@ -206,7 +209,8 @@ export function switchMaskOf(level: Level, switches: Readonly<Record<string, boo
   return mask;
 }
 
-function isSolidRect(rect: LevelRect): rect is BridgeRect | BlockerRect | ColourGateRect {
+/** The rect kinds with collision geometry (traps, cannons and the other pads have none). */
+export function isSolidRect(rect: LevelRect): rect is BridgeRect | BlockerRect | ColourGateRect {
   return rect.kind === 'bridge' || rect.kind === 'blocker' || rect.kind === 'colourGate';
 }
 
@@ -262,17 +266,21 @@ export function collidersFor(colliders: readonly Collider[], playerId: PlayerId)
 
 // ---- contacts -------------------------------------------------------------------------------------
 
-function insideAnyPiece(p: Vec, colliders: readonly Collider[]): boolean {
-  for (const c of colliders) if (c.kind === 'terrain' && pointInPiece(c.piece, p)) return true;
+/** True when p is inside a terrain piece or inside a solid rect other than `self` (this ball's colliders). */
+function insideOtherSolid(p: Vec, self: LevelRect, colliders: readonly Collider[]): boolean {
+  for (const c of colliders) {
+    if (c.kind === 'terrain' ? pointInPiece(c.piece, p) : c.rect !== self && rectContains(c.rect, p)) return true;
+  }
   return false;
 }
 
 type Face = { normal: Vec; depth: number };
 
 /**
- * Ejection for a centre INSIDE an AABB: the nearest face whose exit point is not inside terrain
- * (a door standing on the fairway closes on a parked ball: it must leave sideways, never through
- * the floor). Falls back to the nearest face.
+ * Ejection for a centre INSIDE an AABB: the nearest face whose exit point is not inside terrain or
+ * another solid rect (a door standing on the fairway, or a window stacked on a wall a ball can rest
+ * on, closes on a parked ball: it must leave sideways, never into the floor or the wall below).
+ * Falls back to the nearest face.
  */
 function rectEscape(rect: LevelRect, p: Vec, colliders: readonly Collider[]): Face {
   const faces: Face[] = [
@@ -285,7 +293,7 @@ function rectEscape(rect: LevelRect, p: Vec, colliders: readonly Collider[]): Fa
   for (const face of faces) {
     const reach = face.depth + BALL_RADIUS;
     const exit: Vec = { x: p.x + face.normal.x * reach, y: p.y + face.normal.y * reach };
-    if (!insideAnyPiece(exit, colliders)) return face;
+    if (!insideOtherSolid(exit, rect, colliders)) return face;
   }
   return faces[0] ?? { normal: UP, depth: 0 };
 }

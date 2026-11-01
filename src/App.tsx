@@ -4,8 +4,11 @@
  * (LocalSession with crypto.getRandomValues seeds; OnlineSessionView from the client's config once
  * the status reaches `playing`), mounts GameCanvas + the stage-space HUD layer + the viewport-space
  * cards. Overlays are driven by FrameSummary.phase and ClientStatus, never by an event alone; events
- * only feed the banner/toasts (including the holder tip) and the best table; the chips' holds come
- * from FrameSummary.holds (SimState-derived). Boot precedence
+ * only feed the banner/toasts (including the holder tip) and the best table; the chips' holds and
+ * CAUGHT / LOADED cues come from FrameSummary.holds / .waiting (SimState-derived). A session plays one
+ * world; its results card continues into the next one (BUILD_DECISIONS D10.2) and reads its numbers from
+ * the SimState behind the campaignResults summary, because online drops stale events and a rejoin
+ * replays none. Boot precedence
  * (main.tsx reads and strips the URL first): fg.reconnect -> rejoin; ?room= -> lobby auto-join once;
  * ?state= -> title with the shared card (broken link -> "older version" card); else title.
  */
@@ -17,7 +20,7 @@ import { buildShareUrl, decodeShareLink } from './sim/serialize';
 import { createSim } from './sim/sim';
 import type { Level, LevelResult, Medal, MetaScreen, PlayerCommand, PlayerId, SimConfig, SimEvent, SimMode, SimState } from './sim/types';
 import { medalFor } from './sim/types';
-import CampaignResults, { type CampaignRow } from './ui/CampaignResults';
+import CampaignResults, { campaignTally, type CampaignTally } from './ui/CampaignResults';
 import Callouts, { INFO_BANNER_MS, type Toast } from './ui/Callouts';
 import Hud from './ui/Hud';
 import LevelIntro from './ui/LevelIntro';
@@ -33,9 +36,10 @@ import { HOLDER_TIP_MS, UNKNOWN_SPOTS, advanceSpots, holderTipSwitch, spotsOf, t
 import { tapSpeaker } from './ui/speaker';
 import { clearBests, loadBests, loadOnboarded, loadSettings, saveBest, saveOnboarded, saveSettings, type BestTable, type UiSettings } from './ui/storage';
 import { inviteUrlFor, isRoomCode } from './ui/url';
+import { continueTarget } from './ui/worlds';
 import type { AudioSystem } from './view/audio';
-import GameCanvas, { type FrameSummary, type LocalSession, type OnlineSessionView } from './view/GameCanvas';
-import type { UiAction } from './view/input/index';
+import GameCanvas, { waitingChipOf, type FrameSummary, type LocalSession, type OnlineSessionView } from './view/GameCanvas';
+import { lastInputDevice, subscribeInputDevice, watchPageDevice, type UiAction } from './view/input/index';
 import type { InputDevice } from './view/view';
 
 // ---------------------------------------------------------------------------------------------
@@ -61,7 +65,8 @@ type SharedGame = { config: SimConfig; state: SimState };
 
 type AudioState = { muted: boolean; music: boolean; volume: number; locked: boolean };
 
-type StageMetrics = { scale: number; hudScale: number; compact: boolean };
+/** `narrowRow`: the HUD top row is too narrow for a CAUGHT / LOADED status inside its chip (styles.css `.row-narrow`). */
+type StageMetrics = { scale: number; hudScale: number; compact: boolean; narrowRow: boolean };
 
 const STAGE_W = 1280;
 const STAGE_H = 720;
@@ -69,6 +74,10 @@ const COMPACT_BELOW = 0.85;
 const HUD_SCALE_MIN = 1;
 const HUD_SCALE_MAX = 1.7;
 const HUD_SCALE_TARGET = 0.9;
+/** The HUD top row is the stage width less its 16 px side insets, in logical px (styles.css `.hud-top`). */
+const HUD_ROW_INSETS = 32;
+/** At or below this logical row width the waiting status hangs under its chip (phones: about 750). */
+const HUD_ROW_NARROW_MAX = 900;
 const HINT_SHOTS_ON_LATER_HOLES = 3;
 const NOW_TICK_MS = 250;
 /** The results card waits for the HOLE COMPLETE! banner (UX.md §3.7; VISUAL.md §13). */
@@ -123,10 +132,14 @@ function decodeShared(param: string): { card: SharedCard; game: SharedGame | nul
   }
 }
 
-/** Local sessions know their first state before the loop's first frame, so the intro card never waits for it. */
+/**
+ * Local sessions know their first state before the loop's first frame, so the intro card never waits for it.
+ * Its device is the one the loop's input system starts from: the page's last (a keyboard player's title keys).
+ */
 function initialSummary(session: Session): FrameSummary | null {
   if (session.kind !== 'local') return null;
   const s = session.initial.state;
+  const level = levelById(s.levelId);
   return {
     phase: s.phase,
     tick: s.tick,
@@ -134,7 +147,7 @@ function initialSummary(session: Session): FrameSummary | null {
     turnReady: false,
     strokes: [s.players[0].strokes, s.players[1].strokes],
     aim: s.players[s.activePlayer].aim,
-    device: 'pointer',
+    device: lastInputDevice(),
     cameraMode: 'overview',
     levelId: s.levelId,
     seatIsActive: session.seats.includes(s.config.mode === 'solo' ? 0 : s.activePlayer),
@@ -142,6 +155,7 @@ function initialSummary(session: Session): FrameSummary | null {
     sunk: [s.balls[0].sunk, s.balls[1].sunk],
     turnDelayTicks: s.turnDelayTicks,
     holds: {},
+    waiting: [waitingChipOf(level, s, 0), waitingChipOf(level, s, 1)],
     miss: null,
   };
 }
@@ -175,7 +189,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 // ---------------------------------------------------------------------------------------------
 
 function useStageMetrics(ref: React.RefObject<HTMLDivElement | null>): StageMetrics {
-  const [metrics, setMetrics] = useState<StageMetrics>({ scale: 1, hudScale: 1, compact: false });
+  const [metrics, setMetrics] = useState<StageMetrics>({ scale: 1, hudScale: 1, compact: false, narrowRow: false });
   useEffect(() => {
     const el = ref.current;
     if (el === null) return;
@@ -183,7 +197,7 @@ function useStageMetrics(ref: React.RefObject<HTMLDivElement | null>): StageMetr
       const rect = el.getBoundingClientRect();
       const scale = Math.max(0.01, Math.min(rect.width / STAGE_W, rect.height / STAGE_H));
       const hudScale = Math.min(HUD_SCALE_MAX, Math.max(HUD_SCALE_MIN, HUD_SCALE_TARGET / scale));
-      setMetrics({ scale, hudScale, compact: scale < COMPACT_BELOW });
+      setMetrics({ scale, hudScale, compact: scale < COMPACT_BELOW, narrowRow: (STAGE_W - HUD_ROW_INSETS) / hudScale <= HUD_ROW_NARROW_MAX });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -385,6 +399,8 @@ type GameScreenProps = {
   onQuit(): void;
   onLevelSelect(): void;
   onPlayAgainLocal(): void;
+  /** "Continue to World N+1" in a local session: a new session from that hole (D10.2: one world per session) */
+  onContinueLocal(levelId: string): void;
   onCreateRoom(): void;
   /**
    * the onboarding coach is on screen or about to be (hole 1's first-run intro card and first aiming turn);
@@ -399,10 +415,9 @@ type GameFlags = {
   /** best BEFORE the current result, for the results card */
   resultBest: BestTable[string] | null;
   lastResult: LevelResult | null;
-  campaign: { rows: CampaignRow[]; coursePar: number; total: number; medal: Medal } | null;
 };
 
-const EMPTY_FLAGS: GameFlags = { shots: 0, resultBest: null, lastResult: null, campaign: null };
+const EMPTY_FLAGS: GameFlags = { shots: 0, resultBest: null, lastResult: null };
 
 function netOverlayFor(status: ClientStatus): NetOverlayKind | null {
   switch (status.kind) {
@@ -422,7 +437,7 @@ function netOverlayFor(status: ClientStatus): NetOverlayKind | null {
 }
 
 function GameScreen(props: GameScreenProps): React.JSX.Element {
-  const { session, audio, audioState, settings, bests, onBest, clientStatus, toasts, pushToast, popToast, onToggleMute, onOpenSettings, settingsOpen, onQuit, onLevelSelect, onPlayAgainLocal, onCreateRoom, onCoachVisible } = props;
+  const { session, audio, audioState, settings, bests, onBest, clientStatus, toasts, pushToast, popToast, onToggleMute, onOpenSettings, settingsOpen, onQuit, onLevelSelect, onPlayAgainLocal, onContinueLocal, onCreateRoom, onCoachVisible } = props;
   const online = session.kind === 'online';
   const seat: PlayerId | null = online ? session.seat : null;
   const seats = useMemo(() => (online ? seatsFor('online', session.seat) : session.seats), [online, session]);
@@ -440,6 +455,8 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const metrics = useStageMetrics(gameRef);
 
   const [summary, setSummary] = useState<FrameSummary | null>(() => initialSummary(session));
+  /** The world card's numbers while the round is over (null otherwise); see onFrame. */
+  const [tally, setTally] = useState<CampaignTally | null>(null);
   const [flags, setFlags] = useState<GameFlags>(EMPTY_FLAGS);
   const [paused, setPaused] = useState(false);
   /** true from `levelComplete` until the HOLE COMPLETE! banner has played; the results card waits for it */
@@ -454,14 +471,15 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const localContinue = useRef(false);
   const holderTipShown = useRef<string | null>(null);
   /**
-   * Where each ball last came to rest, from SimEvents, for the holder tip only. A local mount knows
-   * the state (shared links included); online starts unknown. `mount` also names the mount's own
-   * levelStart (createSim's, or sharedSession's synthetic one), which must not reset the spots to the
-   * tees if it ever reaches the subscription (today GameCanvas emits it before GameScreen subscribes).
+   * Where each ball last came to rest (and whether a device holds it), from SimEvents, for the holder
+   * tip only. A local mount knows the state (shared links included); online starts unknown. `mount`
+   * also names the mount's own levelStart (createSim's, or sharedSession's synthetic one), which must
+   * not reset the spots to the tees if it ever reaches the subscription (today GameCanvas emits it
+   * before GameScreen subscribes).
    */
   const [mount] = useState<{ spots: Spots; levelId: string | null; tick: number }>(() =>
     session.kind === 'local'
-      ? { spots: spotsOf(session.initial.state.balls), levelId: session.initial.state.levelId, tick: session.initial.state.tick }
+      ? { spots: spotsOf(levelById(session.initial.state.levelId), session.initial.state), levelId: session.initial.state.levelId, tick: session.initial.state.tick }
       : { spots: UNKNOWN_SPOTS, levelId: null, tick: -1 },
   );
   const spotsRef = useRef<Spots>(mount.spots);
@@ -489,6 +507,18 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
     [session, levelIndex],
   );
 
+  /**
+   * Each summary feeds the HUD and the cards. The world card reads its numbers from the SimState that summary
+   * describes (GameCanvas writes stateRef before calling onFrame), never from the campaignComplete event alone:
+   * online, a tab hidden past EVENT_REPLAY_WINDOW_MS drops that event and a rejoin replays none. A stale
+   * stateRef reads as no tally and the next summary fills it in. The tally stands while the round stays over.
+   */
+  const onFrame = useCallback((next: FrameSummary) => {
+    setSummary(next);
+    const state = stateRef.current;
+    setTally((shown) => (next.phase === 'campaignResults' ? (shown ?? campaignTally(state)) : null));
+  }, []);
+
   // Event-derived UI state: ball spots (holder tip), shot counts, bests, results, toasts the sim implies.
   useEffect(() => {
     /** The holder tip belongs to its hole: a new hole, a restart or leaving the game takes it down. */
@@ -503,12 +533,14 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
       switch (e.type) {
         case 'levelStart': {
           dropTip();
-          setFlags((f) => ({ ...EMPTY_FLAGS, campaign: f.campaign }));
+          setFlags(EMPTY_FLAGS);
           setResultsHold(false);
           setHintForced(false);
           holderTipShown.current = null;
           if (online && seat !== null && e.levelIndex > 0 && !e.restarted && !localContinue.current) pushToast(COPY.toast.movedOn(otherPlayer(seat)));
-          localContinue.current = false;
+          // The session's own start (index 0, no restart) reaches an online client late, with the first snapshot
+          // after the event-less start sync: it must not forget a Tee off pressed before it arrived.
+          if (e.levelIndex > 0 || e.restarted) localContinue.current = false;
           break;
         }
         case 'playStart':
@@ -538,17 +570,6 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           onBest(e.result.levelId, e.teamStrokes, e.result.medal);
           break;
         }
-        case 'campaignComplete':
-          setFlags((f) => ({
-            ...f,
-            campaign: {
-              rows: e.results.map((result) => ({ level: levelById(result.levelId), result })),
-              coursePar: e.coursePar,
-              total: e.totalStrokes,
-              medal: e.medal,
-            },
-          }));
-          break;
         default:
           break;
       }
@@ -704,10 +725,17 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
   const partnerAway = online && clientStatus.kind === 'playing' && !clientStatus.peerConnected;
   const partnerDeadline = partnerAway ? (clientStatus.peerDeadlineMs ?? null) : null;
   const reconnectSeconds = clientStatus.kind === 'reconnecting' ? Math.max(0, Math.ceil((clientStatus.deadlineMs - now) / 1000)) : partnerDeadline === null ? null : Math.max(0, Math.ceil((partnerDeadline - now) / 1000));
-  const showCoach = !coachDismissed && holeNumber === 1 && summary?.phase === 'aiming' && !paused;
+  /**
+   * The drag coach teaches a player who was never onboarded on hole 1 and on the first hole of a session,
+   * so an invitee whose room starts in World 2 or 3 still learns to aim (UX.md §5.5).
+   */
+  const coachHole = holeNumber === 1 || levelIndex === 0;
+  const showCoach = !coachDismissed && coachHole && summary?.phase === 'aiming' && !paused;
   const aimKeyHeld = useAimKeysHeld(showCoach);
-  /** Includes the hole-1 intro: a toast pushed under the intro card would still be up when the coach appears. */
-  const coachPending = !coachDismissed && holeNumber === 1 && (summary?.phase === 'intro' || summary?.phase === 'aiming');
+  /** Includes the coached hole's intro: a toast pushed under the intro card would still be up when the coach appears. */
+  const coachPending = !coachDismissed && coachHole && (summary?.phase === 'intro' || summary?.phase === 'aiming');
+  /** Where this world's results card continues (one world per session, D10.2); null after the last world. */
+  const next = continueTarget(level.world);
   useEffect(() => {
     onCoachVisible(coachPending);
     return () => onCoachVisible(false);
@@ -720,7 +748,7 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
         session={session}
         paused={paused && !online}
         onUiAction={onUiAction}
-        onFrame={setSummary}
+        onFrame={onFrame}
         onEvents={bus.push}
         audio={audio}
         externalCommands={externalCommands}
@@ -729,7 +757,7 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
         hudRef={stageLayerRef}
       />
 
-      <div ref={stageLayerRef} className={`stage-layer${metrics.compact ? ' compact' : ''}`} style={stageStyle}>
+      <div ref={stageLayerRef} className={`stage-layer${metrics.compact ? ' compact' : ''}${metrics.narrowRow ? ' row-narrow' : ''}`} style={stageStyle}>
         {summary !== null && (
           <Hud
             summary={summary}
@@ -791,7 +819,7 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           mode={mode}
           seat={seat}
           device={device}
-          firstRun={firstRun}
+          onboarding={firstRun && coachHole}
           onContinue={() => sendMeta('continue', 'intro')}
         />
       )}
@@ -810,16 +838,23 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           onQuit={guarded(quit)}
         />
       )}
-      {summary?.phase === 'campaignResults' && flags.campaign !== null && (
+      {summary?.phase === 'campaignResults' && tally !== null && (
         <CampaignResults
-          rows={flags.campaign.rows}
-          coursePar={flags.campaign.coursePar}
-          total={flags.campaign.total}
-          medal={flags.campaign.medal}
+          world={level.world}
+          nextWorld={next?.world ?? null}
+          rows={tally.rows}
+          coursePar={tally.coursePar}
+          total={tally.total}
+          medal={tally.medal}
           mode={mode}
           seat={seat}
           isHost={isHost}
           waitingForHost={online}
+          onContinue={() => {
+            if (next === null) return;
+            if (session.kind === 'online') session.client.playAgain(next.levelId);
+            else onContinueLocal(next.levelId);
+          }}
           onPlayAgain={() => (session.kind === 'online' ? session.client.playAgain() : onPlayAgainLocal())}
           onLevelSelect={guarded(leaveToLevelSelect)}
           onTitle={guarded(quit)}
@@ -888,9 +923,8 @@ export default function App({ audio, boot, version }: AppProps): React.JSX.Eleme
   const [settings, setSettings] = useState<UiSettings>(() => loadSettings());
   const [bests, setBests] = useState<BestTable>(() => loadBests());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [detectedDevice, setDetectedDevice] = useState<InputDevice>(() =>
-    typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer: fine)').matches ? 'touch' : 'pointer',
-  );
+  /** The device the page saw last, on any screen (Settings' "Auto" hint label; the game's input starts from it). */
+  const detectedDevice = useSyncExternalStore(subscribeInputDevice, lastInputDevice, lastInputDevice);
   const [audioState, audioActions] = useAudioState(audio);
   const [toasts, pushToast, popToast] = useToasts();
   const wsUrl = useMemo(() => getWsUrl(), []);
@@ -1021,26 +1055,23 @@ export default function App({ audio, boot, version }: AppProps): React.JSX.Eleme
     setBests({});
   }, []);
 
-  const playAgainLocal = useCallback(() => {
+  /**
+   * A fresh local session in the current mode: from `levelId` ("Continue to World N+1"), else from the
+   * finished campaign's first hole ("Play again"); campaignFrom keeps either inside one world (D10.2).
+   */
+  const newLocalSession = useCallback((levelId?: string) => {
     setScreen((s) => {
       if (s.kind !== 'game' || s.session.kind !== 'local') return s;
-      const first = s.session.config.levelIds[0];
+      const first = levelId ?? s.session.config.levelIds[0];
       if (first === undefined) return s;
       return { kind: 'game', session: localSession(s.session.config.mode === 'solo' ? 'solo' : 'local', first) };
     });
   }, []);
 
-  useEffect(() => {
-    if (screen.kind !== 'game') return;
-    const onPointer = (e: PointerEvent): void => setDetectedDevice(e.pointerType === 'touch' ? 'touch' : 'pointer');
-    const onKey = (): void => setDetectedDevice('keyboard');
-    window.addEventListener('pointerdown', onPointer, { passive: true });
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', onPointer);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [screen.kind]);
+  // Keys and presses on every screen, from boot: a player who reaches the stage with the keyboard (Tab, arrows,
+  // Enter on the title or the lobby) is coached with keys from the first intro card, not with the touch/pointer
+  // guess; Space/Enter on a card's button counts too, where the stage's own keyboard adapter never looks.
+  useEffect(() => watchPageDevice(window), []);
 
   const settingsOverlay = settingsOpen && (
     <Settings
@@ -1148,7 +1179,8 @@ export default function App({ audio, boot, version }: AppProps): React.JSX.Eleme
           settingsOpen={settingsOpen}
           onQuit={toTitle}
           onLevelSelect={toLevelSelect}
-          onPlayAgainLocal={playAgainLocal}
+          onPlayAgainLocal={newLocalSession}
+          onContinueLocal={newLocalSession}
           onCreateRoom={createRoom}
           onCoachVisible={setCoachShowing}
         />

@@ -4,6 +4,7 @@
  * the SIM group may refine it. Every number is validated for type AND range on decode; `par`/`medal`
  * of campaign entries are recomputed from the level registry, never trusted from the wire.
  */
+import { onCannonBreech } from './devices';
 import { hasLevel, levelById } from './levels/index';
 import { groundAt, groundSupports, switchMaskOf } from './terrain';
 import type {
@@ -31,6 +32,7 @@ import {
   BALL_FLAG_GROUNDED,
   BALL_FLAG_SUNK,
   CEILING_Y,
+  FLIGHT_WATCHDOG_TICKS,
   KILL_MARGIN,
   MAX_BALL_SPEED,
   MAX_POWER,
@@ -103,6 +105,7 @@ export function encodeSnapshot(state: SimState): SimSnapshot {
     switchMaskOf(level, state.switches),
     state.rng,
     campaign,
+    state.flightTicks,
   ];
 }
 
@@ -120,8 +123,8 @@ function isCampaignSnap(v: unknown): v is CampaignSnap {
 
 /** Shape check only (no ranges): the positional tuple described in types.ts. */
 export function isSimSnapshot(v: unknown): v is SimSnapshot {
-  if (!isTuple(v, 11)) return false;
-  const [version, tick, phase, levelIndex, activePlayer, turnDelay, players, balls, switchMask, rng, campaign] = v;
+  if (!isTuple(v, 12)) return false;
+  const [version, tick, phase, levelIndex, activePlayer, turnDelay, players, balls, switchMask, rng, campaign, flightTicks] = v;
   return (
     version === SNAPSHOT_VERSION &&
     isFiniteNum(tick) &&
@@ -135,7 +138,8 @@ export function isSimSnapshot(v: unknown): v is SimSnapshot {
     balls.every(isBallSnap) &&
     isFiniteNum(switchMask) &&
     isFiniteNum(rng) &&
-    isCampaignSnap(campaign)
+    isCampaignSnap(campaign) &&
+    isFiniteNum(flightTicks)
   );
 }
 
@@ -161,9 +165,9 @@ function restsOnPermanentGround(level: Level, switches: Readonly<Record<string, 
 }
 
 /**
- * Ranges per ball. `lastRest` is where a fallen ball respawns, so it must stand on permanent ground
- * (the sim only ever records such a spot): an unsupported lastRest would respawn, fall and respawn
- * forever, and the turn would never come back.
+ * Ranges per ball. `lastRest` is where a fallen or reset ball goes, so it must stand on permanent ground
+ * and off every cannon breech (the sim only ever records such a spot): an unsupported lastRest would
+ * respawn, fall and respawn forever, and one on a breech would fire, fall and respawn into it forever.
  */
 function decodeBall(b: BallSnap, level: Level, switches: Readonly<Record<string, boolean>>, slot: PlayerId): BallState {
   const [x, y, vx, vy, flags, restTicks, lastRestX, lastRestY] = b;
@@ -172,7 +176,9 @@ function decodeBall(b: BallSnap, level: Level, switches: Readonly<Record<string,
   if (!inWorld(level, x, y) || !inWorld(level, lastRestX, lastRestY)) fail('ball position out of world');
   if (Math.abs(vx) > MAX_BALL_SPEED || Math.abs(vy) > MAX_BALL_SPEED) fail('ball speed');
   const sunk = (flags & BALL_FLAG_SUNK) !== 0;
-  if (!sunk && !restsOnPermanentGround(level, switches, { x: lastRestX, y: lastRestY }, slot)) fail('lastRest unsupported');
+  const lastRest: Vec = { x: lastRestX, y: lastRestY };
+  if (!sunk && !restsOnPermanentGround(level, switches, lastRest, slot)) fail('lastRest unsupported');
+  if (!sunk && onCannonBreech(level, lastRest)) fail('lastRest on a cannon breech');
   return {
     pos: { x, y },
     vel: { x: vx, y: vy },
@@ -180,7 +186,7 @@ function decodeBall(b: BallSnap, level: Level, switches: Readonly<Record<string,
     sunk,
     grounded: (flags & BALL_FLAG_GROUNDED) !== 0,
     restTicks,
-    lastRest: { x: lastRestX, y: lastRestY },
+    lastRest,
   };
 }
 
@@ -199,12 +205,15 @@ function decodeCampaign(rows: CampaignSnap, config: SimConfig): LevelResult[] {
 /** Validates shape + ranges and rebuilds a SimState; throws SerializeError. */
 export function decodeSnapshot(snap: unknown, config: SimConfig): SimState {
   if (!isSimSnapshot(snap)) fail('bad snapshot shape');
-  const [, tick, phaseCode, levelIndex, activePlayer, turnDelayTicks, players, balls, switchMask, rng, campaign] = snap;
+  const [, tick, phaseCode, levelIndex, activePlayer, turnDelayTicks, players, balls, switchMask, rng, campaign, flightTicks] = snap;
   if (!isInt(tick, 0, Number.MAX_SAFE_INTEGER)) fail('tick');
   if (!isInt(phaseCode, 0, 4)) fail('phase');
   if (!isInt(levelIndex, 0, config.levelIds.length - 1)) fail('levelIndex');
   if (!isInt(turnDelayTicks, 0, TURN_DELAY_TICKS)) fail('turnDelayTicks');
   if (!isInt(rng, 0, UINT32_MAX)) fail('rng');
+  if (!isInt(flightTicks, 0, FLIGHT_WATCHDOG_TICKS - 1)) fail('flightTicks');
+  const phase = PHASES_BY_CODE[phaseCode as PhaseCode];
+  if (phase !== 'flying' && flightTicks !== 0) fail('flightTicks outside a flight');
   const levelId = config.levelIds[levelIndex];
   if (levelId === undefined || !hasLevel(levelId)) fail('unknown level id');
   const level = levelById(levelId);
@@ -217,7 +226,7 @@ export function decodeSnapshot(snap: unknown, config: SimConfig): SimState {
   return {
     config,
     tick,
-    phase: PHASES_BY_CODE[phaseCode as PhaseCode],
+    phase,
     levelIndex,
     levelId,
     players: [decodePlayer(players[0]), decodePlayer(players[1])],
@@ -227,6 +236,7 @@ export function decodeSnapshot(snap: unknown, config: SimConfig): SimState {
     turnDelayTicks,
     rng,
     campaign: decodeCampaign(campaign, config),
+    flightTicks,
   };
 }
 

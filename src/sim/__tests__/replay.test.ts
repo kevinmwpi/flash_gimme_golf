@@ -113,9 +113,9 @@ describe('runReplay determinism', () => {
   it('golden snapshot string for the fixture log (own it: an engine change must be recognisable)', () => {
     const { state } = runReplay(CONFIG, FIXTURE_LOG, FIXTURE_LOG_TICKS);
     // Recorded on Node 20 / V8 with ROLL_DAMP 0.996 + ROLL_FRICTION 60. A differing value means the physics,
-    // the fixtures or the engine changed.
+    // the fixtures or the engine changed. Snapshot version 2 appended flightTicks (0 at rest) and changed nothing else.
     expect(snapshotJson(state)).toBe(
-      '[1,2000,1,0,0,0,[[2,-1.2,40],[2,-1.4,60]],[[468.05,587.95,0,0,5,6,468.05,587.95],[949.07,587.95,0,0,5,6,949.07,587.95]],0,42,[]]',
+      '[2,2000,1,0,0,0,[[2,-1.2,40],[2,-1.4,60]],[[468.05,587.95,0,0,5,6,468.05,587.95],[949.07,587.95,0,0,5,6,949.07,587.95]],0,42,[],0]',
     );
   });
 

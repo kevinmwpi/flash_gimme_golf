@@ -1,7 +1,10 @@
-# Runs the slow level-solver suite (src/sim/__tests__/levels-solver.test.ts, ~13 min on a laptop) so a
-# physics or level change that opens a solo bypass or breaks co-op solvability is gated in CI, not only
-# by the CONTRIBUTING recipe. It is a separate workflow because it does not fit the 15-minute CI job,
-# and it runs only when the sim, the levels or the solver itself changed (or by hand).
+# Runs the slow level-solver suite (src/sim/__tests__/levels-solver-w{1,2,3}.test.ts, `npm run test:levels`) so a
+# physics or level change that opens a solo bypass, breaks co-op solvability, strands a launcher, loops a flight
+# or traps a ball for good is gated in CI, not only by the CONTRIBUTING recipe. The suite is split per world and
+# runs as a matrix, one shard per job (BUILD_DECISIONS D10.13): the heaviest shard (World 3) took 14 min alone on a
+# 4-vCPU machine, and all three shards run in parallel on one such machine finished in 19 min. It is a separate
+# workflow because it does not fit the 15-minute CI job, and it runs only when the sim, the levels or the solver
+# itself changed (or by hand).
 name: Levels
 
 on:
@@ -10,6 +13,7 @@ on:
     paths:
       - 'src/sim/**'
       - 'scripts/solver.ts'
+      - 'scripts/solver/**'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.ts'
@@ -19,6 +23,7 @@ on:
     paths:
       - 'src/sim/**'
       - 'scripts/solver.ts'
+      - 'scripts/solver/**'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.ts'
@@ -35,9 +40,13 @@ concurrency:
 
 jobs:
   solve:
-    name: level solver suite
+    name: level solver suite (world ${{ matrix.world }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        world: [1, 2, 3]
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -45,4 +54,4 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run test:levels
+      - run: npx vitest run src/sim/__tests__/levels-solver-w${{ matrix.world }}.test.ts

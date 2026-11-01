@@ -6,7 +6,9 @@
  * 0.85. The power bar reads the `--power` custom property GameCanvas writes on the stage layer every
  * frame, so the meter runs at frame rate while React renders at 10 Hz. Compact touch layouts drop the
  * meter for a power number floating above the ball while a drag is live (`--ball-x/y`, `--dragging`;
- * UX.md §4.5). Also exports the inline-SVG `Icon` and the 48 px `IconButton` the other screens reuse.
+ * UX.md §4.5). A ball waiting in a device reads `CAUGHT · needs FREE` / `LOADED · needs FIRE` from
+ * FrameSummary.waiting on every layout (BUILD_DECISIONS D10.10). Also exports the inline-SVG `Icon` and
+ * the 48 px `IconButton` the other screens reuse.
  */
 import React from 'react';
 import type { Level, PlayerId, SimMode } from '../sim/types';
@@ -189,9 +191,13 @@ function chipSub(mode: SimMode, seat: PlayerId | null, p: PlayerId): string | nu
   return null;
 }
 
+/**
+ * The plate slot `p`'s resting ball holds (VISUAL.md §11 `HOLDS <label>`), the cup-wired one included: on holes
+ * 5-12 that is each hole's key landing plate. A sunk ball holds nothing here; its CUP HOLDS line is chipStatus's.
+ */
 function holdsLabelFor(level: Level, holds: Readonly<Record<string, PlayerId>>, p: PlayerId): string | null {
   for (const sw of level.switches) {
-    if (holds[sw.id] === p && sw.id !== level.cupHoldsSwitch) return switchLabel(level, sw.id);
+    if (holds[sw.id] === p) return switchLabel(level, sw.id);
   }
   return null;
 }
@@ -205,13 +211,12 @@ export function hintTextFor(summary: FrameSummary, mode: SimMode, seat: PlayerId
   return mine ? COPY.hint.aim[device] : COPY.hint.partnerAiming(activePlayer);
 }
 
-/** Miss feedback copy (UX.md §5.2): shown while `summary.miss` is fresh, even with hints off. */
+/** Miss feedback copy (UX.md §5.2, D10.9): shown while `summary.miss` is fresh, even with hints off. */
 export function missTextFor(summary: FrameSummary, seat: PlayerId | null): string | null {
   const { miss, activePlayer } = summary;
   if (miss === null || summary.phase !== 'aiming') return null;
   if (miss === 'wrongBall') return COPY.hint.wrongBall(activePlayer);
-  if (miss === 'notYourTurn') return COPY.hint.notYourTurn(activePlayer, seat ?? (activePlayer === 0 ? 1 : 0));
-  return COPY.hint.miss;
+  return COPY.hint.notYourTurn(activePlayer, seat ?? (activePlayer === 0 ? 1 : 0));
 }
 
 function netTone(online: HudOnline): 'good' | 'ok' | 'bad' {
@@ -280,14 +285,16 @@ export default function Hud(props: HudProps): React.JSX.Element {
           const active = summary.activePlayer === p && (aiming || summary.phase === 'flying');
           const sunk = summary.sunk[p];
           const sub = chipSub(mode, seat, p);
-          const status =
-            partnerStatus(p) ??
-            chipStatus({ active, phase: summary.phase, sunk, holdsLabel: holdsLabelFor(level, holds, p), cupHoldsLabel: cupLabel });
+          const away = partnerStatus(p);
+          const waiting = summary.waiting[p];
+          const status = away ?? chipStatus({ active, phase: summary.phase, sunk, holdsLabel: holdsLabelFor(level, holds, p), cupHoldsLabel: cupLabel, waiting });
+          /** D10.10: CAUGHT / LOADED stays readable on every layout, compact included (styles.css `.chip.waits`). */
+          const waits = away === null && !sunk && waiting !== null;
           const isPartner = mode === 'online' && seat !== p;
           return (
             <div
               key={p}
-              className={`hud-card chip ${p === 0 ? 'red' : 'blue'}${active ? ' active' : ''}${isPartner ? ' partner' : ''}${wobbleChip === p ? ' wobble' : ''}`}
+              className={`hud-card chip ${p === 0 ? 'red' : 'blue'}${active ? ' active' : ''}${isPartner ? ' partner' : ''}${waits ? ' waits' : ''}${wobbleChip === p ? ' wobble' : ''}`}
               aria-label={`${upperNameOf(p)} ${status} ${summary.strokes[p]}`}
             >
               <span className="caret" aria-hidden="true">

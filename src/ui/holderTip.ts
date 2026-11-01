@@ -1,8 +1,13 @@
 // OWNER: ui
 /**
- * The holder tip (BUILD_DECISIONS D2: the toast that teaches the stall tap). At the start of a turn
- * the active ball may rest on a plate its partner still needs. The tip names that plate only when a
- * stall tap really keeps the partner's way open:
+ * The holder tip (BUILD_DECISIONS D2, D10.10: the toast that teaches the stall tap). At the start of a turn
+ * the active ball may rest on a plate its partner still needs. The tip names that plate only when a stall
+ * tap really keeps the partner's way open:
+ * - neither ball waits in a device (caught in an armed trap or loaded in a cold cannon): there the WAITING
+ *   rule already hands every turn to the free ball, and a release or FIRE plate is the partner's job;
+ * - the plate opens a door or raises a bridge: a plate whose only consumers are traps or cannons is never
+ *   named (a trap blocks no way, it only holds a ball that rests in it, and a loaded ball fires whenever a
+ *   FIRE plate is held again, so staying on one never keeps anything open);
  * - the plate is not wired to the cup (sinking holds it too) and is not a deck plate (a deck lets go
  *   the tick its ball moves, so a tap drops the bridge under the tapper);
  * - the partner rests on no plate that drives the same door or bridge, this one included (the
@@ -13,15 +18,16 @@
  *   falls whatever the holder does; staying would still be the holder's best move there, but a tip
  *   followed by the partner's fall reads as wrong advice, so it stays silent on purpose;
  * - the partner cannot pass that wall through a field of its own colour from where it rests.
- * Who rests where comes from SimEvents (advanceSpots), never from switchOn.byPlayer, which names
- * only the first ball on a plate. An unknown spot means no tip.
+ * Who rests where, and whether a device holds it there, comes from SimEvents (advanceSpots), never from
+ * switchOn.byPlayer, which names only the first ball on a plate. An unknown spot means no tip.
  */
+import { waitingOf } from '../sim/devices';
 import { levelById } from '../sim/levels/index';
 import { BALL_RADIUS, PLAYER_GATE_COLOUR, SWITCH_CONTACT_TOLERANCE } from '../sim/types';
-import type { BallState, Level, LevelRect, PlayerId, PressureSwitch, SimEvent, Vec } from '../sim/types';
+import type { BallState, Level, LevelRect, PlayerId, PressureSwitch, SimEvent, SimState, Vec } from '../sim/types';
 
-/** Where a ball last came to rest. */
-export type BallSpot = { readonly pos: Vec; readonly sunk: boolean };
+/** Where a ball last came to rest, and whether a device holds it there (caught or loaded, D10.4). */
+export type BallSpot = { readonly pos: Vec; readonly sunk: boolean; readonly waiting: boolean };
 /** One spot per slot; null while unknown (an online mount before that ball's first event). */
 export type Spots = readonly [BallSpot | null, BallSpot | null];
 
@@ -40,31 +46,45 @@ const OWN_FIELD_LOB_ROOM = 40;
 /** Both balls on their tees, as every level (and every restart) begins. */
 export function teeSpots(level: Level): Spots {
   return [
-    { pos: level.starts[0], sunk: false },
-    { pos: level.starts[1], sunk: false },
+    { pos: level.starts[0], sunk: false, waiting: false },
+    { pos: level.starts[1], sunk: false, waiting: false },
   ];
 }
 
-/** The balls of a known state (a local mount, a resumed share link included). */
-export function spotsOf(balls: readonly [Readonly<BallState>, Readonly<BallState>]): Spots {
-  return [
-    { pos: balls[0].pos, sunk: balls[0].sunk },
-    { pos: balls[1].pos, sunk: balls[1].sunk },
-  ];
+function spotOf(level: Level, state: Pick<SimState, 'balls' | 'switches'>, slot: PlayerId): BallSpot {
+  const ball: Readonly<BallState> = state.balls[slot];
+  return { pos: ball.pos, sunk: ball.sunk, waiting: waitingOf(level, state.switches, ball) !== null };
 }
 
-/** Spots after one SimEvent; feed every event in order. */
+/** The balls of a known state (a local mount, a resumed share link included), devices included. */
+export function spotsOf(level: Level, state: Pick<SimState, 'balls' | 'switches'>): Spots {
+  return [spotOf(level, state, 0), spotOf(level, state, 1)];
+}
+
+/**
+ * Spots after one SimEvent; feed every event in order. A device event follows the rest or teleport it
+ * belongs to in the same tick (BUILD_DECISIONS D10.4: `trapCaught` / `cannonLoad` after `ballRest` or a
+ * respawn), so a rest or a teleport clears `waiting` and the device event that follows sets it again.
+ */
 export function advanceSpots(spots: Spots, e: SimEvent): Spots {
   switch (e.type) {
     case 'levelStart':
       return teeSpots(levelById(e.levelId));
     case 'ballRest':
-      return withSpot(spots, e.playerId, { pos: e.pos, sunk: false });
+      return withSpot(spots, e.playerId, { pos: e.pos, sunk: false, waiting: false });
     case 'fellOffWorld':
-      return withSpot(spots, e.playerId, { pos: e.respawnPos, sunk: false });
+    case 'trapReturn':
+    case 'flightTimeout':
+      return withSpot(spots, e.playerId, { pos: e.respawnPos, sunk: false, waiting: false });
+    case 'trapCaught':
+    case 'cannonLoad':
+      return withSpot(spots, e.playerId, { pos: e.pos, sunk: false, waiting: true });
+    case 'trapFreed':
+    case 'cannonFire':
+      return withSpot(spots, e.playerId, { pos: e.pos, sunk: false, waiting: false });
     case 'sink':
     case 'gimme':
-      return withSpot(spots, e.playerId, { pos: e.pos, sunk: true });
+      return withSpot(spots, e.playerId, { pos: e.pos, sunk: true, waiting: false });
     default:
       return spots;
   }
@@ -90,6 +110,11 @@ function driversOf(rect: LevelRect): readonly string[] {
   return rect.switchId !== undefined ? [rect.switchId] : [];
 }
 
+/** A door or a bridge: the only plate consumers a stall tap can keep open for the partner (D10.10). */
+function opensAWay(rect: LevelRect): boolean {
+  return rect.kind === 'blocker' || rect.kind === 'bridge';
+}
+
 /** Does `rect` still stand between a partner at x `px` and the cup at x `cx`? */
 function stillAhead(rect: LevelRect, px: number, cx: number): boolean {
   const right = cx >= px;
@@ -113,12 +138,12 @@ export function holderTipSwitch(level: Level, spots: Spots, holder: PlayerId): s
   const partner: PlayerId = holder === 0 ? 1 : 0;
   const mine = spots[holder];
   const theirs = spots[partner];
-  if (mine === null || theirs === null || mine.sunk || theirs.sunk) return null;
+  if (mine === null || theirs === null || mine.sunk || theirs.sunk || mine.waiting || theirs.waiting) return null;
   for (const sw of level.switches) {
     if (sw.id === level.cupHoldsSwitch || sw.onRectId !== undefined || !restsOn(mine, sw)) continue;
     const partnerNeedsIt = level.rects.some((rect) => {
       const drivers = driversOf(rect);
-      if (!drivers.includes(sw.id)) return false;
+      if (!opensAWay(rect) || !drivers.includes(sw.id)) return false;
       if (level.switches.some((other) => drivers.includes(other.id) && restsOn(theirs, other))) return false;
       if (ownFieldPasses(level, rect, partner, theirs.pos.x, level.hole.x)) return false;
       return stillAhead(rect, theirs.pos.x, level.hole.x);

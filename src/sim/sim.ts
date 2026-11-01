@@ -1,14 +1,15 @@
 // OWNER: sim
 /**
- * The rules (ARCH.md §1.5). `stepSim` never mutates its input: every tick builds a new SimState
- * (sub-objects shared when unchanged) and a list of SimEvents stamped with the NEW tick. Order per
- * tick: commands -> physics for every ball -> switches -> phase transitions -> turn-delay decrement
- * -> finiteness check.
+ * The rules (ARCH.md §1.5, BUILD_DECISIONS D10.4-D10.6). `stepSim` never mutates its input: every tick
+ * builds a new SimState (sub-objects shared when unchanged) and a list of SimEvents stamped with the NEW
+ * tick. Order per tick: commands -> physics for every ball -> switches (+ diff) -> flight watchdog ->
+ * phase transitions (the WAITING-rule hand-off) -> turn-delay decrement -> flightTicks -> finiteness check.
  */
+import { onCannonBreech, restEventOf, trapHolding, waitingOf, type Waiting } from './devices';
 import { levelById } from './levels/index';
 import { evaluateSwitches, isSettled, launchVelocity, stepBall, switchPresser, type StepBallOut } from './physics';
 import { seedRng } from './rng';
-import { clamp, collidersFor, isPermanentRect, isRectActive, rectSwitchIds, solidColliders } from './terrain';
+import { clamp, collidersFor, groundAt, groundSupports, isPermanentRect, isRectActive, rectSwitchIds, solidColliders } from './terrain';
 import type {
   BallState,
   CommandRejectReason,
@@ -30,7 +31,9 @@ import type {
 import {
   AIM_ANGLE_MAX,
   AIM_ANGLE_MIN,
+  BACK_PENALTY,
   DEFAULT_AIM,
+  FLIGHT_WATCHDOG_TICKS,
   MAX_POWER,
   MIN_POWER,
   REST_TICKS,
@@ -63,15 +66,16 @@ function initialSwitches(level: Level): Record<string, boolean> {
   return switches;
 }
 
-type LevelFields = Pick<SimState, 'players' | 'balls' | 'switches' | 'activePlayer'>;
+type LevelFields = Pick<SimState, 'players' | 'balls' | 'switches' | 'activePlayer' | 'flightTicks'>;
 
-/** Balls at the tees, strokes 0, aims DEFAULT_AIM, switches all false, firstPlayer from the level (D2). */
+/** Balls at the tees, strokes 0, aims DEFAULT_AIM, switches all false, firstPlayer from the level (D2), no flight. */
 function freshLevelFields(level: Level): LevelFields {
   return {
     players: [initialPlayer(), initialPlayer()],
     balls: [initialBall(level.starts[0]), initialBall(level.starts[1])],
     switches: initialSwitches(level),
     activePlayer: level.firstPlayer,
+    flightTicks: 0,
   };
 }
 
@@ -107,6 +111,8 @@ export function stepSim(state: SimState, commands: readonly PlayerCommand[]): St
     events.push({ ...body, tick });
   };
   const phaseAtStart = state.phase;
+  // flightTicks is 0 outside 'flying' (an invariant decodeSnapshot enforces); never trust a stale count.
+  const flownBefore = phaseAtStart === 'flying' ? state.flightTicks : 0;
   let next = state;
   for (const cmd of commands) next = applyCommand(next, cmd, emit);
   let switchesChanged = false;
@@ -115,11 +121,18 @@ export function stepSim(state: SimState, commands: readonly PlayerCommand[]): St
     next = stepped.state;
     switchesChanged = stepped.switchesChanged;
   }
+  const watchdogFired = next.phase === 'flying' && flownBefore + 1 >= FLIGHT_WATCHDOG_TICKS;
+  if (watchdogFired) {
+    const timedOut = endFlight(next, emit);
+    next = timedOut.state;
+    switchesChanged = switchesChanged || timedOut.switchesChanged;
+  }
   next = transition(next, switchesChanged, emit);
   if (phaseAtStart === 'aiming' && next.turnDelayTicks > 0 && !turnStartedThisTick(events)) {
     next = { ...next, turnDelayTicks: next.turnDelayTicks - 1 };
   }
-  next = { ...next, tick };
+  const flightTicks = next.phase === 'flying' && !watchdogFired ? flownBefore + 1 : 0;
+  next = { ...next, tick, flightTicks };
   assertFinite(next);
   return { state: next, events };
 }
@@ -270,7 +283,11 @@ function flippedDriver(rectIds: readonly string[], prev: Readonly<Record<string,
   return rectIds[0] ?? '';
 }
 
-/** switchOn/Off per changed switch, then bridgeToggle per switch-driven rect whose activity changed. */
+/**
+ * switchOn/Off per changed switch, then bridgeToggle per switch-driven rect whose activity changed (never for
+ * a trap or a cannon: their state is read from `switches`), then the trap moments the new switch map caused:
+ * `trapCaught` for a resting ball an armed trap now holds that was free, `trapFreed` for a caught one now free.
+ */
 function emitSwitchDiff(
   level: Level,
   prev: Readonly<Record<string, boolean>>,
@@ -290,12 +307,50 @@ function emitSwitchDiff(
   }
   if (!changed) return false;
   for (const rect of level.rects) {
-    if (isPermanentRect(rect)) continue;
+    if (isPermanentRect(rect) || rect.kind === 'trap' || rect.kind === 'cannon') continue;
     const active = isRectActive(rect, next);
     if (isRectActive(rect, prev) === active) continue;
     emit({ type: 'bridgeToggle', rectId: rect.id, kind: rect.kind, active, switchId: flippedDriver(rectSwitchIds(rect), prev, next) });
   }
+  for (const i of SLOTS) {
+    const ball = balls[i];
+    if (ball === undefined) continue;
+    const before = trapHolding(level, prev, ball);
+    const after = trapHolding(level, next, ball);
+    if (before === null && after !== null) emit({ type: 'trapCaught', playerId: i, pos: ball.pos, rectId: after.id });
+    else if (before !== null && after === null) emit({ type: 'trapFreed', playerId: i, pos: ball.pos, rectId: before.id });
+  }
   return true;
+}
+
+// ---- teleports: the flight watchdog (D10.6) and the scoped reset (D10.5) ----------------------------
+
+/** Re-evaluates the switches after balls were teleported; emits and writes the diff when the mask changed. */
+function reevaluateSwitches(level: Level, state: SimState, balls: Balls, emit: Emit): { state: SimState; switchesChanged: boolean } {
+  const next = evaluateSwitches(level, state.switches, balls);
+  const switchesChanged = emitSwitchDiff(level, state.switches, next, balls, emit);
+  return { state: { ...state, balls, switches: switchesChanged ? next : state.switches }, switchesChanged };
+}
+
+/** A ball teleported to `pos` lands asleep; its device moment (an armed trap there) follows its teleport event. */
+function placeAt(level: Level, switches: Readonly<Record<string, boolean>>, slot: PlayerId, ball: Readonly<BallState>, pos: Vec, emit: Emit): BallState {
+  const placed: BallState = { ...ball, pos, vel: { x: 0, y: 0 }, asleep: true, grounded: true, restTicks: REST_TICKS };
+  const device = restEventOf(level, switches, placed, slot);
+  if (device !== null) emit(device);
+  return placed;
+}
+
+/** The flight's FLIGHT_WATCHDOG_TICKS-th tick: every moving ball goes to its safe spot, no stroke; then the switches. */
+function endFlight(state: SimState, emit: Emit): { state: SimState; switchesChanged: boolean } {
+  const level = levelOf(state);
+  const balls: Balls = [state.balls[0], state.balls[1]];
+  for (const i of SLOTS) {
+    const ball = balls[i];
+    if (ball.sunk || ball.asleep) continue;
+    emit({ type: 'flightTimeout', playerId: i, pos: ball.pos, respawnPos: ball.lastRest });
+    balls[i] = placeAt(level, state.switches, i, ball, ball.lastRest, emit);
+  }
+  return reevaluateSwitches(level, state, balls, emit);
 }
 
 // ---- rule 3: phase transitions ---------------------------------------------------------------------
@@ -305,11 +360,99 @@ function transition(state: SimState, switchesChanged: boolean, emit: Emit): SimS
   if (state.phase === 'aiming') return allSettled ? state : { ...state, phase: 'flying' };
   if (state.phase !== 'flying' || !allSettled || switchesChanged) return state;
   if (state.balls[0].sunk && state.balls[1].sunk) return completeLevel(state, emit);
+  return handOff(state, emit);
+}
+
+function otherSlot(slot: PlayerId): PlayerId {
+  return slot === 0 ? 1 : 0;
+}
+
+/**
+ * The WAITING rule (D10.5). The next shooter is the first of [the other ball, the same ball] that is neither
+ * sunk nor waiting (caught or loaded); each candidate passed over BECAUSE it waits gets a `turnSkipped` just
+ * before the `turnStart`. If nobody can shoot, the scoped reset sends the waiting ball that moved last (the
+ * shooter if it waits, else the other) to its safe spot with BACK_PENALTY, then the other waiting ball, then,
+ * as a guard a valid level never reaches, the first one to its tee. A reset that would not move its ball is
+ * skipped (no stroke, no event). A reset that changes a switch emits the diff and returns WITHOUT a
+ * `turnStart` (ARCH R5): the phase stays 'flying' and the next settled tick redoes the hand-off from scratch.
+ */
+function handOff(state: SimState, emit: Emit): SimState {
+  const level = levelOf(state);
+  let s = recordFreedSafeSpots(level, state);
+  const chosen = pickShooter(level, s);
+  if (chosen !== null) return startTurn(s, chosen, emit);
+  const prev = s.activePlayer;
+  const first = waitingOf(level, s.switches, s.balls[prev]) !== null ? prev : otherSlot(prev);
+  const resets: readonly { slot: PlayerId; toTee: boolean }[] = [
+    { slot: first, toTee: false },
+    { slot: otherSlot(first), toTee: false },
+    { slot: first, toTee: true },
+  ];
+  for (const { slot, toTee } of resets) {
+    const ball = s.balls[slot];
+    if (waitingOf(level, s.switches, ball) === null) continue;
+    const dest = toTee ? level.starts[slot] : ball.lastRest;
+    if (dest.x === ball.pos.x && dest.y === ball.pos.y) continue;
+    const reset = resetBall(level, s, slot, dest, toTee, emit);
+    if (reset.switchesChanged) return reset.state;
+    s = reset.state;
+    const next = pickShooter(level, s);
+    if (next !== null) return startTurn(s, next, emit);
+  }
+  return s;
+}
+
+/** A ball freed where it sits (asleep, free, supported by permanent ground, not on a breech) records its safe spot. */
+function recordFreedSafeSpots(level: Level, state: SimState): SimState {
+  let balls: Balls | null = null;
+  for (const i of SLOTS) {
+    const ball = state.balls[i];
+    if (ball.sunk || !ball.asleep || waitingOf(level, state.switches, ball) !== null || onCannonBreech(level, ball.pos)) continue;
+    if (ball.lastRest.x === ball.pos.x && ball.lastRest.y === ball.pos.y) continue;
+    const g = groundAt(level, state.switches, ball.pos, i);
+    if (g === null || !g.permanent || !groundSupports(g, ball.pos)) continue;
+    balls ??= [state.balls[0], state.balls[1]];
+    balls[i] = { ...ball, lastRest: ball.pos };
+  }
+  return balls === null ? state : { ...state, balls };
+}
+
+type Skip = { readonly slot: PlayerId; readonly waiting: Waiting };
+type Shooter = { readonly next: PlayerId; readonly skipped: readonly Skip[] };
+
+function pickShooter(level: Level, state: SimState): Shooter | null {
+  const skipped: Skip[] = [];
+  for (const slot of [otherSlot(state.activePlayer), state.activePlayer]) {
+    const ball = state.balls[slot];
+    if (ball.sunk) continue;
+    const waiting = waitingOf(level, state.switches, ball);
+    if (waiting === null) return { next: slot, skipped };
+    skipped.push({ slot, waiting });
+  }
+  return null;
+}
+
+function startTurn(state: SimState, chosen: Shooter, emit: Emit): SimState {
   const prev = state.activePlayer;
-  const other: PlayerId = prev === 0 ? 1 : 0;
-  const nextActive = state.balls[other].sunk ? prev : other;
-  emit({ type: 'turnStart', playerId: nextActive, readyInTicks: TURN_DELAY_TICKS, sameAsBefore: nextActive === prev });
-  return { ...state, phase: 'aiming', activePlayer: nextActive, turnDelayTicks: TURN_DELAY_TICKS };
+  for (const skip of chosen.skipped) {
+    emit({ type: 'turnSkipped', playerId: skip.slot, reason: skip.waiting.reason, rectId: skip.waiting.rectId, nextPlayer: chosen.next });
+  }
+  emit({ type: 'turnStart', playerId: chosen.next, readyInTicks: TURN_DELAY_TICKS, sameAsBefore: chosen.next === prev });
+  return { ...state, phase: 'aiming', activePlayer: chosen.next, turnDelayTicks: TURN_DELAY_TICKS };
+}
+
+/** The scoped reset ("BACK +1"): the ball to `dest` (its safe spot, or its tee as the guard), then the switches. */
+function resetBall(level: Level, state: SimState, slot: PlayerId, dest: Vec, toTee: boolean, emit: Emit): { state: SimState; switchesChanged: boolean } {
+  const ball = state.balls[slot];
+  const players: Players = [state.players[0], state.players[1]];
+  const strokes = players[slot].strokes + BACK_PENALTY;
+  players[slot] = { ...players[slot], strokes };
+  emit({ type: 'trapReturn', playerId: slot, pos: ball.pos, respawnPos: dest, strokes, toTee });
+  const balls: Balls = [state.balls[0], state.balls[1]];
+  const placed = placeAt(level, state.switches, slot, ball, dest, emit);
+  // the tee is a safe spot: a later fall or reset must not send the ball back into the device it left
+  balls[slot] = toTee ? { ...placed, lastRest: dest } : placed;
+  return reevaluateSwitches(level, { ...state, players }, balls, emit);
 }
 
 function completeLevel(state: SimState, emit: Emit): SimState {
@@ -324,7 +467,7 @@ function completeLevel(state: SimState, emit: Emit): SimState {
 // ---- rule 5: finiteness -----------------------------------------------------------------------------
 
 function assertFinite(state: SimState): void {
-  const numbers: number[] = [state.tick, state.levelIndex, state.turnDelayTicks, state.rng, state.activePlayer];
+  const numbers: number[] = [state.tick, state.levelIndex, state.turnDelayTicks, state.rng, state.activePlayer, state.flightTicks];
   for (const p of state.players) numbers.push(p.strokes, p.aim.angle, p.aim.power);
   for (const b of state.balls) numbers.push(b.pos.x, b.pos.y, b.vel.x, b.vel.y, b.restTicks, b.lastRest.x, b.lastRest.y);
   for (const n of numbers) if (!Number.isFinite(n)) throw new Error('sim: non-finite state');

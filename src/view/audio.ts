@@ -4,8 +4,10 @@
  * recipe book and design/FINAL/audio/audio-demo.html the reference implementation this ports). Every
  * sound is synthesized (oscillators, one shared noise buffer, ADSR envelopes); no asset files.
  * audio.ts owns the persistence of `flashgolf.audio.*` (D4) and is a safe no-op without AudioContext.
+ * Worlds 2-3 (BUILD_DECISIONS D10.11, AUDIO.md §11): trap / cannon / reset / skip voices and one bed per world.
  */
-import type { BounceSurface, Medal, PlayerId, SimEvent } from '../sim/types';
+import { hasLevel, levelById } from '../sim/levels';
+import type { BounceSurface, LevelRectKind, Medal, PlayerId, SimEvent, WorldId } from '../sim/types';
 import { DT, MAX_POWER } from '../sim/types';
 
 declare global {
@@ -44,7 +46,14 @@ export type SfxName =
   | 'uiResume'
   | 'partnerJoined'
   | 'partnerLeft'
-  | 'aimTick';
+  | 'aimTick'
+  | 'trapCaught'
+  | 'trapFreed'
+  | 'trapReturn'
+  | 'cannonLoad'
+  | 'cannonFire'
+  | 'turnSkipped'
+  | 'flightTimeout';
 
 export type MusicMode = 'title' | 'play';
 export type AudioSettings = { readonly muted: boolean; readonly music: boolean; readonly volume: number };
@@ -134,6 +143,20 @@ export interface Sfx {
   partnerJoined(o?: SfxOpts): void;
   partnerLeft(o?: SfxOpts): void;
   aimTick(power01?: number, o?: SfxOpts): void;
+  /** SNAP!: a ball came to rest in armed jaws (or its trap re-armed around it). Soft snap + clink, never punishing. */
+  trapCaught(o?: SfxOpts): void;
+  /** FREE!: latch + jaws swinging open at the event, then a rising E5-A5 unless `o.chime === false`. */
+  trapFreed(o?: SfxOpts): void;
+  /** BACK +1: a rising warble (the reverse of fellOffWorld's whistle) and the pop of the ball reappearing. */
+  trapReturn(o?: SfxOpts): void;
+  /** LOADED!: an iron tok and two ratchet clicks as a ball settles in a cold breech. */
+  cannonLoad(o?: SfxOpts): void;
+  /** BOOM!: the cannon's own low thoom, blast and smoke hiss (never the spring boing). */
+  cannonFire(o?: SfxOpts): void;
+  /** The skipped (waiting) ball's own note, muffled: a gentle "not you" before the shooter's ding. */
+  turnSkipped(playerId?: PlayerId, o?: SfxOpts): void;
+  /** The flight watchdog put a ball back on its safe spot: a soft puff and the reappearing pop, no penalty cue. */
+  flightTimeout(o?: SfxOpts): void;
 }
 export interface FanLoop {
   start(): void;
@@ -146,14 +169,23 @@ export interface MusicBed {
   start(mode?: MusicMode): void;
   /** Clears wantedMode (explicit "no music now"). */
   stop(): void;
-  /** Stops the scheduler, keeps wantedMode (setMusic(false) / dispose). */
+  /** Stops the scheduler, keeps wantedMode (setMusic(false) / dispose / a track change). */
   halt(fadeSec: number): void;
-  /** No restart: the bed is continuous from Title into the first hole. */
+  /**
+   * The shell's call for every screen outside a game (App: Title, Lobby, rejoin). `title` there is the menu bed,
+   * World 1's track (D10.11), so a finished World 2 or 3 campaign returns to the theme. No restart while the track
+   * stays: the World 1 bed is continuous from the Title into its first hole. Inside a game handleEvents sets the
+   * mode from the sim and keeps the hole's world track.
+   */
   setMode(mode: MusicMode): void;
+  /** One bed per world. A change while playing fades the old pad over TRACK_XFADE_SEC and restarts the beat clock
+   *  on the new track in the same mode; otherwise it is only recorded. The same world is a no-op. */
+  setTrack(world: WorldId): void;
   /** Hidden tab: 2.5 s lookahead on a 1 s interval. */
   setBackground(hidden: boolean): void;
   readonly playing: boolean;
   readonly mode: MusicMode;
+  readonly track: WorldId;
   readonly wantedMode: MusicMode | null;
   readonly hidden: boolean;
 }
@@ -162,7 +194,8 @@ export type AudioSystem = {
   /** Call synchronously inside the first user gesture (title button). Idempotent. */
   unlock(): void;
   /** Maps SimEvent -> sfx (+ volume from strength); switch/bridge SFX debounced per key (>= 100-150 ms),
-   *  bounces 45 ms per ball. `delaySec` defers scheduling (0 in both modes, D3). */
+   *  bounces 45 ms per ball; `levelStart` picks the hole's world bed. `delaySec` defers scheduling (0 in both
+   *  modes, D3). */
   handleEvents(events: readonly SimEvent[], nowMs: number, delaySec?: number): void;
   /** volume = power01 for 'hit', strength01 for bounce*, else a 0..1 multiplier. */
   play(name: SfxName, volume?: number): void;
@@ -176,7 +209,8 @@ export type AudioSystem = {
   /** Fires once when the context is running (immediately if it already is); returns an unsubscribe. */
   onReady(cb: () => void): () => void;
   setVolume(v: number): void;
-  /** Once per frame from GameCanvas: any non-sunk ball inside an active fan AABB. */
+  /** Once per frame from GameCanvas: any non-sunk ball inside an active fan AABB; inactive once more when a game is
+   *  left. Only starting the loop needs a running context: the stop works even while it is suspended. */
   setFan(active: boolean, intensity01: number): void;
   readonly settings: AudioSettings;
   readonly ready: boolean;
@@ -196,14 +230,24 @@ const DEFAULT_SETTINGS: AudioSettings = Object.freeze({ muted: false, music: tru
 /** Bus defaults (dB). Settings never exposes these; setBusDb() is for mixing sessions. */
 const SFX_BUS_DB = -6;
 const MUSIC_BUS_DB = -15;
-/** Fatigue watch-list: one literal each (dB) so any of them can be pulled 6 dB in one edit. */
-const TUNE = Object.freeze({ turnDing: -6, nearCup: -7, aimTick: -22, uiHover: -24, rollStop: -20 });
+/** Fatigue watch-list: one literal each (dB) so any of them can be pulled 6 dB in one edit. `turnSkipped` plays on
+ *  every skipped turn (Bait hands the climber turn after turn); `trapClink` on every catch (Booby Trap's short lobs). */
+const TUNE = Object.freeze({ turnDing: -6, nearCup: -7, aimTick: -22, uiHover: -24, rollStop: -20, turnSkipped: -12, trapClink: -16 });
 const GLOBAL_MAX_VOICES = 24;
 const UNLOCK_PENDING_MS = 1000;
 const MULTI_TICK_CAP_SEC = 0.25;
 const JINGLE_DELAY_SEC = 0.35;
 const GIMME_SINK_WINDOW_SEC = 0.6;
 const DUCK_DB = 4;
+/** The shooter's ding follows the skipped ball's muffled note by this much. */
+const TURN_SKIP_LEAD_SEC = 0.12;
+/** A hand-off cue within this long after a trapReturn waits for the BACK +1 warble (and its pop) to finish. */
+const TRAP_RETURN_LEAD_SEC = 0.35;
+/** Old pad fade on a world track change; the new pad's 1.2 s attack overlaps it. */
+const TRACK_XFADE_SEC = 0.8;
+/** bridgeToggle kinds voiced with the wooden slide: rects that appear or vanish. Trap and cannon state changes are
+ *  voiced by their own events and the plate's confirm (the sim no longer emits bridgeToggle for them; kept as a guard). */
+const SLIDE_KINDS: ReadonlySet<LevelRectKind> = new Set<LevelRectKind>(['bridge', 'blocker', 'fan']);
 
 type Poly = { max: number; minMs: number };
 type PolyName =
@@ -235,7 +279,14 @@ type PolyName =
   | 'uiResume'
   | 'partnerJoined'
   | 'partnerLeft'
-  | 'aimTick';
+  | 'aimTick'
+  | 'trapCaught'
+  | 'trapFreed'
+  | 'trapReturn'
+  | 'cannonLoad'
+  | 'cannonFire'
+  | 'turnSkipped'
+  | 'flightTimeout';
 
 /** Per-SFX polyphony: max simultaneous voices (per name) and minimum retrigger interval (ms, per key). */
 const POLY: Readonly<Record<PolyName, Poly>> = Object.freeze({
@@ -268,9 +319,17 @@ const POLY: Readonly<Record<PolyName, Poly>> = Object.freeze({
   partnerJoined: { max: 1, minMs: 500 },
   partnerLeft: { max: 1, minMs: 500 },
   aimTick: { max: 2, minMs: 35 },
+  trapCaught: { max: 2, minMs: 250 },
+  trapFreed: { max: 2, minMs: 200 },
+  trapReturn: { max: 2, minMs: 400 },
+  cannonLoad: { max: 2, minMs: 250 },
+  cannonFire: { max: 2, minMs: 300 },
+  turnSkipped: { max: 1, minMs: 300 },
+  flightTimeout: { max: 2, minMs: 400 },
 });
 
 const C4 = 261.63;
+const D4 = 293.66;
 const E4 = 329.63;
 const F4 = 349.23;
 const G4 = 392.0;
@@ -286,6 +345,85 @@ const B5 = 987.77;
 const C6 = 1046.5;
 const E6 = 1318.5;
 const G6 = 1568.0;
+const C7 = 2093.0;
+
+// ---- music tracks -------------------------------------------------------------------------------
+
+/** One chord of a bed: pad tones (two detuned triangles each), the bass root, a shimmer sine and the pluck pool. */
+type Chord = { readonly pad: readonly number[]; readonly bass: number; readonly shimmer: number; readonly pool: readonly number[] };
+
+/**
+ * One world's generative bed (D10.11, AUDIO.md §7 and §11). Every pitch is a white key at or below B5, so the
+ * fixed C-major cues (player dings C5 / G5, the switch E4-A4 confirm, the jingles) stay consonant on every track.
+ * Same budget on every track: 4 chords x 4 pad tones over a 16-bar cycle, bass on beats 1 and 3, at most two
+ * plucks a beat, every timbre lowpassed below 2.5 kHz.
+ */
+export type MusicTrack = {
+  readonly bpm: number;
+  /** Pad lowpass (Hz); a 0.08 Hz LFO drifts it +/-200 Hz. */
+  readonly padLpHz: number;
+  /** Two bars each, in order. */
+  readonly chords: readonly [Chord, Chord, Chord, Chord];
+  /** `play` mode only: the pluck oscillator through a lowpass, plus a sine one octave up. */
+  readonly pluck: {
+    readonly type: OscillatorType;
+    readonly lpHz: number;
+    readonly decay: number;
+    readonly gainDb: number;
+    readonly octaveDecay: number;
+    readonly octaveDb: number;
+  };
+  /** Pluck probability per 8th [on the beat, the "and"]: bar downbeats, the other beats, and every 8th of bars 7-8
+   *  of each 8-bar phrase (the rest). */
+  readonly odds: { readonly beat1: readonly [number, number]; readonly other: readonly [number, number]; readonly rest: number };
+};
+
+export const MUSIC_TRACKS: Readonly<Record<WorldId, MusicTrack>> = Object.freeze({
+  // World 1 — Teach: C major, Cmaj7 - Am7 - Fmaj7 - G6 (G6, not G7, so the cycle never demands resolution).
+  1: {
+    bpm: 84,
+    padLpHz: 900,
+    chords: [
+      { pad: [C4, E4, G4, B4], bass: C4 / 2, shimmer: G5, pool: [C5, D5, E5, G5, A5] },
+      { pad: [A4 / 2, C4, E4, G4], bass: A4 / 4, shimmer: E5, pool: [C5, D5, E5, G5, A5] },
+      { pad: [F4, A4, C5, E5], bass: F4 / 2, shimmer: C5, pool: [C5, D5, E5, F5, A5] },
+      { pad: [G4, B4, D5, E5], bass: G4 / 2, shimmer: D5, pool: [D5, E5, G5, A5, B5] },
+    ],
+    pluck: { type: 'triangle', lpHz: 2400, decay: 0.32, gainDb: -22, octaveDecay: 0.12, octaveDb: -32 },
+    odds: { beat1: [0.5, 0.5], other: [0.3, 0.3], rest: 0.08 },
+  },
+  // World 2 — Lift & Lock: D Dorian, Dm7 - Em7 - Fmaj7 - G6. The bass climbs D-E-F-G (the lift); short square
+  // plucks lean on the offbeats like clockwork (the lock).
+  2: {
+    bpm: 96,
+    padLpHz: 800,
+    chords: [
+      { pad: [D4, F4, A4, C5], bass: D4 / 2, shimmer: A5, pool: [C5, D5, F5, G5, A5] },
+      { pad: [E4, G4, B4, D5], bass: E4 / 2, shimmer: B5, pool: [D5, E5, G5, A5, B5] },
+      { pad: [F4, A4, C5, E5], bass: F4 / 2, shimmer: C5, pool: [C5, E5, F5, G5, A5] },
+      { pad: [G4, B4, D5, E5], bass: G4 / 2, shimmer: D5, pool: [D5, E5, G5, A5, B5] },
+    ],
+    pluck: { type: 'square', lpHz: 1800, decay: 0.18, gainDb: -24, octaveDecay: 0.08, octaveDb: -34 },
+    odds: { beat1: [0.25, 0.45], other: [0.15, 0.45], rest: 0.08 },
+  },
+  // World 3 — Sky Machines: centred on F, Fmaj7 - G6 - Em7 - Am7 (IV-V-iii-vi). It never lands on C, so it floats;
+  // slower, sparser, longer plucks.
+  3: {
+    bpm: 76,
+    padLpHz: 1100,
+    chords: [
+      { pad: [F4, A4, C5, E5], bass: F4 / 2, shimmer: G5, pool: [C5, E5, G5, A5, B5] },
+      { pad: [G4, B4, D5, E5], bass: G4 / 2, shimmer: A5, pool: [D5, E5, G5, A5, B5] },
+      { pad: [E4, G4, B4, D5], bass: E4 / 2, shimmer: B5, pool: [B4, D5, E5, G5, A5] },
+      { pad: [A4 / 2, C4, E4, G4], bass: A4 / 4, shimmer: E5, pool: [C5, D5, E5, G5, A5] },
+    ],
+    pluck: { type: 'triangle', lpHz: 2200, decay: 0.6, gainDb: -24, octaveDecay: 0.25, octaveDb: -30 },
+    odds: { beat1: [0.45, 0.2], other: [0.25, 0.15], rest: 0.05 },
+  },
+});
+
+/** The two 8ths of a beat a pluck may land on. */
+const EIGHTHS = [0, 1] as const;
 
 // ---- pure helpers -------------------------------------------------------------------------------
 
@@ -354,9 +492,40 @@ function audioContextClass(): typeof AudioContext | null {
   return window.AudioContext ?? window.webkitAudioContext ?? null;
 }
 
+/** The world of a registered hole; null for any other id (test fixtures, crafted events): the bed keeps its track. */
+function worldOfLevel(levelId: string): WorldId | null {
+  return hasLevel(levelId) ? levelById(levelId).world : null;
+}
+
 type Listener = { target: EventTarget; type: string; fn: EventListener; capture: boolean };
 type Voice = { at: number; out: GainNode };
 type NoteSeq = ReadonlyArray<readonly [number, number]>;
+
+/** What routing one event needs to know about the rest of its frame's batch. */
+type Batch = {
+  /** levelComplete ticks: a sink there leaves its chime to the jingle. */
+  readonly completeTicks: ReadonlySet<number>;
+  /** The campaignComplete tick (-1 when none): its jingle replaces that tick's levelComplete one. */
+  readonly campaignTick: number;
+  /** sink / gimme ticks: a trapFreed there (the cup started holding a release) leaves its chime to the hole-out. */
+  readonly holeOutTicks: ReadonlySet<number>;
+  /** turnSkipped ticks (always the tick of the turnStart it explains): that turnStart dings after the skip note. */
+  readonly skipTicks: ReadonlySet<number>;
+};
+
+function batchOf(events: readonly SimEvent[]): Batch {
+  const completeTicks = new Set<number>();
+  const holeOutTicks = new Set<number>();
+  const skipTicks = new Set<number>();
+  let campaignTick = -1;
+  for (const ev of events) {
+    if (ev.type === 'levelComplete') completeTicks.add(ev.tick);
+    else if (ev.type === 'campaignComplete') campaignTick = ev.tick;
+    else if (ev.type === 'sink' || ev.type === 'gimme') holeOutTicks.add(ev.tick);
+    else if (ev.type === 'turnSkipped') skipTicks.add(ev.tick);
+  }
+  return { completeTicks, campaignTick, holeOutTicks, skipTicks };
+}
 
 // ---- the system ---------------------------------------------------------------------------------
 
@@ -379,6 +548,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   let suppressUntil = 0;
   let pendingUntil = 0;
   const lastGimmeAt: [number, number] = [-Infinity, -Infinity];
+  /** Scheduled time of the last trapReturn: the hand-off cues after it wait TRAP_RETURN_LEAD_SEC (across frames). */
+  let lastReturnAt = -Infinity;
   const readyCbs: Array<() => void> = [];
   const listeners: Listener[] = [];
   let gestureHandlers: Listener[] | null = null;
@@ -738,6 +909,12 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     }
   }
 
+  /** A ball reappearing on its safe spot (trapReturn, flightTimeout): falling sine pop + highpass tick. */
+  function popVoice(out: GainNode, at: number, levelDb: number): void {
+    osc(out, { type: 'sine', freq: 660, freqEnd: 330, glide: 0.04, at, a: 0.001, d: 0.06, gain: dB(levelDb) });
+    noise(out, { at, d: 0.012, gain: dB(levelDb - 6), filter: { type: 'highpass', freq: 3000, q: 0.7 } });
+  }
+
   const JINGLES: Readonly<Record<Medal, NoteSeq>> = Object.freeze({
     gold: [
       [C5, 0],
@@ -999,6 +1176,71 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       if (v === null) return;
       osc(v.out, { type: 'triangle', freq: 600 + 900 * clamp01(power01), at: v.at, a: 0.001, d: 0.012, gain: dB(TUNE.aimTick) });
     },
+    trapCaught(o = {}) {
+      const v = begin('trapCaught', o, 0.3);
+      if (v === null) return;
+      const { at, out } = v;
+      const j = jitterCents(25);
+      noise(out, { at, a: 0.001, d: 0.018, gain: dB(-14), filter: { type: 'bandpass', freq: 2600, q: 1.4 } });
+      osc(out, { type: 'sine', freq: 190 * j, freqEnd: 95 * j, glide: 0.04, at, a: 0.001, d: 0.05, gain: dB(-13) });
+      osc(out, { type: 'sine', freq: E6 * j, at: at + 0.03, a: 0.001, d: 0.14, gain: dB(TUNE.trapClink) });
+      osc(out, { type: 'sine', freq: C7 * j, at: at + 0.03, a: 0.001, d: 0.08, gain: dB(TUNE.trapClink - 6) });
+      osc(out, { type: 'sine', freq: E6 * j, at: at + 0.11, a: 0.001, d: 0.06, gain: dB(TUNE.trapClink - 8) });
+    },
+    trapFreed(o = {}) {
+      const chime = o.chime !== false;
+      const v = begin('trapFreed', o, chime ? 0.45 : 0.2);
+      if (v === null) return;
+      const { at, out } = v;
+      noise(out, { at, d: 0.01, gain: dB(-14), filter: { type: 'highpass', freq: 2200, q: 0.7 } });
+      noise(out, { at, a: 0.005, d: 0.12, gain: dB(-20), filter: { type: 'bandpass', freq: 1500, freqEnd: 4000, sweep: 0.12, q: 2 } });
+      osc(out, { type: 'sine', freq: C7, at: at + 0.01, a: 0.001, d: 0.06, gain: dB(-22) });
+      if (chime) {
+        // the release plate's E4-A4 confirm an octave up, landing after it
+        osc(out, { type: 'triangle', freq: E5, at: at + 0.14, a: 0.003, d: 0.08, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+        osc(out, { type: 'triangle', freq: A5, at: at + 0.22, a: 0.003, d: 0.16, gain: dB(-13), filter: { type: 'lowpass', freq: 3000 } });
+      }
+    },
+    trapReturn(o = {}) {
+      const v = begin('trapReturn', o, 0.45);
+      if (v === null) return;
+      const { at, out } = v;
+      osc(out, { type: 'triangle', freq: 260, freqEnd: 1040, glide: 0.24, at, a: 0.01, d: 0.22, s: 0.5, dur: 0.24, r: 0.04, gain: dB(-12), filter: { type: 'lowpass', freq: 2500 }, lfo: { rate: 14, depth: 0.3, target: 'gain' } });
+      popVoice(out, at + 0.28, -12);
+    },
+    cannonLoad(o = {}) {
+      const v = begin('cannonLoad', o, 0.25);
+      if (v === null) return;
+      const { at, out } = v;
+      const j = jitterCents(20);
+      osc(out, { type: 'sine', freq: 220 * j, freqEnd: 110 * j, glide: 0.05, at, a: 0.001, d: 0.08, gain: dB(-10) });
+      osc(out, { type: 'square', freq: 165 * j, at, a: 0.001, d: 0.05, gain: dB(-18), filter: { type: 'lowpass', freq: 900 } });
+      noise(out, { at: at + 0.09, d: 0.008, gain: dB(-15), filter: { type: 'highpass', freq: 3000, q: 0.7 } });
+      noise(out, { at: at + 0.15, d: 0.008, gain: dB(-17), filter: { type: 'highpass', freq: 3000, q: 0.7 } });
+    },
+    cannonFire(o = {}) {
+      // played at the event tick, no fuse delay: the thoom lands with the BOOM! puff and the shake
+      const v = begin('cannonFire', o, 1.0);
+      if (v === null) return;
+      const { at, out } = v;
+      const j = jitterCents(30);
+      osc(out, { type: 'sine', freq: 120 * j, freqEnd: 42 * j, glide: 0.22, at, a: 0.002, d: 0.32, gain: dB(-3) });
+      osc(out, { type: 'triangle', freq: 240 * j, freqEnd: 90 * j, glide: 0.08, at, a: 0.001, d: 0.09, gain: dB(-10), filter: { type: 'lowpass', freq: 1200 } });
+      noise(out, { at, a: 0.002, d: 0.18, s: 0.25, dur: 0.2, r: 0.25, gain: dB(-8), rate: 0.7, filter: { type: 'lowpass', freq: 1400, freqEnd: 250, sweep: 0.35, q: 0.7 } });
+      // a + d must not pass dur: envelope() books the sustain at dur, which would cut a decay still running
+      noise(out, { at: at + 0.12, a: 0.06, d: 0.34, s: 0.3, dur: 0.4, r: 0.4, gain: dB(-24), filter: { type: 'bandpass', freq: 700, q: 0.6 } });
+    },
+    turnSkipped(playerId = 0, o = {}) {
+      const v = begin('turnSkipped', o, 0.12);
+      if (v === null) return;
+      osc(v.out, { type: 'triangle', freq: playerId === 0 ? C5 : G5, at: v.at, a: 0.002, d: 0.07, gain: dB(TUNE.turnSkipped), filter: { type: 'lowpass', freq: 900 } });
+    },
+    flightTimeout(o = {}) {
+      const v = begin('flightTimeout', o, 0.15);
+      if (v === null) return;
+      noise(v.out, { at: v.at, a: 0.01, d: 0.1, gain: dB(-18), filter: { type: 'bandpass', freq: 900, q: 0.8 } });
+      popVoice(v.out, v.at + 0.04, -16);
+    },
   };
 
   const PLAY: Readonly<Record<SfxName, (v: number | undefined) => void>> = {
@@ -1032,6 +1274,13 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     partnerJoined: (v) => sfx.partnerJoined(vol(v)),
     partnerLeft: (v) => sfx.partnerLeft(vol(v)),
     aimTick: (v) => sfx.aimTick(v ?? 0.5),
+    trapCaught: (v) => sfx.trapCaught(vol(v)),
+    trapFreed: (v) => sfx.trapFreed(vol(v)),
+    trapReturn: (v) => sfx.trapReturn(vol(v)),
+    cannonLoad: (v) => sfx.cannonLoad(vol(v)),
+    cannonFire: (v) => sfx.cannonFire(vol(v)),
+    turnSkipped: (v) => sfx.turnSkipped(0, vol(v)),
+    flightTimeout: (v) => sfx.flightTimeout(vol(v)),
   };
 
   function vol(v: number | undefined): SfxOpts {
@@ -1111,12 +1360,16 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     },
   };
 
+  /** Only the start waits for a running context: the stop must also work while it is suspended or interrupted
+   *  (GameCanvas's loop dispose stops the fan when a game is left, NEXT_STEPS #6). Intensity is ignored when stopping. */
   function setFan(active: boolean, intensity01: number): void {
+    if (!active) {
+      if (fan.running) fan.stop();
+      return;
+    }
     if (!ready()) return;
-    if (active) {
-      if (!fan.running) fan.start();
-      fan.setIntensity(intensity01);
-    } else if (fan.running) fan.stop();
+    if (!fan.running) fan.start();
+    fan.setIntensity(intensity01);
   }
 
   // ---------- music: generative bed ----------
@@ -1127,38 +1380,34 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     musicBus.gain.linearRampToValueAtTime(dB(musicBusDb), at + seconds + 0.8);
   }
 
-  const music = createMusicBed();
+  const { bed: music, holeMode } = createMusicBed();
 
-  function createMusicBed(): MusicBed {
-    const BPM = 84;
-    const BEAT = 60 / BPM;
+  /** The public bed (AudioSystem.music) plus the router's in-game mode change, which never moves the track. */
+  function createMusicBed(): { bed: MusicBed; holeMode(mode: MusicMode): void } {
     const BARS = 16;
     const PAD_GAIN = dB(-26);
     const LOOK_FG = 0.15;
     const LOOK_BG = 2.5;
     const INT_FG = 50;
     const INT_BG = 1000;
-    type Chord = { pad: readonly number[]; bass: number; shimmer: number; pool: readonly number[] };
-    const CH: readonly Chord[] = [
-      { pad: [C4, E4, G4, B4], bass: C4 / 2, shimmer: G5, pool: [C5, D5, E5, G5, A5] },
-      { pad: [A4 / 2, C4, E4, G4], bass: A4 / 4, shimmer: E5, pool: [C5, D5, E5, G5, A5] },
-      { pad: [F4, A4, C5, E5], bass: F4 / 2, shimmer: C5, pool: [C5, D5, E5, F5, A5] },
-      { pad: [G4, B4, D5, E5], bass: G4 / 2, shimmer: D5, pool: [D5, E5, G5, A5, B5] },
-    ];
     type PadVoice = { g: GainNode; oscs: OscillatorNode[]; start: number };
     let timer: ReturnType<typeof setInterval> | null = null;
     let nextBeat = 0;
     let beatIndex = 0;
     let mode: MusicMode = 'title';
     let wantedMode: MusicMode | null = null;
+    let trackId: WorldId = 1;
     let lastPluck = 0;
     let padVoices: PadVoice[] = [];
     let padChordIdx = -1;
     let look = LOOK_FG;
     let intervalMs = INT_FG;
     let hidden = false;
-    const chordAt = (b: number): number => Math.floor((Math.floor(b / 4) % BARS) / 2) % CH.length;
-    const chord = (i: number): Chord => CH[i] ?? CH[0]!;
+    /** Read at schedule time, so a track change takes effect at the restart that follows it. */
+    const track = (): MusicTrack => MUSIC_TRACKS[trackId];
+    const beatSec = (): number => 60 / track().bpm;
+    const chordAt = (b: number): number => Math.floor((Math.floor(b / 4) % BARS) / 2) % track().chords.length;
+    const chord = (i: number): Chord => track().chords[i] ?? track().chords[0];
 
     /**
      * A voice booked ahead but not yet sounding is cancelled outright: holding its gain before the first
@@ -1191,7 +1440,7 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       gain.gain.linearRampToValueAtTime(PAD_GAIN, at + 1.2);
       const lp = c.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.value = 900;
+      lp.frequency.value = track().padLpHz;
       lp.Q.value = 0.7;
       const lfo = c.createOscillator();
       lfo.frequency.value = 0.08;
@@ -1246,19 +1495,21 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     function pluck(f: number, at: number): void {
       const g = graph();
       if (g === null) return;
-      osc(g.musicBus, { type: 'triangle', freq: f, at, a: 0.003, d: 0.32, gain: dB(-22), filter: { type: 'lowpass', freq: 2400 } });
-      osc(g.musicBus, { type: 'sine', freq: f * 2, at, a: 0.003, d: 0.12, gain: dB(-32) });
+      const p = track().pluck;
+      osc(g.musicBus, { type: p.type, freq: f, at, a: 0.003, d: p.decay, gain: dB(p.gainDb), filter: { type: 'lowpass', freq: p.lpHz } });
+      osc(g.musicBus, { type: 'sine', freq: f * 2, at, a: 0.003, d: p.octaveDecay, gain: dB(p.octaveDb) });
     }
 
     function schedulePlucks(bar: number, beat: number, pool: readonly number[], at: number): void {
+      const { odds } = track();
       const resting = bar % 8 >= 6;
-      for (let e = 0; e < 2; e += 1) {
-        const p = resting ? 0.08 : beat === 0 ? 0.5 : 0.3;
+      for (const e of EIGHTHS) {
+        const p = resting ? odds.rest : beat === 0 ? odds.beat1[e] : odds.other[e];
         if (rng() >= p) continue;
         let f = pool[Math.floor(rng() * pool.length)] ?? C5;
         if (f === lastPluck) f = pool[(pool.indexOf(f) + 1) % pool.length] ?? f;
         lastPluck = f;
-        pluck(f, at + (e * BEAT) / 2);
+        pluck(f, at + (e * beatSec()) / 2);
       }
     }
 
@@ -1274,17 +1525,18 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     function tick(): void {
       if (ctx === null) return;
       const now = ctx.currentTime;
+      const beat = beatSec();
       if (nextBeat < now - 0.25) {
         // catch-up clamp: skip missed beats instead of stacking them
-        const skipped = Math.ceil((now - nextBeat) / BEAT);
+        const skipped = Math.ceil((now - nextBeat) / beat);
         beatIndex += skipped;
-        nextBeat += skipped * BEAT;
+        nextBeat += skipped * beat;
         if (chordAt(beatIndex) !== padChordIdx) padChord(chordAt(beatIndex), now);
       }
       while (nextBeat < now + look) {
         scheduleBeat(beatIndex, nextBeat);
         beatIndex += 1;
-        nextBeat += BEAT;
+        nextBeat += beat;
       }
     }
 
@@ -1312,7 +1564,24 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       padChordIdx = -1;
     }
 
-    return {
+    /** No restart: play adds plucks from the next beat, title drops them. */
+    function holeMode(m: MusicMode): void {
+      mode = m;
+      if (wantedMode !== null) wantedMode = m;
+      else start(m);
+    }
+
+    /** The old pad fades out (a pad booked but not yet sounding is cancelled) while the new track's first chord
+     *  fades in from beat 1 of its cycle; booked bass and plucks of the old track ring out on their own decay. */
+    function setTrack(world: WorldId): void {
+      if (world === trackId) return;
+      trackId = world;
+      if (timer === null) return;
+      halt(TRACK_XFADE_SEC);
+      start();
+    }
+
+    const bed: MusicBed = {
       start,
       stop() {
         wantedMode = null;
@@ -1320,10 +1589,10 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       },
       halt,
       setMode(m) {
-        mode = m;
-        if (wantedMode !== null) wantedMode = m;
-        else start(m);
+        holeMode(m);
+        if (m === 'title') setTrack(1);
       },
+      setTrack,
       setBackground(h) {
         hidden = h;
         look = hidden ? LOOK_BG : LOOK_FG;
@@ -1339,6 +1608,9 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       get mode() {
         return mode;
       },
+      get track() {
+        return trackId;
+      },
       get wantedMode() {
         return wantedMode;
       },
@@ -1346,6 +1618,7 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
         return hidden;
       },
     };
+    return { bed, holeMode };
   }
 
   // ---------- settings (audio.ts owns persistence) ----------
@@ -1376,26 +1649,38 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   /**
    * Music bed follows the hole, not the intro card: `playStart` opens play, but so does any `turnStart` or
    * `ballHit`, because the sim never emits `playStart` after `restartLevel` (results-card Retry, pause-menu
-   * Restart), a `?state=` resume or an online join mid-hole. Runs before the ready() gate so the mode is right
-   * when sound is unlocked.
+   * Restart), a `?state=` resume or an online join mid-hole. Every `levelStart` (createSim, a level change, a
+   * restart, a resume's or a join's first one) picks the hole's world track; within a world it is a no-op. Runs
+   * before the ready() gate so the mode and track are right when sound is unlocked.
    */
   function trackBed(ev: SimEvent): void {
     switch (ev.type) {
+      case 'levelStart': {
+        const world = worldOfLevel(ev.levelId);
+        if (world !== null) music.setTrack(world);
+        break;
+      }
       case 'playStart':
       case 'turnStart':
       case 'ballHit':
-        if (music.mode !== 'play') music.setMode('play');
+        if (music.mode !== 'play') holeMode('play');
         break;
       case 'levelComplete':
       case 'campaignComplete':
-        if (music.mode !== 'title') music.setMode('title');
+        if (music.mode !== 'title') holeMode('title');
         break;
       default:
         break;
     }
   }
 
-  function routeEvent(ev: SimEvent, at: number, completeTicks: ReadonlySet<number>, campaignTick: number): void {
+  /** A hand-off cue (skip note, turn ding) waits for a trapReturn's warble and pop, from this frame or a recent one:
+   *  a reset that changed a switch defers its turnStart to a later tick (ARCH R5, D10.5). */
+  function handOffAt(at: number): number {
+    return Math.max(at, lastReturnAt + TRAP_RETURN_LEAD_SEC);
+  }
+
+  function routeEvent(ev: SimEvent, at: number, batch: Batch): void {
     switch (ev.type) {
       case 'ballHit':
         sfx.ballHit(ev.power / MAX_POWER, { at, playerId: ev.playerId });
@@ -1431,7 +1716,30 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
         sfx.switchOff({ at, playerId: ev.switchId });
         break;
       case 'bridgeToggle':
-        sfx.bridgeToggle(ev.active, { at, playerId: ev.rectId });
+        if (SLIDE_KINDS.has(ev.kind)) sfx.bridgeToggle(ev.active, { at, playerId: ev.rectId });
+        break;
+      case 'trapCaught':
+        sfx.trapCaught({ at, playerId: ev.playerId });
+        break;
+      case 'trapFreed':
+        // freed by the cup starting to hold a release: the hole-out's own chime carries the moment
+        sfx.trapFreed({ at, playerId: ev.playerId, chime: !batch.holeOutTicks.has(ev.tick) });
+        break;
+      case 'trapReturn':
+        lastReturnAt = Math.max(lastReturnAt, at);
+        sfx.trapReturn({ at, playerId: ev.playerId });
+        break;
+      case 'cannonLoad':
+        sfx.cannonLoad({ at, playerId: ev.playerId });
+        break;
+      case 'cannonFire':
+        sfx.cannonFire({ at, playerId: ev.playerId });
+        break;
+      case 'flightTimeout':
+        sfx.flightTimeout({ at, playerId: ev.playerId });
+        break;
+      case 'turnSkipped':
+        sfx.turnSkipped(ev.playerId, { at: handOffAt(at) });
         break;
       case 'fellOffWorld':
         sfx.fellOffWorld({ at, playerId: ev.playerId });
@@ -1448,15 +1756,18 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
         break;
       case 'sink': {
         const afterGimme = at - lastGimmeAt[ev.playerId] < GIMME_SINK_WINDOW_SEC;
-        const withJingle = completeTicks.has(ev.tick) || campaignTick === ev.tick;
+        const withJingle = batch.completeTicks.has(ev.tick) || batch.campaignTick === ev.tick;
         sfx.sink({ at, playerId: ev.playerId, chime: !afterGimme && !withJingle });
         break;
       }
-      case 'turnStart':
-        sfx.turnStart(ev.playerId, { at, sameAsBefore: ev.sameAsBefore });
+      case 'turnStart': {
+        // a skip hands the turn back to the same shooter (sameAsBefore), who still gets the ding, after the note
+        const skipped = batch.skipTicks.has(ev.tick);
+        sfx.turnStart(ev.playerId, { at: handOffAt(at) + (skipped ? TURN_SKIP_LEAD_SEC : 0), sameAsBefore: ev.sameAsBefore && !skipped });
         break;
+      }
       case 'levelComplete':
-        if (campaignTick !== ev.tick) sfx.levelComplete(ev.result.medal, { at: at + JINGLE_DELAY_SEC });
+        if (batch.campaignTick !== ev.tick) sfx.levelComplete(ev.result.medal, { at: at + JINGLE_DELAY_SEC });
         break;
       case 'campaignComplete':
         sfx.campaignComplete({ at: at + JINGLE_DELAY_SEC });
@@ -1470,6 +1781,11 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       case 'levelStart':
       case 'playStart':
         break;
+      default: {
+        // exhaustive: an event type the sim adds fails typecheck here until it is routed or listed as silent
+        const unrouted: never = ev;
+        void unrouted;
+      }
     }
   }
 
@@ -1487,13 +1803,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     const first = events[0];
     if (first === undefined) return;
     const base = ctx.currentTime + delaySec;
-    const completeTicks = new Set<number>();
-    let campaignTick = -1;
-    for (const ev of events) {
-      if (ev.type === 'levelComplete') completeTicks.add(ev.tick);
-      if (ev.type === 'campaignComplete') campaignTick = ev.tick;
-    }
-    for (const ev of events) routeEvent(ev, base + Math.min(MULTI_TICK_CAP_SEC, (ev.tick - first.tick) * DT), completeTicks, campaignTick);
+    const batch = batchOf(events);
+    for (const ev of events) routeEvent(ev, base + Math.min(MULTI_TICK_CAP_SEC, (ev.tick - first.tick) * DT), batch);
   }
 
   function dispose(): void {

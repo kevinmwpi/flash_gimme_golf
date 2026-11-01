@@ -1,18 +1,36 @@
 // OWNER: view
 /**
  * Mechanic silhouettes (ARCH.md §1.9, VISUAL.md §4): sand, spring, bumper, fan, colour gate, bridge,
- * blocker gate / stone wall and the pressure switch. Every prop is flush with the surface; one hard
- * shade band per material; 4 px ink. Static parts (`draw*Slot/Socket/Housing/Base/Posts/Wire`) are
- * painted into the cached terrain layer by world.ts; `drawRect`/`drawSwitch` draw the whole prop by
- * default and only the animated parts when asked (`parts: 'dynamic'`).
+ * blocker gate / stone wall and the pressure switch (traps and cannons: devices.ts). Every prop is flush
+ * with the surface; one hard shade band per material; 4 px ink. Static parts
+ * (`draw*Slot/Socket/Housing/Base/Posts/Wire`) are painted into the cached terrain layer by world.ts;
+ * `drawRect`/`drawSwitch` draw the whole prop by default and only the animated parts when asked
+ * (`parts: 'dynamic'`).
  */
 import type { BlockerRect, BridgeRect, BumperRect, ColourGateRect, FanRect, Level, LevelRect, PressureSwitch, SpringRect } from '../../sim/types';
+import { VIEWPORT_H } from '../../sim/types';
 import type { GateAnim } from '../view';
-import { circle, clamp01, easeOut, fillStroke, font, INK, inkLine, line, OUTLINE_DOT, OUTLINE_SMALL, OUTLINE_WIDTH, PALETTE, PLAYER_VIEW, roundRect } from './palette';
+import {
+  cannonGeometry,
+  drawCannonBarrel,
+  drawCannonCradle,
+  drawTrapBase,
+  drawTrapJaws,
+  flatTrapGeometry,
+  recoilOf,
+  trapGeometry,
+  type WirePost,
+} from './devices';
+import { circle, clamp01, easeOut, fillStroke, INK, inkLine, line, OUTLINE_DOT, OUTLINE_SMALL, OUTLINE_WIDTH, PALETTE, PLAYER_VIEW, roundRect } from './palette';
+import { bottomBand, lamp, letterTag, post, POST_H, switchGeometry } from './parts';
 import { switchLetter } from './text';
+
+export { switchGeometry, type SwitchGeometry } from './parts';
 
 /** Fairway y at a world x (the layer passes the real polyline; standalone callers pass a flat line). */
 export type SurfaceFn = (x: number) => number;
+/** Fairway y at a world x for wire routing: null inside a gap (a wire hangs across a chasm, it never dives into it). */
+export type WireSurface = (x: number) => number | null;
 
 export type RectDrawOptions = {
   /** Switch letter shown on the letter tag (bridge left post / blocker top post). */
@@ -20,11 +38,17 @@ export type RectDrawOptions = {
   /** 'dynamic' skips the parts the cached terrain layer already holds. */
   parts?: 'all' | 'dynamic';
   gate?: GateAnim | undefined;
+  /**
+   * World y a colour field's badge stays below: the top of the visible playfield under the HUD band and under
+   * the field's own label when that label slid down into the playfield (D10.8). Default GATE_BADGE_TOP_Y.
+   */
+  badgeTop?: number;
 };
 
 const SAND_DEPTH = 16;
 const SAND_SAMPLES = 8;
-const SPRING_PLATE_W = 56;
+/** The plate is drawn at the pad's width (D10.8: L9's pad is 64 px), never narrower than its slot. */
+const SPRING_PLATE_MIN_W = 40;
 const SPRING_PLATE_H = 14;
 const SPRING_SQUASH_T = 0.033;
 const SPRING_OVERSHOOT_T = 0.1;
@@ -41,12 +65,14 @@ const GATE_FIELD_ALPHA = 0.42;
 const GATE_PASS_T = 0.2;
 const GATE_BLOCK_SOLID_T = 0.05;
 const GATE_BLOCK_POP_T = 0.15;
-/** Narrowest drawn plate; wider press zones draw wider so the plate IS the zone (LEVELS.md). */
-const SWITCH_MIN_BASE_W = 64;
-/** Cap inset from each end of the base (64 base -> 52 cap, VISUAL.md §4). */
-const SWITCH_CAP_INSET = 6;
-/** Letter tag / lamp centre inset from the base ends. */
-const SWITCH_END_INSET = 6;
+/** A field that rises off the top of the screen (L8's red wall) keeps its badge in the visible playfield (D10.8). */
+const GATE_BADGE_TOP_Y = 68;
+/** The badge's centre stays this far above the field's bottom: its 14 px half-height over the bottom emitter's 14 px. */
+const GATE_BADGE_FOOT = 28;
+/** The both-outcome badge: a 76 x 28 paper over its ink shadow 3 px lower (VISUAL §4). */
+export const GATE_BADGE_W = 76;
+const GATE_BADGE_H = 28;
+const GATE_BADGE_SHADOW = 3;
 const SWITCH_CAP_UP = 14;
 const SWITCH_CAP_DOWN = 6;
 /** Drawn height above `surfaceY` of a raised plate (cap 14 + base 4 proud). */
@@ -55,66 +81,14 @@ const SWITCH_TOP = SWITCH_CAP_UP + 4;
 const DECK_STRIP_UP = 8;
 const DECK_STRIP_DOWN = 4;
 const DECK_STRIP_R = 3;
-const LAMP_R = 6;
-const LAMP_HALO_R = 11;
-const POST_W = 10;
-const POST_H = 26;
 const PLANK_SEAM = 26;
 const WIRE_DROP = 46;
+/** A wire's run never sinks below this many px above the frame bottom. */
+const WIRE_FRAME_MARGIN = 10;
 const STRIPE_PITCH = 10;
 const BRICK_ROW = 40;
 
 // ---- shared bits -------------------------------------------------------------------------------
-
-function lamp(ctx: CanvasRenderingContext2D, x: number, y: number, lit: boolean): void {
-  if (lit) {
-    circle(ctx, x, y, LAMP_HALO_R);
-    ctx.fillStyle = PALETTE.mintHalo;
-    ctx.fill();
-  }
-  circle(ctx, x, y, LAMP_R);
-  fillStroke(ctx, lit ? PALETTE.mint : PALETTE.plateSh, OUTLINE_DOT);
-}
-
-function letterTag(ctx: CanvasRenderingContext2D, x: number, y: number, letter: string): void {
-  circle(ctx, x, y, 8);
-  fillStroke(ctx, PALETTE.sw, OUTLINE_DOT);
-  ctx.fillStyle = PALETTE.white;
-  ctx.font = font(700, 11);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(letter, x, y + 0.5);
-}
-
-/** Bottom shade band of a rounded rect drawn as its own rounded path (no clip). */
-function bottomBand(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, band: number, r: number, colour: string): void {
-  ctx.beginPath();
-  ctx.roundRect(x, y + h - band, w, band, [0, 0, r, r]);
-  ctx.fillStyle = colour;
-  ctx.fill();
-}
-
-function post(ctx: CanvasRenderingContext2D, x: number, top: number): void {
-  roundRect(ctx, x - POST_W / 2, top, POST_W, POST_H, 3);
-  fillStroke(ctx, PALETTE.plate, OUTLINE_SMALL);
-}
-
-export type SwitchGeometry = {
-  /** Plate centre x. */
-  cx: number;
-  /** Drawn base width == max(64, press zone width), so cause and effect line up on screen. */
-  baseW: number;
-  capW: number;
-  tagX: number;
-  lampX: number;
-};
-
-/** Where the plate, cap, letter tag and lamp of a switch sit (shared by the base, cap and wire). */
-export function switchGeometry(sw: PressureSwitch): SwitchGeometry {
-  const cx = sw.x + sw.w / 2;
-  const baseW = Math.max(SWITCH_MIN_BASE_W, sw.w);
-  return { cx, baseW, capW: baseW - 2 * SWITCH_CAP_INSET, tagX: cx - baseW / 2 + SWITCH_END_INSET, lampX: cx + baseW / 2 - SWITCH_END_INSET };
-}
 
 function firstSwitchId(rect: LevelRect): string | undefined {
   return rect.switchIds !== undefined ? rect.switchIds[0] : rect.switchId;
@@ -209,21 +183,29 @@ function chevron(ctx: CanvasRenderingContext2D, x: number, cy: number, halfW: nu
   ctx.stroke();
 }
 
-/** Plate (56x14, 6 px proud, ink stripes) + two stacked white up-chevrons; `t` = seconds since launch. */
+/** Rotation that turns the plate's "up" into the launch direction (World 2-3 springs throw 10-26 degrees off vertical). */
+export function chevronTilt(launch: { x: number; y: number }): number {
+  return Math.atan2(launch.x, -launch.y);
+}
+
+/**
+ * Plate (the pad's width x 14, 6 px proud, ink stripes) + two stacked white chevrons pointing along the
+ * launch vector (D10.8); `t` = seconds since launch.
+ */
 function drawSpringPlate(ctx: CanvasRenderingContext2D, rect: SpringRect, t: number): void {
   const x = rect.x + rect.w / 2;
   const y = rect.y;
   const h = springPlateHeight(t);
   const top = y + 8 - h;
-  const half = SPRING_PLATE_W / 2;
-  roundRect(ctx, x - half, top, SPRING_PLATE_W, h, 5);
+  const plateW = Math.max(SPRING_PLATE_MIN_W, rect.w);
+  const half = plateW / 2;
+  roundRect(ctx, x - half, top, plateW, h, 5);
   fillStroke(ctx, PALETTE.spring, OUTLINE_WIDTH);
   ctx.save();
-  roundRect(ctx, x - half, top, SPRING_PLATE_W, h, 5);
+  roundRect(ctx, x - half, top, plateW, h, 5);
   ctx.clip();
   ctx.fillStyle = INK;
-  for (let i = -3; i < 6; i += 1) {
-    const sx = x - half + i * 12;
+  for (let sx = x - half - 36; sx < x + half; sx += 12) {
     ctx.beginPath();
     ctx.moveTo(sx, y + 8);
     ctx.lineTo(sx + 8, top);
@@ -233,13 +215,15 @@ function drawSpringPlate(ctx: CanvasRenderingContext2D, rect: SpringRect, t: num
     ctx.fill();
   }
   ctx.fillStyle = PALETTE.springSh;
-  ctx.fillRect(x - half, y + 4, SPRING_PLATE_W, 4);
+  ctx.fillRect(x - half, y + 4, plateW, 4);
   ctx.restore();
   const flying = t < SPRING_SETTLE_T;
   const rise = flying ? 20 * (t / SPRING_SETTLE_T) : 0;
   ctx.save();
   ctx.globalAlpha = flying ? 1 - t / SPRING_SETTLE_T : 1;
-  for (const cy of [y - 16, y - 28]) chevron(ctx, x, cy - rise, 9, 8, 3, PALETTE.white);
+  ctx.translate(x, y - 6);
+  ctx.rotate(chevronTilt(rect.launch));
+  for (const cy of [-10, -22]) chevron(ctx, 0, cy - rise, 9, 8, 3, PALETTE.white);
   ctx.restore();
 }
 
@@ -369,12 +353,26 @@ function miniBall(ctx: CanvasRenderingContext2D, x: number, y: number, colour: s
   ctx.fill();
 }
 
+/** Centre y of a colour field's badge: mid-way down the field's visible part below `badgeTop`, clear of its bottom emitter. */
+function gateBadgeY(rect: ColourGateRect, badgeTop: number): number {
+  const bottom = rect.y + rect.h;
+  const visibleTop = Math.max(rect.y, badgeTop);
+  return Math.min(visibleTop + (bottom - visibleTop) / 2, bottom - GATE_BADGE_FOOT);
+}
+
+/** World box of a colour field's badge, paper and shadow: labels keep off it (D10.8). */
+export function gateBadgeBox(rect: ColourGateRect, badgeTop: number): { x1: number; y1: number; x2: number; y2: number } {
+  const x = rect.x + rect.w / 2;
+  const by = gateBadgeY(rect, badgeTop);
+  return { x1: x - GATE_BADGE_W / 2, y1: by - GATE_BADGE_H / 2, x2: x + GATE_BADGE_W / 2, y2: by + GATE_BADGE_H / 2 + GATE_BADGE_SHADOW };
+}
+
 /** Paper badge mid-field: [owner ball + mint check] [other ball + ink cross]. */
 function drawGateBadge(ctx: CanvasRenderingContext2D, x: number, by: number, owner: 0 | 1, blockedPop: number): void {
-  roundRect(ctx, x - 38, by - 11, 76, 28, 8);
+  roundRect(ctx, x - GATE_BADGE_W / 2, by - GATE_BADGE_H / 2 + GATE_BADGE_SHADOW, GATE_BADGE_W, GATE_BADGE_H, 8);
   ctx.fillStyle = INK;
   ctx.fill();
-  roundRect(ctx, x - 38, by - 14, 76, 28, 8);
+  roundRect(ctx, x - GATE_BADGE_W / 2, by - GATE_BADGE_H / 2, GATE_BADGE_W, GATE_BADGE_H, 8);
   fillStroke(ctx, PALETTE.paper, OUTLINE_SMALL);
   miniBall(ctx, x - 24, by, PLAYER_VIEW[owner].col);
   ctx.beginPath();
@@ -410,8 +408,11 @@ function gateBlockedPop(gate: GateAnim | undefined): number {
   return 1 + 0.6 * Math.sin((gate.t / GATE_BLOCK_POP_T) * Math.PI);
 }
 
-/** Two emitters, striped translucent field, both-outcome badge. */
-function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gate: GateAnim | undefined): void {
+/**
+ * Two emitters, a translucent field striped in its own colour, both-outcome badge centred in the field's
+ * visible part below `badgeTop`.
+ */
+function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gate: GateAnim | undefined, badgeTop: number): void {
   const owner: 0 | 1 = rect.colour === 'red' ? 0 : 1;
   const col = PLAYER_VIEW[owner].col;
   const colSh = PLAYER_VIEW[owner].sh;
@@ -427,7 +428,8 @@ function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gat
   ctx.globalAlpha = gateFieldAlpha(gate);
   ctx.fillRect(x - halfW, top, halfW * 2, y - top);
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,.55)';
+  // opaque stripes in the field's own colour: over the sky the translucent red fill alone reads switch-purple
+  ctx.strokeStyle = col;
   ctx.lineWidth = 4;
   for (let sy = top - 10 - (scroll % 16); sy < y + 20; sy += 16) {
     ctx.beginPath();
@@ -452,7 +454,7 @@ function drawColourGate(ctx: CanvasRenderingContext2D, rect: ColourGateRect, gat
     ctx.fillStyle = PALETTE.white;
     ctx.fill();
   }
-  drawGateBadge(ctx, x, top + (y - top) / 2, owner, gateBlockedPop(gate));
+  drawGateBadge(ctx, x, gateBadgeY(rect, badgeTop), owner, gateBlockedPop(gate));
 }
 
 // ---- bridge ------------------------------------------------------------------------------------
@@ -641,9 +643,8 @@ export function drawSwitch(ctx: CanvasRenderingContext2D, sw: PressureSwitch, pr
 
 // ---- wire --------------------------------------------------------------------------------------
 
-type Post = { x: number; lampY: number };
-
-function postsOf(rect: LevelRect): Post[] {
+/** Where the wires of a switch-linked rect end: post lamps, a trap's hinges on its real floor, a cannon's fuse lamp. */
+export function wirePosts(level: Level, rect: LevelRect): readonly WirePost[] {
   switch (rect.kind) {
     case 'bridge':
       return [
@@ -654,30 +655,44 @@ function postsOf(rect: LevelRect): Post[] {
       return [{ x: rect.x + rect.w / 2, lampY: rect.y + rect.h - 13 }];
     case 'fan':
       return [{ x: rect.x + rect.w / 2, lampY: rect.y + rect.h + 7 }];
-    default:
+    case 'trap':
+      return trapGeometry(level, rect).posts;
+    case 'cannon':
+      return cannonGeometry(rect).posts;
+    case 'sand':
+    case 'spring':
+    case 'bumper':
+    case 'colourGate':
       return [];
   }
 }
 
-/** Depth of the horizontal wire run: 46 px under the LOWEST fairway point between the two ends (always in the dirt). */
-function wireDepth(fromX: number, fromY: number, toX: number, surface: SurfaceFn | undefined): number {
+/**
+ * Depth of the horizontal wire run: 46 px under the LOWEST fairway point between the two ends (always in the
+ * dirt). Gaps are skipped, so a wire to a plate across a chasm hangs over the pit inside the frame.
+ */
+function wireDepth(fromX: number, fromY: number, toX: number, surface: WireSurface | undefined): number {
   let lowest = fromY;
   if (surface !== undefined) {
     const lo = Math.min(fromX, toX);
     const hi = Math.max(fromX, toX);
-    for (let x = lo; x <= hi; x += 25) lowest = Math.max(lowest, surface(x));
-    lowest = Math.max(lowest, surface(hi));
+    const consider = (x: number): void => {
+      const y = surface(x);
+      if (y !== null) lowest = Math.max(lowest, y);
+    };
+    for (let x = lo; x <= hi; x += 25) consider(x);
+    consider(hi);
   }
-  return lowest + WIRE_DROP;
+  return Math.min(lowest + WIRE_DROP, VIEWPORT_H - WIRE_FRAME_MARGIN);
 }
 
-/** Dotted wire from the switch lamp down into the dirt, along it, then up the nearest post of `rect`. */
-export function drawWire(ctx: CanvasRenderingContext2D, sw: PressureSwitch, rect: LevelRect, lit: boolean, surface?: SurfaceFn): void {
-  const posts = postsOf(rect);
-  if (posts.length === 0) return;
+/** Dotted wire from the switch lamp down into the dirt, along it, then up to the nearest of `posts`. */
+export function drawWire(ctx: CanvasRenderingContext2D, sw: PressureSwitch, posts: readonly WirePost[], lit: boolean, surface?: WireSurface): void {
+  const first = posts[0];
+  if (first === undefined) return;
   const fromX = switchGeometry(sw).lampX;
   const fromY = sw.surfaceY + 3;
-  const target = posts.reduce((best, p) => (Math.abs(p.x - fromX) < Math.abs(best.x - fromX) ? p : best));
+  const target = posts.reduce((best, p) => (Math.abs(p.x - fromX) < Math.abs(best.x - fromX) ? p : best), first);
   const depth = wireDepth(fromX, fromY, target.x, surface);
   ctx.setLineDash([2, 7]);
   ctx.lineWidth = 4;
@@ -695,9 +710,11 @@ export function drawWire(ctx: CanvasRenderingContext2D, sw: PressureSwitch, rect
 // ---- dispatch ----------------------------------------------------------------------------------
 
 /**
- * Draws one mechanic. `anim`: bridge/blocker = solidity 0..1; spring/bumper = seconds since
- * triggered; fan = clock phase in seconds. Inactive bridge/blocker = dashed ghost; permanent blocker
- * = stone wall. `switchColour` is accepted for the ARCH signature (World 1 switches are all `sw`).
+ * Draws one mechanic. `anim`: bridge/blocker = solidity 0..1; trap = set 0..1 (1 armed); spring/bumper/
+ * cannon = seconds since triggered / fired; fan = clock phase in seconds. `active` is the sim's rect
+ * activity (a trap: armed; a cannon: lit). Inactive bridge/blocker = dashed ghost; permanent blocker
+ * = stone wall. Without its level a trap stands on a flat floor at its zone's bottom (the renderer uses the
+ * level's terrain, devices.ts). `switchColour` is accepted for the ARCH signature (World 1 switches are all `sw`).
  */
 export function drawRect(
   ctx: CanvasRenderingContext2D,
@@ -727,7 +744,7 @@ export function drawRect(
       drawFanColumn(ctx, rect, anim, active);
       break;
     case 'colourGate':
-      drawColourGate(ctx, rect, opts.gate);
+      drawColourGate(ctx, rect, opts.gate, opts.badgeTop ?? GATE_BADGE_TOP_Y);
       break;
     case 'bridge':
       drawBridge(ctx, rect, active, anim, opts);
@@ -737,5 +754,17 @@ export function drawRect(
         if (all) drawStoneWall(ctx, rect);
       } else drawBlockerGate(ctx, rect, active, anim, opts);
       break;
+    case 'trap': {
+      const g = flatTrapGeometry(rect);
+      if (all) drawTrapBase(ctx, g);
+      drawTrapJaws(ctx, g, anim);
+      break;
+    }
+    case 'cannon': {
+      const g = cannonGeometry(rect);
+      if (all) drawCannonCradle(ctx, g);
+      drawCannonBarrel(ctx, g, active, recoilOf(anim));
+      break;
+    }
   }
 }

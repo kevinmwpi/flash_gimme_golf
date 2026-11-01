@@ -44,6 +44,15 @@ describe('storage', () => {
     expect(loadBests()).toEqual({});
   });
 
+  it('bests of every world share fg.v1.best and survive a reload (no new key, nothing locked; D10.2)', () => {
+    for (const level of LEVELS) saveBest(level.id, level.par, 'silver');
+    const loaded = loadBests();
+    expect(Object.keys(loaded).sort()).toEqual(LEVELS.map((l) => l.id).sort());
+    expect(new Set(LEVELS.map((l) => l.world))).toEqual(new Set([1, 2, 3]));
+    const keys = Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i));
+    expect(keys).toEqual(['fg.v1.best']);
+  });
+
   it('every call survives a throwing localStorage (returns defaults)', () => {
     const boom = (): never => {
       throw new Error('blocked');

@@ -75,7 +75,7 @@ function offenders(patterns: readonly RegExp[]): string[] {
 describe('sim purity', () => {
   it('scans the real sim sources', () => {
     const names = simFiles.map((f) => f.file.split(sep).join('/'));
-    expect(names).toEqual(expect.arrayContaining(['sim.ts', 'physics.ts', 'terrain.ts', 'rng.ts', 'serialize.ts', 'types.ts']));
+    expect(names).toEqual(expect.arrayContaining(['sim.ts', 'physics.ts', 'terrain.ts', 'devices.ts', 'rng.ts', 'serialize.ts', 'types.ts']));
   });
 
   it('no file under src/sim (excluding __tests__) contains Math.random, Date., performance., window, document, navigator, setTimeout or import.meta', () => {
@@ -131,6 +131,10 @@ describe('sim purity', () => {
       'HOLE_RADIUS',
       'SUNK_BALL_DROP',
       'FALL_PENALTY',
+      'BACK_PENALTY',
+      'FLIGHT_WATCHDOG_TICKS',
+      'CANNON_MIN_SIDEWAYS',
+      'CANNON_MUZZLE_CLEAR_PX',
       'KILL_MARGIN',
       'CEILING_Y',
       'MAX_BALL_SPEED',
@@ -188,7 +192,7 @@ describe('sim purity', () => {
     const hits: string[] = [];
     for (const file of files) {
       const code = stripComments(readFileSync(file, 'utf8'), true);
-      if (/\bw1-\d{2}-[a-z0-9-]+/.test(code)) hits.push(relative(SRC_DIR, file));
+      if (/\bw[1-3]-\d{2}-[a-z0-9-]+/.test(code)) hits.push(relative(SRC_DIR, file));
     }
     expect(hits).toEqual([]);
   });

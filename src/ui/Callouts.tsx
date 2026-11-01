@@ -7,11 +7,13 @@
  * stage space (App wraps it in the scaled stage layer). One polite live region announces banners
  * and toasts for screen readers (UX.md §6). An info banner holds for its full duration: a turn banner
  * that arrives while it shows (restartLevel emits levelRestart + turnStart in one step) is queued
- * behind it instead of replacing it (UX.md §3.6 "HOLE RESTARTED then the turn banner").
+ * behind it instead of replacing it (UX.md §3.6 "HOLE RESTARTED then the turn banner"). Every turn the
+ * WAITING rule hands over (`turnSkipped`, emitted in the same tick as and just before its `turnStart`)
+ * shows its banner with "Red is caught — Blue shoots again" under the main line (D10.10).
  */
 import React, { useEffect, useRef, useState } from 'react';
 import type { PlayerId, SimMode } from '../sim/types';
-import { COPY, turnBanner } from './copy';
+import { COPY, turnBannerLines, type TurnSkip } from './copy';
 import type { EventBus } from './eventBus';
 
 /** `ms` overrides TOAST_MS for one toast (the holder tip). */
@@ -27,7 +29,8 @@ export type CalloutsProps = {
   onToastDone(id: number): void;
 };
 
-type BannerBody = { kind: 'player'; player: PlayerId; text: string; sub: string | null } | { kind: 'info'; text: string; tone: 'paper' | 'warn' };
+/** `say` is what the live region reads (a skipped turn adds its whole sentence to the main line). */
+type BannerBody = { kind: 'player'; player: PlayerId; text: string; sub: string | null; say: string } | { kind: 'info'; text: string; tone: 'paper' | 'warn' };
 type Banner = BannerBody & { nonce: number };
 
 const TURN_BANNER_MS = 1400;
@@ -69,11 +72,17 @@ export default function Callouts({ bus, seats, mode, toasts, onToastDone }: Call
       setSimToasts((list) => [...list.slice(-(MAX_TOASTS - 1)), { id, text }]);
       window.setTimeout(() => setSimToasts((list) => list.filter((t) => t.id !== id)), TOAST_MS);
     };
+    /** The ball the WAITING rule passed over, kept until the turnStart of the same tick it explains. */
+    let skipped: (TurnSkip & { tick: number; nextPlayer: PlayerId }) | null = null;
     const unsubscribe = bus.subscribe((e) => {
       switch (e.type) {
+        case 'turnSkipped':
+          skipped = { playerId: e.playerId, reason: e.reason, tick: e.tick, nextPlayer: e.nextPlayer };
+          break;
         case 'turnStart': {
-          const mine = seats.includes(e.playerId);
-          showTurn({ kind: 'player', player: e.playerId, text: turnBanner(e.playerId, mine, mode), sub: mode === 'online' && !mine ? COPY.banner.partnerSub : null });
+          const skip = skipped !== null && skipped.tick === e.tick && skipped.nextPlayer === e.playerId ? skipped : null;
+          skipped = null;
+          showTurn({ kind: 'player', player: e.playerId, ...turnBannerLines(e.playerId, skip, seats, mode) });
           break;
         }
         case 'levelComplete':
@@ -143,7 +152,7 @@ export default function Callouts({ bus, seats, mode, toasts, onToastDone }: Call
         ))}
       </div>
       <div className="sr-only" aria-live="polite" aria-atomic="true">
-        {banner?.text ?? ''}
+        {banner === null ? '' : banner.kind === 'player' ? banner.say : banner.text}
       </div>
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {newestToast?.text ?? ''}

@@ -36,10 +36,15 @@ export const COPY = Object.freeze({
     gateRed: 'RED ONLY',
     gateBlue: 'BLUE ONLY',
     bridge: 'BRIDGE',
+    trap: 'TRAP',
+    cannon: 'CANNON',
     on: ' · ON',
     off: ' · OFF',
     open: ' · OPEN',
     shut: ' · SHUT',
+    armed: ' · ARMED',
+    lit: ' · LIT',
+    cold: ' · COLD',
     pit: 'OUT OF BOUNDS · +1',
     pitLine1: 'OUT OF BOUNDS',
     pitLine2: '+1',
@@ -64,6 +69,12 @@ export const COPY = Object.freeze({
     gateShut: 'SHUT',
     gateWord: 'GATE',
     soClose: 'SO CLOSE',
+    snap: 'SNAP!',
+    free: 'FREE!',
+    back: 'BACK +1',
+    backToTee: 'BACK TO TEE +1',
+    loaded: 'LOADED!',
+    boom: 'BOOM!',
   }),
 });
 
@@ -75,6 +86,11 @@ export function switchLetter(index: number): string {
 /** Sticker base word for a switch: its label, else `SWITCH <letter>` (BUILD_DECISIONS D2). */
 export function switchWord(label: string | undefined, index: number): string {
   return label !== undefined && label.length > 0 ? label.toUpperCase() : `SWITCH ${switchLetter(index)}`;
+}
+
+/** The one combined sticker of a plate inside a trap (a seat, D10.8): `BAIT · TRAP`, `DOOR · TRAP`. */
+export function seatWord(plateLabel: string | undefined, index: number, trapLabel: string | undefined): string {
+  return `${switchWord(plateLabel, index)} · ${trapLabel !== undefined && trapLabel.length > 0 ? trapLabel.toUpperCase() : COPY.stickers.trap}`;
 }
 
 /** Callout for a held switch: `SWITCH A HELD` for single-letter labels, else `<LABEL> HELD`. */

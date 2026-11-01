@@ -2,13 +2,15 @@
 /**
  * Sky, parallax background, terrain and cup (ARCH.md §1.9; VISUAL.md §4 terrain, §8 cup, §9 layers,
  * §18 performance). The static terrain layer (pits, dirt, grass, stones, tufts, sand bands, spring
- * slots, bumper sockets, fan housings, switch bases, unlit wires, posts, stone walls) is rendered once
- * per level per pixel scale into offscreen tiles (<= 4096 px wide) and blitted every frame.
+ * slots, bumper sockets, fan housings, trap bases, cannon cradles, switch bases, unlit wires, posts,
+ * stone walls) is rendered once per level per pixel scale into offscreen tiles (<= 4096 px wide) and
+ * blitted every frame.
  */
 import type { Gap, Level, PressureSwitch, TerrainPiece } from '../../sim/types';
 import { BALL_RADIUS, GIMME_RADIUS, VIEWPORT_H, VIEWPORT_W } from '../../sim/types';
 import { isRectActive } from '../../sim/terrain';
 import type { CupAnim, ViewState } from '../view';
+import { cannonGeometry, drawCannonCradle, drawTrapBase, trapGeometry } from './devices';
 import {
   drawBridgePosts,
   drawBumperSocket,
@@ -18,8 +20,10 @@ import {
   drawStoneWall,
   drawSwitchBase,
   drawWire,
+  wirePosts,
   type SurfaceFn,
 } from './mechanics';
+import { fairwayYAt, fairwayYExtended, pieceSurfaceY } from './surface';
 import { switchLetter } from './text';
 import {
   circle,
@@ -109,38 +113,9 @@ const FLAG_H = 24;
 const FLAG_COLS = 4;
 const FLAG_ROWS = 3;
 
-// ---- surface queries (render-local: the sim's authoring queries are not for the view) ----------
+// ---- surface queries (render-local, surface.ts) -----------------------------------------------
 
-export function pieceSurfaceY(piece: TerrainPiece, x: number): number | null {
-  const s = piece.surface;
-  const first = s[0];
-  const last = s[s.length - 1];
-  if (first === undefined || last === undefined || x < first.x || x > last.x) return null;
-  for (let i = 0; i < s.length - 1; i += 1) {
-    const a = s[i];
-    const b = s[i + 1];
-    if (a === undefined || b === undefined || x > b.x) continue;
-    const t = b.x === a.x ? 0 : (x - a.x) / (b.x - a.x);
-    return a.y + (b.y - a.y) * t;
-  }
-  return last.y;
-}
-
-/** LOWEST (largest y) piece surface at x: the fairway. null inside a gap or outside the level. */
-export function fairwayYAt(level: Level, x: number): number | null {
-  let best: number | null = null;
-  for (const piece of level.terrain.pieces) {
-    const y = pieceSurfaceY(piece, x);
-    if (y !== null && (best === null || y > best)) best = y;
-  }
-  return best;
-}
-
-/** Fairway y at x, with flat continuation past the level bounds (for shadows near the edges). */
-export function fairwayYExtended(level: Level, x: number): number | null {
-  const clamped = Math.min(Math.max(x, 0), level.width);
-  return fairwayYAt(level, clamped);
-}
+export { fairwayYAt, fairwayYExtended, pieceSurfaceY };
 
 /** First surface below a point: piece tops and active rect tops (ball shadows). */
 export function groundYBelow(level: Level, switches: Readonly<Record<string, boolean>>, x: number, y: number): number | null {
@@ -274,7 +249,7 @@ function drawHills(ctx: CanvasRenderingContext2D, camX: number): void {
   }
 }
 
-/** Gradient + sun + clouds + parallax hills, full viewport, BEFORE the camera transform. */
+/** Gradient + sun + clouds (static under reduced motion, UX §3.10) + parallax hills, full viewport, BEFORE the camera transform. */
 export function drawSky(ctx: CanvasRenderingContext2D, view: ViewState): void {
   const g = ctx.createLinearGradient(0, 0, 0, SKY_GRADIENT_END_Y);
   g.addColorStop(0, PALETTE.sky1);
@@ -283,7 +258,7 @@ export function drawSky(ctx: CanvasRenderingContext2D, view: ViewState): void {
   ctx.fillRect(0, 0, VIEWPORT_W, VIEWPORT_H);
   drawSun(ctx);
   const camX = view.camera.x * view.camera.zoom;
-  drawClouds(ctx, camX, view.timeSec);
+  drawClouds(ctx, camX, view.reducedMotion ? 0 : view.timeSec);
   drawHills(ctx, camX);
 }
 
@@ -442,6 +417,10 @@ function switchHasWire(sw: PressureSwitch): boolean {
   return sw.onRectId === undefined;
 }
 
+/**
+ * Static props in rect order, then the device hardware (a cannon's cradle sits over the funnel sand on both
+ * sides of its breech), then switch bases and their unlit wires.
+ */
 function drawStaticProps(ctx: CanvasRenderingContext2D, level: Level, surface: SurfaceFn): void {
   for (const r of level.rects) {
     switch (r.kind) {
@@ -464,15 +443,22 @@ function drawStaticProps(ctx: CanvasRenderingContext2D, level: Level, surface: S
         if (r.switchId === undefined && r.switchIds === undefined) drawStoneWall(ctx, r);
         break;
       case 'colourGate':
+      case 'trap':
+      case 'cannon':
         break;
     }
   }
+  for (const r of level.rects) {
+    if (r.kind === 'trap') drawTrapBase(ctx, trapGeometry(level, r));
+    else if (r.kind === 'cannon') drawCannonCradle(ctx, cannonGeometry(r));
+  }
+  const wireSurface = (x: number): number | null => fairwayYAt(level, x);
   level.switches.forEach((sw, i) => {
     if (!switchHasWire(sw)) return;
     drawSwitchBase(ctx, sw, switchLetter(i));
     for (const r of level.rects) {
       const linked = r.switchIds !== undefined ? r.switchIds.includes(sw.id) : r.switchId === sw.id;
-      if (linked) drawWire(ctx, sw, r, false, surface);
+      if (linked) drawWire(ctx, sw, wirePosts(level, r), false, wireSurface);
     }
   });
 }

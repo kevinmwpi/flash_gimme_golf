@@ -48,6 +48,9 @@ export const PALETTE = Object.freeze({
   swSh: '#8f55cc',
   plank: '#d89a4b',
   plankSh: '#b97a33',
+  /** Cast iron: the cannon barrel (its cradle is `plank`, its fuse lamp the usual `mint` / `plateSh`). */
+  iron: '#56546e',
+  ironSh: '#3f3d54',
   mint: '#44d67a',
   mintSh: '#2aa85a',
   mintHalo: 'rgba(68,214,122,.35)',

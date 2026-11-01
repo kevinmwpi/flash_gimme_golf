@@ -38,6 +38,7 @@ import * as renderText from '../../view/render/text';
 import * as renderWorld from '../../view/render/world';
 import * as view from '../../view/view';
 import * as rooms from '../../../server/rooms';
+import * as devices from '../devices';
 import * as authoring from '../levels/authoring';
 import * as levels from '../levels/index';
 import * as physics from '../physics';
@@ -80,7 +81,12 @@ const CONTRACTS: ReadonlyArray<[label: string, mod: Module, fns: readonly string
       'placeOnSurface',
     ],
   ],
-  ['sim/physics', physics, ['launchVelocity', 'stepBall', 'evaluateSwitches', 'isSettled', 'predictShot']],
+  ['sim/physics', physics, ['launchVelocity', 'stepBall', 'evaluateSwitches', 'isSettled', 'predictShot', 'predictLaunch']],
+  [
+    'sim/devices',
+    devices,
+    ['trapHolding', 'cannonHolding', 'waitingOf', 'onCannonBreech', 'releaseIdsOf', 'isTrapArmed', 'isCannonLit', 'releaseLabel'],
+  ],
   [
     'sim/sim',
     sim,
@@ -118,7 +124,7 @@ const CONTRACTS: ReadonlyArray<[label: string, mod: Module, fns: readonly string
     ],
   ],
   ['sim/levels/authoring', authoring, ['terrainPiece', 'compileLevel', 'validateLevel']],
-  ['sim/levels/index', levels, ['levelById', 'hasLevel', 'coursePar', 'campaignFrom', 'worldTitle']],
+  ['sim/levels/index', levels, ['levelById', 'hasLevel', 'coursePar', 'campaignFrom', 'worldTitle', 'worldOf', 'levelsOfWorld', 'nextWorld']],
   [
     'view/view',
     view,
@@ -192,10 +198,25 @@ describe('contract: every module exports every contracted name', () => {
     expect(Object.isFrozen(types.IMMEDIATE_SNAPSHOT_EVENTS)).toBe(true);
   });
 
-  it('sim/levels/index exposes the registry arrays', () => {
+  it('sim/types exports the worlds 2-3 device constants (BUILD_DECISIONS D10) and snapshot version 2', () => {
+    expect(types.BACK_PENALTY).toBe(1);
+    expect(types.FLIGHT_WATCHDOG_TICKS).toBe(1800);
+    expect(types.FLIGHT_WATCHDOG_TICKS / types.TICK_RATE).toBe(30);
+    expect(types.CANNON_MIN_SIDEWAYS).toBe(0.5);
+    expect(types.CANNON_MUZZLE_CLEAR_PX).toBe(60);
+    expect(types.SNAPSHOT_VERSION).toBe(2);
+    expect(types.IMMEDIATE_SNAPSHOT_EVENTS).toEqual(expect.arrayContaining(['trapReturn', 'flightTimeout']));
+    for (const moment of ['trapCaught', 'trapFreed', 'cannonLoad', 'cannonFire', 'turnSkipped'] as const) {
+      expect(types.IMMEDIATE_SNAPSHOT_EVENTS, moment).not.toContain(moment);
+    }
+  });
+
+  it('sim/levels/index exposes the registry arrays (D10.1: three worlds, WORLD1_IDS kept)', () => {
     expect(Array.isArray(levels.LEVELS)).toBe(true);
     expect(levels.LEVELS.length).toBeGreaterThan(0);
-    expect(levels.WORLD1_IDS).toEqual(levels.LEVELS.map((l) => l.id));
+    expect(levels.WORLDS).toEqual([1, 2, 3]);
+    expect(levels.WORLDS.flatMap((w) => levels.WORLD_IDS[w])).toEqual(levels.LEVELS.map((l) => l.id));
+    expect(levels.WORLD1_IDS).toEqual(levels.LEVELS.filter((l) => l.world === 1).map((l) => l.id));
   });
 
   it('view/render/palette exports THEME in the ARCH shape and the D1 outline width', () => {
@@ -260,7 +281,7 @@ describe('contract: every module exports every contracted name', () => {
 
   it('net/protocol re-exports the shared constants', () => {
     expect(protocol.SERVER_TICK_RATE).toBe(types.TICK_RATE);
-    expect(protocol.PROTOCOL_VERSION).toBe(3);
+    expect(protocol.PROTOCOL_VERSION).toBe(4);
     expect(Object.isFrozen(protocol.LIMITS)).toBe(true);
     expect(Object.isFrozen(protocol.ERROR_COPY)).toBe(true);
   });

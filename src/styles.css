@@ -51,7 +51,6 @@
   --motion: 1;
   --stage-scale: 1;
   --hud-scale: 1;
-  --band: calc(12px + 48px * var(--hud-scale) + 8px);
 }
 
 :root[data-motion='on'] {
@@ -671,7 +670,10 @@ input {
   white-space: nowrap;
 }
 
+/* `flex: none`: the short-screen rules drop its min-height, and it must never shrink below its text
+   in the title column (it would spill over the tagline); the screen scrolls instead. */
 .shared-card {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -795,7 +797,7 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -820,6 +822,41 @@ input {
   font-weight: 600;
   opacity: 0.7;
   letter-spacing: 0.04em;
+}
+
+/* World picker (BUILD_DECISIONS D10.2): the shown world's tab is the ink badge with its full title (the
+   tray's header), the other worlds are paper chips with their number; the tiles below are that world's. */
+.world-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.world-tab {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 3px solid var(--ink);
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 0 var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: transform calc(var(--motion) * 80ms), box-shadow calc(var(--motion) * 80ms);
+}
+
+.world-tab:hover:not(.on) {
+  background: var(--paper-sh);
+}
+
+.world-tab.on {
+  background: var(--ink);
+  color: #fff;
+  box-shadow: none;
+  transform: translateY(3px);
 }
 
 .levels {
@@ -1463,6 +1500,18 @@ input {
   box-shadow: inset 0 -5px 0 var(--sun-sh);
 }
 
+/* START AT: the world row over that world's four holes, under one label (BUILD_DECISIONS D10.2). */
+.start-at {
+  display: grid;
+  gap: 8px;
+}
+
+.holes.worlds .hole {
+  flex: 1 1 auto;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 .start-row {
   display: flex;
   align-items: flex-start;
@@ -1562,7 +1611,8 @@ input {
   }
 }
 
-.card:focus {
+.card:focus,
+.focus-park:focus {
   outline: none;
 }
 
@@ -1967,6 +2017,12 @@ input {
   --dragging: 0;
   --ball-x: 640;
   --ball-y: 360;
+  /* The top HUD band in stage px (UX.md §4.1: 12 + 48·s + 8), under which the banner, toasts, coach and
+     partner-away band hang. Declared HERE, where App sets --hud-scale: on :root it was computed with the
+     root's scale of 1 and inherited as 68 px, so on phones (s = 1.66) the banner covered the 92 px cards.
+     --band-hang is the room a hanging CAUGHT / LOADED sticker needs (see `.row-narrow`). */
+  --band-hang: 0px;
+  --band: calc(12px + (48px + var(--band-hang)) * var(--hud-scale) + 8px);
 }
 
 .hud {
@@ -1990,7 +2046,8 @@ input {
 /* The top row is one flex row scaled ONCE by --hud-scale from its top-left corner. Its logical width is
    the stage width divided by the scale, so flex lays the three clusters out at their real scaled size:
    the team card centres in the free band between the hole chip and the player chips (whose YOU / PARTNER
-   tags and status lines make them ~200 px each online) and the clusters can never overlap. */
+   tags and status lines make them ~200 px each online) and the clusters can never overlap. App marks the
+   stage layer `.row-narrow` when that logical width is 900 px or less (see `.chip.waits`). */
 .hud-top {
   position: absolute;
   top: 12px;
@@ -2010,8 +2067,30 @@ input {
   flex: none;
 }
 
-/* The TR cluster is the one that may shrink: when both chips carry the long cup copy the chips give
-   up width (status ellipsized) so the mute/pause buttons never leave the stage (VISUAL.md §11). */
+/* When the normal row is full (long cup or CAUGHT copy, online YOU / PARTNER tags, HUD scale up to 1.06),
+   only the hole chip's level name gives way (ellipsized): the player chips keep every px, so their status
+   is never cut (D10.10). The row is at least 1179 px there, so the hole number always stays. */
+.hud:not(.compact) .hud-top .tl {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.hud:not(.compact) .hud-top .tr {
+  flex-shrink: 0;
+}
+
+.hud:not(.compact) .level-chip,
+.hud:not(.compact) .lvl {
+  min-width: 0;
+}
+
+.hud:not(.compact) .lvl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact rows keep the hole chip whole; there the TR cluster is the one that may shrink, so the pause
+   button never leaves the stage (VISUAL.md §11). */
 .hud-top .tr {
   flex: 0 1 auto;
   min-width: 0;
@@ -2059,6 +2138,7 @@ input {
 }
 
 .par-pill {
+  flex: none;
   padding: 2px 10px;
   border-radius: 999px;
   background: var(--p2-sh);
@@ -2397,6 +2477,56 @@ input {
   margin-left: 0;
 }
 
+/* BUILD_DECISIONS D10.10: a ball waiting in a trap or a cold cannon shows `CAUGHT · needs FREE` on every
+   layout, compact included (under its YOU / P1 tag), at full strength: it is the chip with a job for the
+   partner. */
+.chip.waits {
+  opacity: 1;
+}
+
+.compact .chip.waits .col {
+  display: grid;
+  gap: 1px;
+  justify-items: start;
+}
+
+.compact .chip.waits .status {
+  display: block;
+}
+
+/* A top row too narrow to hold that status inside the chip (phones: about 750 logical px; App sets
+   `.row-narrow` on the stage layer at 900 or less) hangs it under the chip as a paper sticker instead, so
+   it is never cut, and the hole chip drops its PAR pill (the team card already reads "/ PAR 7"), so
+   "HOLE 12/12", "7 TO SPARE" and both player chips fit unsqueezed. */
+.row-narrow .level-chip .par-pill {
+  display: none;
+}
+
+.row-narrow .chip.waits {
+  position: relative;
+}
+
+.row-narrow .chip.waits .status {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -4px;
+  padding: 3px 8px;
+  border: 3px solid var(--ink);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 3px 0 var(--ink);
+  overflow: visible;
+}
+
+/* While a sticker hangs, the HUD band reaches under it, so the turn and skip banner, the toasts, the coach
+   and the partner-away band sit below "needs FREE" instead of hiding it at the hand-off it explains
+   (D10.10). The sticker spans 50-78 logical px under the row's top, shadow included; the banner then
+   starts at 48 + 22 + 20/s, at least 81.8 (s <= 1.7). */
+.stage-layer.row-narrow:has(.chip.waits) {
+  --band-hang: 22px;
+}
+
 .compact .team {
   min-width: 200px;
   gap: 6px;
@@ -2456,6 +2586,8 @@ input {
   font-size: 28px;
   font-weight: 700;
   letter-spacing: 0.04em;
+  /* tight lines, so a banner with its sub-line ("your partner", the D10.10 skip line) still ends above the toasts */
+  line-height: 1;
   -webkit-text-stroke: 2px var(--ink);
   paint-order: stroke fill;
   transform: translateX(-50%) scale(var(--hud-scale));
@@ -2464,11 +2596,15 @@ input {
   pointer-events: none;
 }
 
+/* The 15 px sub-line ("your partner", the D10.10 skip line) inherits the main line's 2 px ink stroke under
+   its white fill: white alone is 2.2:1 on --p2 and 3.0:1 on --p1, and the stroke carries the contrast
+   (UX.md §0 row 6). Only player ribbons carry a sub-line. */
 .banner small {
+  margin-top: 2px;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
-  -webkit-text-stroke: 0;
+  line-height: 1.1;
 }
 
 .banner-p1 {
@@ -2591,7 +2727,9 @@ input {
   width: var(--coach-w);
   transform: translate(-50%, calc(-100% - var(--coach-gap) * var(--hud-scale))) scale(var(--hud-scale));
   transform-origin: bottom center;
-  pointer-events: auto;
+  /* Never blocks input: a pull that starts on the strip reaches the canvas ("Pull back from anywhere", D10.9);
+     only its "Got it" button takes presses. */
+  pointer-events: none;
   opacity: calc(1 - var(--dragging));
   transition: opacity calc(var(--motion) * 150ms);
   animation: toast-in calc(var(--motion) * 200ms + 1ms) ease-out both;
@@ -2615,9 +2753,12 @@ input {
   transform: translateX(-50%) rotate(45deg);
 }
 
+.coach-stage:not(.coach-faded) .btn {
+  pointer-events: auto;
+}
+
 .coach-stage.coach-faded {
   opacity: 0;
-  pointer-events: none;
 }
 
 .coach-stage .coach-text {

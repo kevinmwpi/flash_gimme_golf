@@ -7,9 +7,10 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as SimModule from '../../sim/sim';
-import type { Level, PlayerCommand, SimState } from '../../sim/types';
+import type { Level, PlayerCommand, SimConfig, SimPhase, SimState } from '../../sim/types';
 import { createAudio, type AudioSystem } from '../audio';
 import GameCanvas, { enqueue, type FrameSummary, type GameCanvasProps, type LocalSession } from '../GameCanvas';
+import type { RenderScene } from '../render/index';
 
 const fixture: Level = {
   id: 'test-flat',
@@ -33,7 +34,16 @@ const fixture: Level = {
   starts: [{ x: 420, y: 588 }, { x: 520, y: 588 }],
 };
 
-const { batches, level } = vi.hoisted(() => ({ batches: [] as PlayerCommand[][], level: { current: null as Level | null } }));
+/** What the loop hands the renderer each frame: the phase, whether the aim preview is the partner's, the motion knob. */
+type Rendered = { phase: SimPhase; remote: boolean | null; reducedMotion: boolean };
+
+const { batches, level, rendered, nextPhase } = vi.hoisted(() => ({
+  batches: [] as PlayerCommand[][],
+  level: { current: null as Level | null },
+  rendered: [] as Rendered[],
+  /** The phase the mocked stepSim moves into (null: keep the phase). */
+  nextPhase: { current: null as SimPhase | null },
+}));
 
 vi.mock('../../sim/levels/index', () => ({
   LEVELS: [],
@@ -54,12 +64,16 @@ vi.mock('../../sim/sim', async (importOriginal) => {
     ...mod,
     stepSim: (state: SimState, commands: readonly PlayerCommand[]) => {
       batches.push([...commands]);
-      return { state: { ...state, tick: state.tick + 1 }, events: [] };
+      return { state: { ...state, tick: state.tick + 1, phase: nextPhase.current ?? state.phase }, events: [] };
     },
   };
 });
 
-vi.mock('../render/index', () => ({ renderFrame: () => {} }));
+vi.mock('../render/index', () => ({
+  renderFrame: (_ctx: unknown, scene: RenderScene) => {
+    rendered.push({ phase: scene.state.phase, remote: scene.view.aimPreview?.remote ?? null, reducedMotion: scene.view.reducedMotion });
+  },
+}));
 vi.mock('../../sim/physics', () => ({ predictShot: () => ({ points: [], landing: null, outcome: 'running' }) }));
 
 type Rig = {
@@ -79,6 +93,9 @@ let clock = 0;
 beforeEach(async () => {
   level.current = fixture;
   batches.length = 0;
+  rendered.length = 0;
+  nextPhase.current = null;
+  delete document.documentElement.dataset.motion;
   rafCallbacks = [];
   clock = 1000;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -97,10 +114,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount(initialProps: Partial<GameCanvasProps> = {}): Promise<Rig> {
+const SOLO: SimConfig = { playerCount: 1, levelIds: [fixture.id], seed: 3, mode: 'solo' };
+
+async function mount(initialProps: Partial<GameCanvasProps> = {}, config: SimConfig = SOLO): Promise<Rig> {
   const { createSim } = await import('../../sim/sim');
-  const config = { playerCount: 1 as const, levelIds: [fixture.id], seed: 3, mode: 'solo' as const };
-  const session: LocalSession = { kind: 'local', config, initial: createSim(config), seats: [0] };
+  const session: LocalSession = { kind: 'local', config, initial: createSim(config), seats: config.mode === 'solo' ? [0] : [0, 1] };
   const external: React.RefObject<PlayerCommand[]> = { current: [] };
   const hud = document.createElement('div');
   const hudRef: React.RefObject<HTMLElement | null> = { current: hud };
@@ -224,6 +242,65 @@ describe('fixed-step loop', () => {
     expect(s?.turnDelayTicks).toBe(0);
     expect(s?.phase).toBe('intro');
     expect(s?.device).toBeDefined();
+  });
+
+  it('FrameSummary.waiting names the device holding each ball and every release plate, from SimState (D10.10)', async () => {
+    level.current = {
+      ...fixture,
+      id: 'test-devices',
+      rects: [
+        { kind: 'trap', id: 'snare', x: 380, y: 560, w: 80, h: 40, switchIds: ['free'], label: 'TRAP' },
+        { kind: 'cannon', id: 'cannon', x: 500, y: 600, w: 40, h: 10, switchIds: ['fire', 'free'], launch: { x: 400, y: -700 }, label: 'CANNON' },
+      ],
+      switches: [
+        { id: 'free', x: 800, w: 100, surfaceY: 600, colour: '#b57bee', label: 'FREE' },
+        { id: 'fire', x: 1000, w: 100, surfaceY: 600, colour: '#b57bee', label: 'FIRE' },
+      ],
+    };
+    const r = await mount();
+    r.frame(1000);
+    expect(r.summaries[0]?.waiting).toEqual([
+      { reason: 'caught', release: 'FREE' },
+      { reason: 'loaded', release: 'FIRE or FREE' },
+    ]);
+  });
+
+  it('leaving the game (unmount) stops the fan loop it was driving', async () => {
+    level.current = { ...fixture, id: 'test-fan', rects: [{ kind: 'fan', id: 'fan', x: 500, y: 300, w: 48, h: 300 }] };
+    const r = await mount();
+    const setFan = vi.spyOn(r.audio, 'setFan');
+    r.frame(1000);
+    expect(setFan).toHaveBeenLastCalledWith(true, 1);
+    act(() => r.root.unmount());
+    expect(setFan).toHaveBeenLastCalledWith(false, 1);
+    expect(setFan).toHaveBeenCalledTimes(2);
+  });
+
+  it('a local hand-off never draws the partner AIMING tag: the preview is local from the first aiming frame (input polls before the step)', async () => {
+    const r = await mount({}, { playerCount: 2, levelIds: [fixture.id], seed: 3, mode: 'local' });
+    nextPhase.current = 'flying';
+    r.frame(1000);
+    r.frame(1020);
+    expect(rendered[rendered.length - 1]?.phase).toBe('flying');
+    nextPhase.current = 'aiming';
+    r.frame(1040);
+    expect(rendered[rendered.length - 1]).toEqual({ phase: 'aiming', remote: false, reducedMotion: false });
+  });
+
+  it('the Settings "Reduced motion" knob reaches the canvas every frame: On, Off, and System following the OS (UX §3.10)', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('reduced-motion'), addEventListener: () => {}, removeEventListener: () => {} }));
+    const r = await mount();
+    const motion = (): boolean | undefined => rendered[rendered.length - 1]?.reducedMotion;
+    document.documentElement.dataset.motion = 'off';
+    r.frame(1000);
+    expect(motion()).toBe(false);
+    document.documentElement.dataset.motion = 'on';
+    r.frame(1016);
+    expect(motion()).toBe(true);
+    document.documentElement.dataset.motion = 'system';
+    r.frame(1032);
+    expect(motion()).toBe(true);
+    vi.unstubAllGlobals();
   });
 
   it('the stage wrapper gets --stage-scale and the hud gets --power / --angle-deg / --aim-ready', async () => {

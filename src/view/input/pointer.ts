@@ -1,24 +1,29 @@
 // OWNER: input-loop
 /**
- * Pointer adapter (ARCH.md §7; UX.md §5.2; constants DRAG_* in sim/types.ts per D1). Pointer Events
- * unify mouse, touch and pen into one drag-to-aim slingshot:
- * - a press within DRAG_GRAB_RADIUS_PX (DRAG_GRAB_RADIUS_TOUCH_PX on touch) of the active ball's
- *   screen position starts a drag when a local seat is aiming, and nowhere else (UX.md §5.2: stray
- *   taps and swipes never cost a stroke); the canvas captures the pointer so the drag survives
- *   leaving the canvas;
+ * Pointer adapter (ARCH.md §7; UX.md §5.2 as superseded by BUILD_DECISIONS D10.9; constants DRAG_* in
+ * sim/types.ts per D1). Pointer Events unify mouse, touch and pen into one drag-to-aim slingshot:
+ * - while a local seat is aiming, a press ANYWHERE on the stage starts a drag measured from the press
+ *   point, so a ball resting at a stage edge is pulled back in the open space beside it instead of
+ *   into the window edge; the canvas captures the pointer so the drag survives leaving the canvas;
  * - d = press - current (pull back, shoot forward); angle = clamp(atan2(d.y, d.x));
  *   power = MIN + |d| / fullPx * (MAX - MIN) where fullPx is DRAG_FULL_POWER_PX (120 px => 55)
  *   unless the stage edge lies closer than that along the pull: then the pull reads full power
  *   DRAG_EDGE_MARGIN_PX before the edge (never shorter than DRAG_MIN_FULL_POWER_PX), so a steep lob
  *   from a ball resting low on the stage is still reachable with the pointer inside the stage
  *   (UX.md §4.6 "downward pull room"); below DRAG_DEAD_ZONE_PX nothing is emitted (armed);
+ * - the frame reports the drag as an OFFSET from the press point and the loop anchors it at the
+ *   active ball, so the band, ring and CANCEL / AIM UPWARD stickers show the pull from the ball
+ *   wherever the press started, and dragging back over the ball is dragging back to the press point;
  * - release inside DRAG_CANCEL_RADIUS_PX of the press cancels (a tap, under 8 px / 250 ms, always
  *   ends inside that ring, so a tap never shoots); release outside => final aim + shoot in one frame;
  * - pointercancel, a second touch point, the secondary button, window blur or leaving the aiming
- *   phase cancel without a shot. EVERY cancel re-emits the aim held when the grab started, so the
- *   half-pulled values the drag passed through never stick (UX.md §5.2 "previous aim kept");
- * - a press that grabs nothing is reported as a `miss` ('miss' off the ball, 'wrongBall' on the
- *   partner's ball, 'notYourTurn' while another seat aims) so the view can answer it (UX.md §5.2).
+ *   phase cancel without a shot. A cancel re-emits the aim held when the grab started once the drag
+ *   has aimed, so the half-pulled values it passed through never stick (UX.md §5.2 "previous aim
+ *   kept"); a press that never left the dead zone leaves the aim alone, so a click while an aim key
+ *   is held never snaps the keyboard aim back;
+ * - a press that grabs nothing is reported as a `miss` so the view can answer it: 'wrongBall' on the
+ *   partner's ball (the active ball's grab radius wins where the two overlap), 'notYourTurn' while
+ *   another seat aims.
  * Events record client coordinates; the poll maps them to logical 1280x720 px with ctx.canvasRect,
  * so the geometry test always uses the frame's camera and canvas box.
  */
@@ -45,6 +50,14 @@ import type { AdapterResult, DeviceAdapter, InputContext, MissKind } from './ind
 export const DRAG_MIN_FULL_POWER_PX = 80;
 /** Logical px kept between a full-power pull and the stage edge (pointer events stop about a CSS px short of it). */
 export const DRAG_EDGE_MARGIN_PX = 6;
+/**
+ * A press within this distance of the partner's unsunk ball is refused as `wrongBall` instead of
+ * starting a drag (mouse and pen / touch), unless it is also within the active ball's grab radius,
+ * which wins. Half the grab radii: only a press ON the partner's ball is refused, so the open space
+ * beside it stays free for pulling back a ball that rests at a stage edge.
+ */
+export const WRONG_BALL_RADIUS_PX = DRAG_GRAB_RADIUS_PX / 2;
+export const WRONG_BALL_RADIUS_TOUCH_PX = DRAG_GRAB_RADIUS_TOUCH_PX / 2;
 /** PointerEvent.buttons bit of the secondary (right) mouse button / pen barrel button. */
 const SECONDARY_BUTTON_MASK = 2;
 
@@ -53,10 +66,12 @@ type Press = {
   device: InputDevice;
   downClient: Vec;
   client: Vec;
-  /** null until the first poll decides whether the press grabbed the ball. */
+  /** null until the first poll decides whether the press grabbed (starts a drag). */
   grabbed: boolean | null;
-  /** The aim held when the grab was decided; re-emitted on every cancel path. */
+  /** The aim held when the grab was decided; re-emitted on every cancel path once the drag has aimed. */
   aimAtGrab: Aim | null;
+  /** true once the live drag has left the dead zone and emitted an aim. */
+  aimed: boolean;
   released: boolean;
 };
 
@@ -75,6 +90,20 @@ function dist(a: Vec, b: Vec): number {
 function localSeatAiming(state: SimState, seats: readonly PlayerId[]): boolean {
   if (state.phase !== 'aiming') return false;
   return seats.some((seat) => canControl(state.config, seat, state.activePlayer));
+}
+
+/**
+ * Whether a press at `at` (logical px) is ON the partner's unsunk ball: within the device's wrong-ball
+ * radius of it and outside the active ball's grab radius (the active ball wins where the two overlap,
+ * e.g. a touch on tees 50 px apart).
+ */
+function onPartnerBall(at: Vec, device: InputDevice, ctx: InputContext): boolean {
+  const { state, view } = ctx;
+  const touch = device === 'touch';
+  const active = worldToScreen(view, state.balls[state.activePlayer].pos);
+  if (dist(at, active) <= (touch ? DRAG_GRAB_RADIUS_TOUCH_PX : DRAG_GRAB_RADIUS_PX)) return false;
+  const other = state.balls[state.activePlayer === 0 ? 1 : 0];
+  return !other.sunk && dist(at, worldToScreen(view, other.pos)) <= (touch ? WRONG_BALL_RADIUS_TOUCH_PX : WRONG_BALL_RADIUS_PX);
 }
 
 /** atan2 of a pull vector; pulls that would aim downward clamp to the nearer horizontal bound. */
@@ -142,7 +171,7 @@ export function createPointer(): DeviceAdapter {
 
   const cancel = (): void => {
     releaseCapture();
-    if (press?.grabbed === true) restoreAim = press.aimAtGrab;
+    if (press?.grabbed === true && press.aimed) restoreAim = press.aimAtGrab;
     press = null;
   };
 
@@ -173,6 +202,7 @@ export function createPointer(): DeviceAdapter {
       client: { x: e.clientX, y: e.clientY },
       grabbed: null,
       aimAtGrab: null,
+      aimed: false,
       released: false,
     };
   };
@@ -213,21 +243,20 @@ export function createPointer(): DeviceAdapter {
     canvas.style.cursor = value;
   };
 
-  /** Decides a fresh press: a grab within the device's radius of the active ball, else what it missed. */
+  /**
+   * Decides a fresh press (BUILD_DECISIONS D10.9): while a local seat aims, a press anywhere grabs and
+   * the drag is measured from the press point, except a press on the partner's ball; otherwise it
+   * reports what it missed.
+   */
   const decideGrab = (p: Press, ctx: InputContext): Grab => {
     const { state } = ctx;
     if (state.phase !== 'aiming') return { grabbed: false, miss: null };
     if (!localSeatAiming(state, ctx.seats)) return { grabbed: false, miss: ctx.seats.length > 0 ? 'notYourTurn' : null };
-    const down = toLogical(p.downClient, ctx.canvasRect);
-    const radius = p.device === 'touch' ? DRAG_GRAB_RADIUS_TOUCH_PX : DRAG_GRAB_RADIUS_PX;
-    const ball = worldToScreen(ctx.view, state.balls[state.activePlayer].pos);
-    if (dist(down, ball) <= radius) return { grabbed: true, miss: null };
-    const other = state.activePlayer === 0 ? 1 : 0;
-    const otherBall = state.balls[other];
-    const onOther = !otherBall.sunk && dist(down, worldToScreen(ctx.view, otherBall.pos)) <= radius;
-    return { grabbed: false, miss: onOther ? 'wrongBall' : 'miss' };
+    if (onPartnerBall(toLogical(p.downClient, ctx.canvasRect), p.device, ctx)) return { grabbed: false, miss: 'wrongBall' };
+    return { grabbed: true, miss: null };
   };
 
+  /** Mouse and pen hover: `grab` anywhere a press would start a drag, none over the partner's ball or off turn. */
   const hoverCursor = (ctx: InputContext): void => {
     if (press?.grabbed === true) {
       setCursor('grabbing');
@@ -237,11 +266,10 @@ export function createPointer(): DeviceAdapter {
       setCursor('');
       return;
     }
-    const ball = worldToScreen(ctx.view, ctx.state.balls[ctx.state.activePlayer].pos);
-    setCursor(dist(toLogical(hover, ctx.canvasRect), ball) <= DRAG_GRAB_RADIUS_PX ? 'grab' : '');
+    setCursor(onPartnerBall(toLogical(hover, ctx.canvasRect), 'pointer', ctx) ? '' : 'grab');
   };
 
-  /** The live or releasing grab: band + aim while held, final aim + shoot (or the restored aim) on release. */
+  /** The live or releasing grab: offset + aim while held, final aim + shoot (or the restored aim) on release. */
   const pollGrab = (p: Press, ctx: InputContext, result: AdapterResult): void => {
     const down = toLogical(p.downClient, ctx.canvasRect);
     const now = toLogical(p.client, ctx.canvasRect);
@@ -250,14 +278,17 @@ export function createPointer(): DeviceAdapter {
     const aim: Aim = { angle: pullAngle(pull), power: pullPower(length, fullPowerPxFor(down, now, length)) };
     if (!p.released) {
       // A pull whose raw angle points downward (y-down: atan2 > 0) is snapped by pullAngle => AIM UPWARD.
-      result.drag = { pointer: now, cancel: length < DRAG_CANCEL_RADIUS_PX, clamped: Math.atan2(pull.y, pull.x) > 0 };
-      if (length >= DRAG_DEAD_ZONE_PX) result.aim = aim;
+      result.drag = { offset: { x: now.x - down.x, y: now.y - down.y }, cancel: length < DRAG_CANCEL_RADIUS_PX, clamped: Math.atan2(pull.y, pull.x) > 0 };
+      if (length >= DRAG_DEAD_ZONE_PX) {
+        p.aimed = true;
+        result.aim = aim;
+      }
       return;
     }
     if (length >= DRAG_CANCEL_RADIUS_PX) {
       result.aim = aim;
       result.shoot = true;
-    } else if (p.aimAtGrab !== null) result.aim = p.aimAtGrab;
+    } else if (p.aimed && p.aimAtGrab !== null) result.aim = p.aimAtGrab;
     press = null;
   };
 

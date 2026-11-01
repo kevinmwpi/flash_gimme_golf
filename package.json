@@ -17,7 +17,7 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node22 --external:ws --outfile=dist-server/index.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && tsc -p tsconfig.test.json",
     "test": "vitest run --exclude \"**/levels-solver*\"",
-    "test:levels": "vitest run src/sim/__tests__/levels-solver.test.ts",
+    "test:levels": "vitest run src/sim/__tests__/levels-solver-w",
     "solve": "tsx scripts/solver.ts",
     "lint": "eslint . --max-warnings 0",
     "start": "node dist-server/index.mjs",

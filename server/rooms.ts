@@ -373,7 +373,7 @@ export class RoomManager {
         this.onCommand(conn, msg.cmd, now);
         return;
       case 'playAgain':
-        this.onPlayAgain(conn, now);
+        this.onPlayAgain(conn, msg.levelId, now);
         return;
       case 'ping':
         this.send(conn.socket, { type: 'pong', t: msg.t, serverTime: now, tick: conn.room?.sim?.tick ?? 0 });
@@ -624,7 +624,8 @@ export class RoomManager {
     this.startGame(room, { playerCount: 2, mode: 'online', seed: randomInt(UINT32_RANGE), levelIds: ids }, now);
   }
 
-  private onPlayAgain(conn: Conn, now: number): void {
+  /** The same campaign again, or (with `levelId`, e.g. the next world's first hole) `campaignFrom(levelId)`. */
+  private onPlayAgain(conn: Conn, levelId: string | undefined, now: number): void {
     const room = this.requireRoom(conn);
     if (room === null) return;
     if (conn.slot !== 0) {
@@ -640,7 +641,12 @@ export class RoomManager {
       this.sendError(conn.socket, 'PEER_MISSING');
       return;
     }
-    this.startGame(room, { ...room.config, seed: randomInt(UINT32_RANGE) }, now);
+    if (levelId !== undefined && !hasLevel(levelId)) {
+      this.badMessage(conn, now);
+      return;
+    }
+    const levelIds = levelId === undefined ? room.config.levelIds : campaignFrom(levelId);
+    this.startGame(room, { ...room.config, levelIds, seed: randomInt(UINT32_RANGE) }, now);
   }
 
   private startGame(room: Room, config: SimConfig, now: number): void {
@@ -751,7 +757,11 @@ export class RoomManager {
     const r = stepSim(before, cmds);
     room.sim = r.state;
     const events = r.events.filter((e) => e.type !== 'commandRejected');
-    for (const e of events) room.events.push(e);
+    for (const e of events) {
+      room.events.push(e);
+      // The flight watchdog is a safety net no shipped hole should reach (D10.6): leave a trace when it fires.
+      if (e.type === 'flightTimeout') this.log(`room ${room.code} flightTimeout: ${r.state.levelId} tick ${e.tick} player ${e.playerId}`);
+    }
     room.dirty = room.dirty || events.length > 0 || simChanged(before, r.state);
     room.immediate = room.immediate || events.some(isImmediateEvent);
     room.ticksSinceSnapshot += 1;

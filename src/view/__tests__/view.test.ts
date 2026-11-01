@@ -5,7 +5,7 @@ import type { BallState, Level, SimEvent, SimState } from '../../sim/types';
 import { BALL_RADIUS, DEFAULT_AIM, HOLE_RADIUS, REST_TICKS, TURN_DELAY_TICKS, VIEWPORT_H, VIEWPORT_W } from '../../sim/types';
 import { drawAim } from '../render/aim';
 import { drawSwitch, rectLetter, switchGeometry } from '../render/mechanics';
-import { drawTerrain } from '../render/world';
+import { drawSky, drawTerrain } from '../render/world';
 import { renderFrame, type RenderScene } from '../render/index';
 import { applySimEvents, cameraFor, createViewState, updateView, type ViewState } from '../view';
 
@@ -76,6 +76,7 @@ function stateFor(level: Level, overrides: Partial<SimState> = {}): SimState {
     turnDelayTicks: 0,
     rng: 1,
     campaign: [],
+    flightTicks: 0,
     ...overrides,
   };
 }
@@ -270,6 +271,17 @@ describe('view state: callouts, golfers, anims', () => {
     expect(popView.golfers[1].move).toBe('pop');
   });
 
+  it('the active golfer never stands on thin air: on a bridge that is out, else it addresses a ball at a chasm lip from the far side', () => {
+    // red rests 20 px past the 700-900 chasm, aiming right: 42 px back is over the chasm
+    const lip = withBall(stateFor(mechanicsLevel), 0, ball(920, 588));
+    const bridged = createViewState(mechanicsLevel, { ...lip, switches: { a: true, deck: false } });
+    expect(bridged.golfers[0].pos.x).toBe(920 - 42);
+    expect(bridged.golfers[0].facing).toBe(1);
+    const open = createViewState(mechanicsLevel, lip);
+    expect(open.golfers[0].pos).toEqual({ x: 920 + 42, y: 588 + BALL_RADIUS });
+    expect(open.golfers[0].facing).toBe(-1);
+  });
+
   it('switch / bridge anims tween toward the sim state and ballHit starts the swing + shake', () => {
     const state = stateFor(mechanicsLevel);
     const view = createViewState(mechanicsLevel, state);
@@ -322,6 +334,67 @@ describe('view state: callouts, golfers, anims', () => {
     expect(view.renderBalls[0].snapNextFrame).toBe(true);
     applySimEvents(view, [ev('playStart', { levelId: mechanicsLevel.id }, 1)], { ...state, phase: 'aiming' });
     expect(view.cameraMode).toBe('follow');
+  });
+});
+
+describe('reduced motion (UX §3.10)', () => {
+  /** A hit, a hard bounce, a fall, a sink and a cannon BOOM: puffs, sparks, confetti, smoke and shakes. */
+  const juicy = (): SimEvent[] => [
+    ev('ballHit', { playerId: 0, pos: { x: 100, y: 608 }, angle: -0.8, power: 90, speed: 900 }),
+    ev('bounce', { playerId: 0, pos: { x: 300, y: 600 }, normal: { x: 0, y: -1 }, strength: 1, surface: 'grass' }),
+    ev('fellOffWorld', { playerId: 1, pos: { x: 800, y: 760 }, respawnPos: { x: 150, y: 608 }, strokes: 2 }),
+    ev('sink', { playerId: 0, pos: { x: 2300, y: 600 }, strokes: 3, speed: 90 }),
+  ];
+
+  it('On: no particles and no shake from any event, the camera cuts to its target, callouts still say their words', () => {
+    const state = stateFor(mechanicsLevel);
+    const calm = createViewState(mechanicsLevel, state);
+    calm.reducedMotion = true;
+    applySimEvents(calm, juicy(), state);
+    expect(calm.particles).toHaveLength(0);
+    expect(calm.shake.t).toBe(0);
+    expect(calm.callouts.length).toBeGreaterThan(0);
+    calm.camera = { x: 0, y: 0, zoom: 1 };
+    const far = withBall(state, 0, ball(1800, GROUND_Y - BALL_RADIUS));
+    updateView(calm, far, far, 1, 1 / 60);
+    expect(calm.camera).toEqual(calm.cameraTarget);
+    const loud = createViewState(mechanicsLevel, state);
+    loud.reducedMotion = false;
+    applySimEvents(loud, juicy(), state);
+    expect(loud.particles.length).toBeGreaterThan(0);
+    expect(loud.shake.t).toBeGreaterThan(0);
+    loud.camera = { x: 0, y: 0, zoom: 1 };
+    updateView(loud, far, far, 1, 1 / 60);
+    expect(loud.camera.x).toBeLessThan(loud.cameraTarget.x);
+  });
+
+  it('On: the clouds stand still', () => {
+    const cloudArcs = (view: ViewState): number[][] => {
+      const arcs: number[][] = [];
+      const ctx = new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === 'arc') return (...args: number[]) => void arcs.push(args);
+            if (prop === 'createLinearGradient') return () => ({ addColorStop: () => undefined });
+            return () => undefined;
+          },
+          set: () => true,
+        },
+      ) as CanvasRenderingContext2D;
+      drawSky(ctx, view);
+      return arcs;
+    };
+    const view = createViewState(mechanicsLevel, stateFor(mechanicsLevel));
+    for (const reduced of [true, false]) {
+      view.reducedMotion = reduced;
+      view.timeSec = 0;
+      const before = cloudArcs(view);
+      view.timeSec = 30;
+      expect(cloudArcs(view)).toHaveLength(before.length);
+      if (reduced) expect(cloudArcs(view)).toEqual(before);
+      else expect(cloudArcs(view)).not.toEqual(before);
+    }
   });
 });
 

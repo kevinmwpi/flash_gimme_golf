@@ -53,6 +53,7 @@ function stateWith(turnDelayTicks: number): SimState {
     turnDelayTicks,
     rng: 0,
     campaign: [],
+    flightTicks: 0,
   };
 }
 

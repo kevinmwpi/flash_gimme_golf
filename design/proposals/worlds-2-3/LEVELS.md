@@ -1,8 +1,6 @@
 # Worlds 2 & 3: level design proposal (levels 5-12)
 
-> Status: DESIGN ONLY, approved by the owner on 2026-10-08 (see "Decisions for you"). Not for implementation until the Phase 2 exit condition in CLAUDE.md §5 clears. Supersedes nothing; World 1 stays as built.
->
-> If Phase 2 forces a tutorial, co-op-clarity or turn-flow iteration, re-review this document before any World 2/3 work starts: the trap and the cannon both change turn flow (see "Decisions for you", item 2).
+> Status: BUILT (November 2026). Approved by the owner on 2026-10-08; on 2026-10-31 the owner confirmed the Phase 2 exit condition cleared with testing finished and no turn-flow complaints, so decision 2 (skipped turns) was built as recommended. The build's binding reconciliation is design/FINAL/BUILD_DECISIONS.md D10; the shipped holes and every deviation from this document (Sky Bridge's back bunker, cup and plate B; Bait's BAIT plate widened to 490-610 and Crossfire's pit side run on to the chasm lip, each to close a softlock; pars calibrated to 7 / 6 / 8 / 8 / 8 / 7 / 8 / 7) are in src/sim/levels/README.md. This document is kept as the design record; the code and that README win where they differ.
 >
 > Diagrams: [`svg/overview.png`](svg/overview.png) shows all eight holes; `svg/level-N.png|svg` show one each. They are drawn from Appendix A. Every dotted launcher arc is a real `stepBall` flight with the device lit.
 

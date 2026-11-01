@@ -1,12 +1,14 @@
 // OWNER: ui
 /**
  * Every UI string (UX.md §9 copy sheet, VISUAL.md §16 button labels, BUILD_DECISIONS D2/D3 chip and
- * team-delta words). Nothing competitive anywhere: `__tests__/copy.test.ts` greps this file and every
- * `.tsx` under src/ui for the banned words. World callouts (GIMME!, IN THE HOLE! ...) are canvas text
- * owned by VIEW and do not live here.
+ * team-delta words, D10.10 waiting cues). Nothing competitive anywhere: `__tests__/copy.test.ts` greps
+ * this file and every `.tsx` under src/ui for the banned words. World callouts (GIMME!, IN THE HOLE!,
+ * SNAP!, BOOM! ...) are canvas text owned by VIEW and do not live here; world titles come from the
+ * level registry (`worldTitle`), like level names.
  */
 import type { ErrorCode } from '../net/protocol';
-import type { Level, MechanicKind, Medal, PlayerId, SimMode, SimPhase } from '../sim/types';
+import type { WaitReason } from '../sim/devices';
+import type { Level, MechanicKind, Medal, PlayerId, SimMode, SimPhase, WorldId } from '../sim/types';
 import { PLAYER_NAMES } from '../sim/types';
 import type { InputDevice } from '../view/view';
 
@@ -15,6 +17,8 @@ export const upperNameOf = (p: PlayerId): string => PLAYER_NAMES[p].toUpperCase(
 export const otherPlayer = (p: PlayerId): PlayerId => (p === 0 ? 1 : 0);
 /** "plate A" for a one-letter label, the switchLabel fallback as is, otherwise "the DOOR plate". */
 const platePhrase = (label: string): string => (label.length === 1 ? `plate ${label}` : label.startsWith('SWITCH ') ? label : `the ${label} plate`);
+/** The skip line's word for why a ball waits (D10.10): "Red is caught" / "Red is loaded". */
+const WAIT_WORDS: Readonly<Record<WaitReason, string>> = Object.freeze({ caught: 'caught', loaded: 'loaded' });
 
 export const COPY = Object.freeze({
   app: Object.freeze({
@@ -33,8 +37,9 @@ export const COPY = Object.freeze({
     online: 'ONLINE',
     onlineSub: 'ROOM CODE OR INVITE LINK',
     onlineUnavailable: "Online isn't configured on this build.",
-    world: 'WORLD 1',
-    worldSub: (holes: number) => `TEACH · ${holes} HOLES`,
+    /** The tray's world picker (D10.2): the shown world's button reads its registry title, the others this. */
+    worldPick: 'World',
+    worldTab: (world: WorldId) => `WORLD ${world}`,
     medalLegend: 'GOLD: UNDER PAR · SILVER: PAR · BRONZE: PAR +2 OR BETTER',
     medalTooltip: 'Gold: under par · Silver: par · Bronze: par +2 or better',
     par: (par: number) => `PAR ${par}`,
@@ -80,9 +85,13 @@ export const COPY = Object.freeze({
     longPress: 'Long-press to copy',
     shareText: (code: string) => `Play a round of co-op golf with me — room ${code}`,
     waitingPartner: 'Waiting for your partner to open the link…',
+    /** START AT is a world pick, then a hole of that world (D10.2): the chosen world reads its registry title, the others this. */
+    world: 'World',
+    worldTab: (world: WorldId) => `World ${world}`,
     startAt: 'START AT',
     hole: (n: number) => `Hole ${n}`,
-    startingAt: (n: number) => `Starting at Hole ${n}`,
+    /** Guest card: the registry's world title and the global hole number, e.g. "World 2 — Lift & Lock · starting at Hole 5". */
+    startingAt: (worldTitle: string, n: number) => `${worldTitle} · starting at Hole ${n}`,
     start: 'Start game',
     startNeeds2: 'Needs 2 players',
     startReady: (p: PlayerId) => `Start game — ${nameOf(p)} is here!`,
@@ -95,7 +104,7 @@ export const COPY = Object.freeze({
     partnerJoined: (p: PlayerId) => `${nameOf(p)} joined! Press Start when you're both ready.`,
     partnerLeft: (p: PlayerId) => `${nameOf(p)} left. Waiting for a partner…`,
     waitingHost: (p: PlayerId) => `Waiting for ${nameOf(p)} to start the game…`,
-    preteach: (p: PlayerId) => `While you wait: you play the ${nameOf(p).toLowerCase()} ball. Pull back from it to shoot.`,
+    preteach: (p: PlayerId) => `While you wait: you play the ${nameOf(p).toLowerCase()} ball. On your turn, pull back anywhere to shoot it.`,
     leave: 'Leave room',
     back: 'Back',
     retry: 'Retry',
@@ -155,21 +164,25 @@ export const COPY = Object.freeze({
       holds: (label: string) => `HOLDS ${label}`,
       /** Sunk ball that keeps a cup-wired switch pressed (D2); short enough for the 160 px chip. */
       holdsFromCup: (label: string) => `CUP HOLDS ${label}`,
+      /** D10.10: a ball resting in an armed trap, naming every release plate ('FREE or FAR'). */
+      caught: (labels: string) => `CAUGHT · needs ${labels}`,
+      /** D10.10: a ball resting on a cold cannon's breech, naming every FIRE plate ('A, B or DECK'). */
+      loaded: (labels: string) => `LOADED · needs ${labels}`,
     }),
   }),
   hint: Object.freeze({
+    /** D10.9: a press anywhere on the playfield starts the drag; letting go back where it started cancels. */
     aim: Object.freeze<Record<InputDevice, string>>({
-      touch: 'Pull back, let go to shoot',
-      pointer: 'Drag back from your ball, release to shoot · drag onto the ball to cancel',
+      touch: 'Pull back anywhere, let go to shoot',
+      pointer: 'Drag back anywhere, release to shoot · drag back to the start to cancel',
       keyboard: '← → aim · ↑ ↓ power · Space shoot',
       gamepad: 'LS aim · RT power · Ⓐ shoot',
     }),
     partnerAiming: (p: PlayerId) => `${nameOf(p)} is lining up a shot…`,
     flying: (p: PlayerId) => `${nameOf(p)}'s shot…`,
     handoff: (p: PlayerId) => `${nameOf(p)} walks up…`,
-    /** UX.md §5.2 miss feedback: a press that grabbed nothing. */
-    miss: 'Drag back from YOUR ball',
-    wrongBall: (active: PlayerId) => `That's the ${nameOf(active === 0 ? 1 : 0).toLowerCase()} ball — ${nameOf(active).toLowerCase()} is up`,
+    /** UX.md §5.2 miss feedback, as D10.9 left it: only a press ON the partner's ball is refused. */
+    wrongBall: (active: PlayerId) => `That's the ${nameOf(active === 0 ? 1 : 0).toLowerCase()} ball — ${nameOf(active).toLowerCase()} is up · drag from anywhere else`,
     notYourTurn: (active: PlayerId, mine: PlayerId) => `${nameOf(active)}'s turn — your ball is the ${nameOf(mine).toLowerCase()} one`,
   }),
   banner: Object.freeze({
@@ -177,14 +190,18 @@ export const COPY = Object.freeze({
     turn: (p: PlayerId) => `${upperNameOf(p)}'S TURN`,
     turnLocal: (p: PlayerId) => `${upperNameOf(p)}'S TURN · P${p + 1}`,
     partnerSub: 'your partner',
+    /** D10.10 sub-line of a turn the WAITING rule handed over: "Red is caught — Blue shoots again". */
+    skipped: (waiting: PlayerId, reason: WaitReason, shooter: PlayerId) => `${nameOf(waiting)} is ${WAIT_WORDS[reason]} — ${nameOf(shooter)} shoots again`,
+    /** The same line for the waiting ball's own seat online. */
+    skippedYou: (reason: WaitReason, shooter: PlayerId) => `Your ball is ${WAIT_WORDS[reason]} — ${nameOf(shooter)} shoots again`,
     holeComplete: 'HOLE COMPLETE!',
     restarted: 'HOLE RESTARTED',
     oob: 'OUT OF BOUNDS · +1 STROKE',
   }),
   coach: Object.freeze({
     step1: Object.freeze<Record<InputDevice, string>>({
-      touch: 'Pull back from the ball…',
-      pointer: 'Drag back from the ball…',
+      touch: 'Pull back from anywhere…',
+      pointer: 'Drag back from anywhere…',
       keyboard: '← → to aim, ↑ ↓ for power…',
       gamepad: 'Left stick to aim, RT for power…',
     }),
@@ -278,7 +295,7 @@ export const COPY = Object.freeze({
     autoNext: (s: number) => `Next hole in ${s}`,
   }),
   campaign: Object.freeze({
-    title: 'WORLD 1 COMPLETE',
+    title: (world: WorldId) => `WORLD ${world} COMPLETE`,
     team: (total: number, par: number) => `TEAM ${total} · COURSE PAR ${par}`,
     under: (k: number) => `${k} UNDER COURSE PAR`,
     even: 'EVEN WITH COURSE PAR',
@@ -288,6 +305,8 @@ export const COPY = Object.freeze({
     perfect: 'PERFECT ROUND',
     summary: (g: number, s: number, b: number) => `${g} gold · ${s} silver · ${b} bronze`,
     players: (r: number, b: number) => `${nameOf(0)} ${r} · ${nameOf(1)} ${b}`,
+    /** D10.2: a finished world offers the next one (online: the host presses it). */
+    nextWorld: (world: WorldId) => `Continue to World ${world}`,
     playAgain: 'Play again',
     levelSelect: 'Level select',
     title2: 'Title',
@@ -351,6 +370,8 @@ export const MECHANIC_COPY: Readonly<Record<MechanicKind, { name: string; blurb:
   switch: { name: 'PRESSURE SWITCH', blurb: 'A resting ball holds it down. Leave, and it releases.' },
   bridge: { name: 'BRIDGE', blurb: 'Exists only while its switch is held.' },
   blocker: { name: 'GATE', blurb: 'Vanishes while its switch is held.' },
+  trap: { name: 'TRAP', blurb: 'Stop in its jaws and you wait for your partner.' },
+  cannon: { name: 'CANNON', blurb: 'Rest inside it; a ball on FIRE shoots you across.' },
 });
 
 /** Turn banner (UX.md §4.4): online me => YOUR TURN; local => RED'S TURN · P1; solo/partner => RED'S TURN. */
@@ -358,6 +379,26 @@ export function turnBanner(playerId: PlayerId, isYou: boolean, mode: SimMode = '
   if (mode === 'online' && isYou) return COPY.banner.yourTurn;
   if (mode === 'local') return COPY.banner.turnLocal(playerId);
   return COPY.banner.turn(playerId);
+}
+
+/** A ball the WAITING rule passed over at a hand-off (the `turnSkipped` just before its `turnStart`). */
+export type TurnSkip = { readonly playerId: PlayerId; readonly reason: WaitReason };
+
+/** What one turn banner shows and says: the 28 px main line, the 15 px line under it, the live-region text. */
+export type TurnBannerLines = { readonly text: string; readonly sub: string | null; readonly say: string };
+
+/**
+ * The banner of a `turnStart` (UX.md §4.4, BUILD_DECISIONS D10.10). A skipped turn keeps the short main line,
+ * which fits the 500 px ribbon, and puts "Red is caught — Blue shoots again" under it in place of "your
+ * partner"; online, the waiting ball's own seat reads "Your ball is caught — …". The live region reads the
+ * main line and then the whole sentence.
+ */
+export function turnBannerLines(shooter: PlayerId, skip: TurnSkip | null, seats: readonly PlayerId[], mode: SimMode): TurnBannerLines {
+  const mine = seats.includes(shooter);
+  const text = turnBanner(shooter, mine, mode);
+  if (skip === null) return { text, sub: mode === 'online' && !mine ? COPY.banner.partnerSub : null, say: text };
+  const line = mode === 'online' && seats.includes(skip.playerId) ? COPY.banner.skippedYou(skip.reason, shooter) : COPY.banner.skipped(skip.playerId, skip.reason, shooter);
+  return { text, sub: line, say: `${text}. ${line}` };
 }
 
 /** Mid-hole team delta (BUILD_DECISIONS D3 VISUAL 1-5): `N TO SPARE` / `AT PAR` / `N OVER`. */
@@ -413,12 +454,23 @@ export type ChipStatusInput = {
   holdsLabel: string | null;
   /** The level wires the cup to a switch, so a sunk ball holds it. */
   cupHoldsLabel: string | null;
+  /** The device this resting ball waits in and the labels of its release plates (FrameSummary.waiting, D10.10). */
+  waiting: { readonly reason: WaitReason; readonly release: string } | null;
 };
 
-/** Player chip status line (D2): HOLDS <label> FROM THE CUP / IN THE CUP / AIMING / HOLDS <label> / WAITING. */
+/**
+ * Player chip status line (D2, D10.10): CUP HOLDS <label> / IN THE CUP / CAUGHT · needs <labels> /
+ * LOADED · needs <labels> / AIMING / HOLDS <label> / WAITING. A caught ball on a seat plate (BAIT, DOOR)
+ * still holds that plate but reads CAUGHT: the chip names what the partner has to do. The release text comes
+ * from devices.releaseLabel already in the plates' (upper-case) labels joined with a lower-case 'or'.
+ */
 export function chipStatus(input: ChipStatusInput): string {
   const s = COPY.hud.status;
   if (input.sunk) return input.cupHoldsLabel === null ? s.inCup : s.holdsFromCup(input.cupHoldsLabel);
+  if (input.waiting !== null) {
+    const labels = input.waiting.release;
+    return input.waiting.reason === 'caught' ? s.caught(labels) : s.loaded(labels);
+  }
   if (input.active && (input.phase === 'aiming' || input.phase === 'flying')) return s.aiming;
   if (input.holdsLabel !== null) return s.holds(input.holdsLabel);
   return s.waiting;

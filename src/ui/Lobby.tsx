@@ -3,20 +3,24 @@
  * Online lobby (UX.md §3.2; lobby-layout.html): viewport-space card, scrollable, max-width 640. Sub-
  * states are DERIVED from `ClientStatus` (menu / connecting / hosting / ready / joined / error), never
  * from events. Create / join / invite link / Share…, `?room=` auto-join exactly once, start-hole picker
- * via `client.setLevel` (the guest sees it live from `lobbyState`), Start disabled until the partner
- * is here, "Waking up the server" after 1.5 s, 15 s hard timeout, error table by ErrorCode with raw
- * server text never shown. Also exports `NetOverlay` (UX.md §3.9) for the in-game disconnect states.
+ * via `client.setLevel` (the guest sees it live from `lobbyState`): under START AT a world row, then that
+ * world's four holes by their global numbers (BUILD_DECISIONS D10.1/D10.2; the server runs the campaign
+ * to the end of that world). Start disabled until the partner is here, "Waking up the server"
+ * after 1.5 s, 15 s hard timeout, error table by ErrorCode with raw server text never shown. Also
+ * exports `NetOverlay` (UX.md §3.9) for the in-game disconnect states.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClientStatus, GameClient } from '../net/GameClient';
 import type { LobbyState } from '../net/protocol';
 import { ROOM_CODE_LENGTH } from '../net/protocol';
-import { LEVELS, WORLD1_IDS } from '../sim/levels/index';
-import type { PlayerId } from '../sim/types';
+import { WORLDS, hasLevel, levelById, levelsOfWorld, worldTitle } from '../sim/levels/index';
+import type { PlayerId, WorldId } from '../sim/types';
 import { COPY, lobbyError, nameOf, otherPlayer, type LobbyErrorCopy, type LobbyErrorKind } from './copy';
 import { Icon } from './Hud';
 import { ConfirmDialog } from './Pause';
+import { stepRadio } from './radioGroup';
 import { inviteUrlFor, normaliseRoomCode } from './url';
+import { firstHoleOf, worldOfHole } from './worlds';
 
 export type LobbyProps = {
   client: GameClient;
@@ -151,6 +155,22 @@ function HostCard({ code, lobby, ready, onSetLevel, onStart, onCancel }: { code:
     if (ready) document.querySelector<HTMLButtonElement>('.start-btn')?.focus();
   }, [ready]);
   const statusText = ready ? COPY.lobby.partnerJoined(1) : seenReady ? COPY.lobby.partnerLeft(1) : COPY.lobby.waitingPartner;
+  /**
+   * The picker shows the server's choice (lobbyState); a world pick starts at that world's first hole (a click on
+   * the shown world keeps its hole). Both rows are radio groups with one tab stop each (the chosen radio, else the
+   * world's first hole) whose arrow keys always send the radio they land on: before the echo of an earlier
+   * press, the shown choice is stale.
+   */
+  const world = worldOfHole(lobby.levelId);
+  const holes = levelsOfWorld(world);
+  const tabHole = holes.some((l) => l.id === lobby.levelId) ? lobby.levelId : holes[0]?.id;
+  const startWorld = (w: WorldId | undefined): void => {
+    const first = w === undefined ? null : firstHoleOf(w);
+    if (first !== null) onSetLevel(first);
+  };
+  const pickWorld = (w: WorldId): void => {
+    if (w !== world) startWorld(w);
+  };
 
   return (
     <section className="lobby-card" aria-label={COPY.lobby.yourRoom}>
@@ -184,13 +204,54 @@ function HostCard({ code, lobby, ready, onSetLevel, onStart, onCancel }: { code:
         <PlayerChip player={0} tag={COPY.lobby.chipYou} />
         {ready && <PlayerChip player={1} tag={COPY.lobby.chipPartner} />}
       </div>
-      <span className="lab">{COPY.lobby.startAt}</span>
-      <div className="holes" role="radiogroup" aria-label={COPY.lobby.startAt}>
-        {LEVELS.map((level) => (
-          <button key={level.id} type="button" role="radio" aria-checked={lobby.levelId === level.id} className={`hole${lobby.levelId === level.id ? ' on' : ''}`} onClick={() => onSetLevel(level.id)}>
-            {COPY.lobby.hole(level.order)}
-          </button>
-        ))}
+      <div className="start-at">
+        <span className="lab">{COPY.lobby.startAt}</span>
+        <div
+          className="holes worlds"
+          role="radiogroup"
+          aria-label={COPY.lobby.world}
+          onKeyDown={(e) => stepRadio(e, (i) => startWorld(WORLDS[i]))}
+        >
+          {WORLDS.map((w) => (
+            <button
+              key={w}
+              type="button"
+              role="radio"
+              aria-checked={w === world}
+              aria-label={worldTitle(w)}
+              tabIndex={w === world ? 0 : -1}
+              className={`hole${w === world ? ' on' : ''}`}
+              onClick={() => pickWorld(w)}
+            >
+              {w === world ? worldTitle(w) : COPY.lobby.worldTab(w)}
+            </button>
+          ))}
+        </div>
+        <div
+          className="holes"
+          role="radiogroup"
+          aria-label={COPY.lobby.startAt}
+          onKeyDown={(e) =>
+            stepRadio(e, (i) => {
+              const level = holes[i];
+              if (level !== undefined) onSetLevel(level.id);
+            })
+          }
+        >
+          {holes.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              role="radio"
+              aria-checked={lobby.levelId === level.id}
+              tabIndex={level.id === tabHole ? 0 : -1}
+              className={`hole${lobby.levelId === level.id ? ' on' : ''}`}
+              onClick={() => onSetLevel(level.id)}
+            >
+              {COPY.lobby.hole(level.order)}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="start-row">
         <div className="stack-tight">
@@ -208,7 +269,8 @@ function HostCard({ code, lobby, ready, onSetLevel, onStart, onCancel }: { code:
 }
 
 function GuestCard({ code, lobby, onLeave }: { code: string; lobby: LobbyState; onLeave(): void }): React.JSX.Element {
-  const startIndex = Math.max(0, WORLD1_IDS.indexOf(lobby.levelId));
+  /** levelById throws on an id this build does not know (a server from another deploy): no line then. */
+  const start = hasLevel(lobby.levelId) ? levelById(lobby.levelId) : null;
   return (
     <section className="lobby-card" aria-label={COPY.lobby.joinedTitle(code)}>
       <h1 className="card-title">{COPY.lobby.joinedTitle(code)}</h1>
@@ -221,7 +283,7 @@ function GuestCard({ code, lobby, onLeave }: { code: string; lobby: LobbyState; 
         {COPY.lobby.waitingHost(0)}
       </p>
       <p className="body">{COPY.lobby.preteach(1)}</p>
-      <p className="caption">{COPY.lobby.startingAt(startIndex + 1)}</p>
+      {start !== null && <p className="caption">{COPY.lobby.startingAt(worldTitle(start.world), start.order)}</p>}
       <button type="button" className="btn btn-ghost" onClick={onLeave} data-sfx="back">
         {COPY.lobby.leave}
       </button>

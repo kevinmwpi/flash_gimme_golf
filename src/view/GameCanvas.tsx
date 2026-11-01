@@ -4,26 +4,28 @@
  * DPR changes, ResizeObserver on the wrapper), the fixed-step loop with a PERSISTENT pending command
  * queue (drained by the first step of a frame, accumulating while paused, setAim coalesced in place),
  * the online substitution (GameClient.interpolated / drainEvents / renderTime, snap on
- * discontinuities, local echo of the aim), ONE input poll per frame, the ViewState, the aim preview
- * (real predictShot, memoised) and the renderFrame call. React never re-renders per frame: HUD data
+ * discontinuities, local echo of the aim), ONE input poll per frame, the ViewState (with the Settings
+ * reduced-motion knob refreshed every frame), the aim preview (real predictShot, memoised) and the
+ * renderFrame call. React never re-renders per frame: HUD data
  * arrives through `onFrame` (10 Hz, plus every phase change) and `onEvents`; the power meter is
  * written as CSS custom properties on `hudRef` every frame.
  */
 import React, { useEffect, useRef } from 'react';
 import type { GameClient } from '../net/GameClient';
+import { releaseLabel, waitingOf, type WaitReason } from '../sim/devices';
 import { predictShot, switchPresser } from '../sim/physics';
 import { createSim, isShotReady, levelOf, stepSim } from '../sim/sim';
 import { isRectActive, switchMaskOf } from '../sim/terrain';
 import type { Aim, Level, PlayerCommand, PlayerId, SimConfig, SimEvent, SimPhase, SimState, StepResult, Vec } from '../sim/types';
 import { DT, MAX_POWER, MIN_POWER, VIEWPORT_H, VIEWPORT_W } from '../sim/types';
 import type { AudioSystem } from './audio';
-import { createInputSystem, type InputSystem, type MissKind, type PointerDrag, type UiAction } from './input/index';
+import { controllingSeat, createInputSystem, type InputSystem, type MissKind, type PointerDrag, type UiAction } from './input/index';
 import { renderFrame } from './render/index';
 import {
   applySimEvents,
+  createMotionPreference,
   createViewState,
   pulseMissRings,
-  screenToWorld,
   setCameraMode,
   updateView,
   worldToScreen,
@@ -36,6 +38,9 @@ import {
 
 export type LocalSession = { kind: 'local'; config: SimConfig; initial: StepResult; seats: readonly PlayerId[] };
 export type OnlineSessionView = { kind: 'online'; client: GameClient; config: SimConfig; seat: PlayerId };
+
+/** A ball waiting in a device (BUILD_DECISIONS D10.10): the HUD chip `CAUGHT · needs <release>` / `LOADED · needs <release>`. */
+export type WaitingChip = { readonly reason: WaitReason; readonly release: string };
 
 export type FrameSummary = {
   phase: SimPhase;
@@ -54,6 +59,11 @@ export type FrameSummary = {
   turnDelayTicks: number;
   /** switchId -> slot whose resting ball presses it, from SimState (VISUAL.md §11), so a resumed or re-synced game is right at once. */
   holds: Record<string, PlayerId>;
+  /**
+   * Per slot: the device its resting ball waits in and the plate that releases it (D10.10), derived from
+   * SimState every summary, never from events (online drops old events; a resumed game must be right at once).
+   */
+  waiting: [WaitingChip | null, WaitingChip | null];
   /** A fresh miss press (UX.md §5.2), for MISS_HINT_MS or until a real drag starts; drives the hint pill. */
   miss: MissKind | null;
 };
@@ -129,10 +139,15 @@ function writeHudVars(hud: HTMLElement | null, aim: Aim, ready: boolean, ball: V
   hud.style.setProperty('--dragging', dragging ? '1' : '0');
 }
 
-/** The live slingshot drag for the renderer: logical screen px -> world space under the frame's camera. */
-function dragVisual(view: ViewState, drag: PointerDrag | null): DragVisual | null {
+/**
+ * The live slingshot drag for the renderer (BUILD_DECISIONS D10.9): the pull offset (logical px) anchored
+ * at the drawn active ball (world), divided by the zoom so the band on screen is exactly the pull, at
+ * any camera and wherever the press started.
+ */
+export function dragVisual(view: ViewState, drag: PointerDrag | null, ball: Vec): DragVisual | null {
   if (drag === null) return null;
-  return { pointer: screenToWorld(view, drag.pointer), cancel: drag.cancel, clamped: drag.clamped };
+  const zoom = view.camera.zoom;
+  return { pointer: { x: ball.x + drag.offset.x / zoom, y: ball.y + drag.offset.y / zoom }, cancel: drag.cancel, clamped: drag.clamped };
 }
 
 function seatsOf(session: LocalSession | OnlineSessionView): readonly PlayerId[] {
@@ -148,6 +163,14 @@ function holdsOf(level: Level, sim: SimState): Record<string, PlayerId> {
     if (presser !== null) holds[sw.id] = presser;
   }
   return holds;
+}
+
+/** The chip for a slot whose ball waits in a trap or a cold cannon: the reason plus the label of the device's first release plate. */
+export function waitingChipOf(level: Level, sim: SimState, slot: PlayerId): WaitingChip | null {
+  const waiting = waitingOf(level, sim.switches, sim.balls[slot]);
+  if (waiting === null) return null;
+  const rect = level.rects.find((r) => r.id === waiting.rectId);
+  return { reason: waiting.reason, release: rect === undefined ? '' : releaseLabel(level, rect) };
 }
 
 type SummaryFlags = { paused: boolean; miss: MissKind | null };
@@ -168,6 +191,7 @@ function summarise(sim: SimState, level: Level, view: ViewState, device: InputDe
     sunk: [sim.balls[0].sunk, sim.balls[1].sunk],
     turnDelayTicks: sim.turnDelayTicks,
     holds: holdsOf(level, sim),
+    waiting: [waitingChipOf(level, sim, 0), waitingChipOf(level, sim, 1)],
     miss: flags.miss,
   };
 }
@@ -217,15 +241,19 @@ function fanActive(level: Level, sim: SimState): boolean {
   return false;
 }
 
-/** Memoised `predictShot` for the active slot (ARCH §2.1): local aim when a local seat owns it, else the sim's. */
-function createAimPreviewer(): (sim: SimState, level: Level, localAim: Aim | null) => AimPreview | null {
+/**
+ * Memoised `predictShot` for the active slot (ARCH §2.1): local aim when a local seat owns it, else the sim's.
+ * `remote` (the partner's live aim online: faded, with its AIMING tag) comes from the seats, never from a
+ * missing local aim: input polls before the step, so on the frame a turn starts the local aim is not seeded
+ * yet, and a local game would flash `RED AIMING` at every hand-off.
+ */
+function createAimPreviewer(): (sim: SimState, level: Level, localAim: Aim | null, remote: boolean) => AimPreview | null {
   let key = '';
   let cached: AimPreview | null = null;
-  return (sim, level, localAim) => {
+  return (sim, level, localAim, remote) => {
     if (sim.phase !== 'aiming') return null;
     const p = sim.activePlayer;
     const aim = localAim ?? sim.players[p].aim;
-    const remote = localAim === null;
     const [b0, b1] = sim.balls;
     const next = `${sim.levelId}|${p}|${aim.angle}|${aim.power}|${switchMaskOf(level, sim.switches)}|${b0.pos.x}|${b0.pos.y}|${b1.pos.x}|${b1.pos.y}|${remote ? 1 : 0}`;
     if (next === key) return cached;
@@ -303,6 +331,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   const previewFor = createAimPreviewer();
   const tickAim = createAimTicker();
   const trackMiss = createMissTracker();
+  const reducedMotion = createMotionPreference();
   const pending: PlayerCommand[] = [];
   let acc = 0;
   let last = performance.now();
@@ -380,15 +409,16 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     enqueue(pending, frameIn.commands);
     handleUi(frameIn.uiActions);
     for (const action of externalUiActions?.current.splice(0) ?? NO_ACTIONS) applyUi(action);
+    view.reducedMotion = reducedMotion();
     const alpha = session.kind === 'local' ? stepLocal(now) : stepOnline(session.client, now);
     syncLevel();
     updateView(view, prev, sim, alpha, frameDt);
     view.lastDevice = frameIn.device;
-    view.drag = dragVisual(view, frameIn.drag);
+    view.drag = dragVisual(view, frameIn.drag, view.renderBalls[sim.activePlayer].pos);
     if (frameIn.miss !== null && !paused) pulseMissRings(view, sim);
     const miss = paused ? null : trackMiss(frameIn.miss, frameIn.drag !== null, now);
     const localAim = input.localAim();
-    view.aimPreview = previewFor(sim, level, localAim);
+    view.aimPreview = previewFor(sim, level, localAim, controllingSeat(sim, seats) === null);
     tickAim(audio, sim, localAim);
     audio.setFan(fanActive(level, sim), FAN_INTENSITY);
     ctx.setTransform(transformScale, 0, 0, transformScale, 0, 0);
@@ -418,6 +448,7 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
       disposeLayout();
       document.removeEventListener('visibilitychange', onVisibility);
       input.detach();
+      latest.current.audio.setFan(false, FAN_INTENSITY);
     },
   };
 }

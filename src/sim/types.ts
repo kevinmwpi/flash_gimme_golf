@@ -53,14 +53,17 @@ export type MechanicKind =
   | 'colourGate'
   | 'switch'
   | 'bridge'
-  | 'blocker';
+  | 'blocker'
+  | 'trap'
+  | 'cannon';
 
 /**
- * The ONE idea a World-1 level introduces. 'switch' covers the plate AND the gate it drives
- * (blocker is its effect and is listed in `mechanicsPresent`, never introduced alone); 'bridge'
- * is introduced by the level whose plates build a bridge (additive member, see levels/README.md).
+ * The idea a level introduces (at most one; World 1: exactly one). 'switch' covers the plate AND
+ * the gate it drives (blocker is its effect and is listed in `mechanicsPresent`, never introduced
+ * alone); 'bridge' is introduced by the level whose plates build a bridge (additive member, see
+ * levels/README.md); 'trap' and 'cannon' by the World 2 holes that teach them.
  */
-export type IntroducedMechanic = 'sand' | 'spring' | 'bumper' | 'fan' | 'colourGate' | 'switch' | 'bridge';
+export type IntroducedMechanic = 'sand' | 'spring' | 'bumper' | 'fan' | 'colourGate' | 'switch' | 'bridge' | 'trap' | 'cannon';
 
 // ---------------------------------------------------------------------------------------------
 // Level geometry (static, authored data; never serialized into state)
@@ -111,7 +114,8 @@ export type RectBase = {
    *  several plates (e.g. near lip, far landing bowl, deck). Every id must resolve (validity). */
   readonly switchIds?: readonly string[];
   /** Default: bridge = true (appears while pressed), blocker = false (disappears while pressed),
-   *  others = true. Ignored when `switchId` is absent (the rect is permanent). */
+   *  trap = false (armed until a release is held), others = true. Ignored when `switchId` is
+   *  absent (the rect is permanent). */
   readonly activeWhen?: boolean;
   /** Short on-object label drawn by the renderer (e.g. "SAND", "BOING"). Optional. */
   readonly label?: string;
@@ -152,6 +156,16 @@ export type BridgeRect = RectBase & { readonly kind: 'bridge' };
  *  surface. */
 export type BlockerRect = RectBase & { readonly kind: 'blocker' };
 
+/** Steel jaws. ARMED (= active) while none of its release plates (`switchIds`, OR) is held; default
+ *  activeWhen false, exactly like a door is shut. A RESTING ball whose centre is inside an armed trap is CAUGHT.
+ *  No collision geometry. Never permanent (validity: switchIds non-empty). */
+export type TrapRect = RectBase & { readonly kind: 'trap' };
+
+/** Cannon breech: a flush pad on a sand-funnel floor. LIT (= active) while any FIRE plate (`switchIds`, OR,
+ *  default activeWhen true) is held: any ground contact inside [x, x+w] sets the velocity to `launch` exactly,
+ *  like a spring. COLD: ordinary ground; a ball resting on it is LOADED and fires the tick the cannon lights. */
+export type CannonRect = RectBase & { readonly kind: 'cannon'; readonly launch: Vec };
+
 export type LevelRect =
   | SandRect
   | SpringRect
@@ -159,14 +173,18 @@ export type LevelRect =
   | FanRect
   | ColourGateRect
   | BridgeRect
-  | BlockerRect;
+  | BlockerRect
+  | TrapRect
+  | CannonRect;
 
 export type LevelRectKind = LevelRect['kind'];
 
 /**
- * Pressure plate. Pressed while ANY non-sunk ball is in ground contact with its centre x inside
- * [x, x+w] and its bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY`. Released the very
- * tick the presser leaves (no latching). Levels pair switches so the holder can also cross.
+ * Pressure plate. HELD while a RESTING (asleep, not sunk) ball has its centre x inside [x, x+w], its
+ * bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY` and, as its ground, a terrain piece (or, for
+ * a deck plate, the `onRectId` rect): a ball rolling or bouncing across a plate never presses it, and a
+ * caught ball still holds the plate it rests on (a trap seat). Released the very tick the holder moves
+ * (no latching). Levels pair switches so the holder can also cross.
  */
 export type PressureSwitch = {
   readonly id: string;
@@ -192,8 +210,8 @@ export type Hole = {
   readonly radius: number;
 };
 
-/** Which "world" a level belongs to. Only world 1 exists in this build. */
-export type WorldId = 1;
+/** Which "world" a level belongs to: 1 Teach (holes 1-4), 2 Lift & Lock (5-8), 3 Sky Machines (9-12). */
+export type WorldId = 1 | 2 | 3;
 
 /** A fully compiled, static level. Authored via `levels/authoring.ts` helpers. */
 export type Level = {
@@ -202,7 +220,7 @@ export type Level = {
   readonly id: string;
   readonly name: string;
   readonly world: WorldId;
-  /** 1-based position inside its world. */
+  /** 1-based position in the whole game (1-12): the hole number on every screen. */
   readonly order: number;
   /** Team par (both balls combined). */
   readonly par: number;
@@ -212,8 +230,9 @@ export type Level = {
   readonly aha: string;
   /** The watch-out failure mode (brief §12), for docs/tests and the pause-menu "Stuck?" tip. Non-empty. */
   readonly watchOut: string;
-  /** The ONE idea this level introduces (World 1: exactly one, in the campaign order). */
-  readonly mechanicsIntroduced: readonly [IntroducedMechanic];
+  /** The idea this level introduces, if any (World 1: exactly one, in the campaign order; a hole
+   *  that only combines taught mechanics introduces none). */
+  readonly mechanicsIntroduced: readonly [] | readonly [IntroducedMechanic];
   /** Slot that shoots first on this level (also after restartLevel). */
   readonly firstPlayer: PlayerId;
   /** Optional: while ANY ball is sunk, this switch counts as pressed (the first ball home keeps
@@ -225,7 +244,7 @@ export type Level = {
   readonly width: number;
   /** Always VIEWPORT_H (720). Kept explicit so geometry math never hard-codes it. */
   readonly height: number;
-  /** Horizontal acceleration px/s^2 applied to airborne balls. World 1: always 0. */
+  /** Horizontal acceleration px/s^2 applied to airborne balls. Always 0 (validity, every world). */
   readonly wind: number;
   readonly terrain: Terrain;
   readonly rects: readonly LevelRect[];
@@ -284,16 +303,20 @@ export type PlayerState = {
 export type BallState = {
   pos: Vec;
   vel: Vec;
-  /** True once at rest (REST_TICKS consecutive slow grounded ticks). Woken if support vanishes
-   *  or an active fan contains the ball. */
+  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls hold plates and
+   *  wait in devices. Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
+   *  closed on it (a door), it rests on the breech of a cannon that is now lit (it fires), or its support
+   *  vanished. */
   asleep: boolean;
   /** True once in the cup (sunk or gimme). pos is then {hole.x, hole.rimY + 10} and the ball is skipped. */
   sunk: boolean;
-  /** Ground/rect-top contact during the last tick (drives switches + rest test). */
+  /** Ground/rect-top contact during the last tick (drives the rest test; plates read `asleep`). */
   grounded: boolean;
   /** Consecutive ticks that satisfied the rest test; asleep when it reaches REST_TICKS. */
   restTicks: number;
-  /** Last resting position ON PERMANENT GROUND; the fell-off-world respawn point. */
+  /** The safe spot: the last resting position ON PERMANENT GROUND while FREE (never while caught,
+   *  never on a cannon breech; a ball freed where it sits records it at the hand-off). The
+   *  fell-off-world respawn point and the scoped-reset (`trapReturn`) target. */
   lastRest: Vec;
 };
 
@@ -331,6 +354,9 @@ export type SimState = {
   readonly rng: number;
   /** One entry per COMPLETED level, in campaign order. */
   readonly campaign: readonly LevelResult[];
+  /** Consecutive ticks in phase 'flying' (0 in every other phase, never above FLIGHT_WATCHDOG_TICKS - 1:
+   *  the flight watchdog ends a flight on its FLIGHT_WATCHDOG_TICKS-th tick). */
+  readonly flightTicks: number;
 };
 
 /**
@@ -386,8 +412,25 @@ export type SimEventBody =
   | { type: 'gatePass'; playerId: PlayerId; pos: Vec; rectId: string; colour: GateColour }
   | { type: 'switchOn'; switchId: string; byPlayer: PlayerId; pos: Vec }
   | { type: 'switchOff'; switchId: string; pos: Vec }
-  /** A switch-linked rect changed existence (never fires for permanent rects). */
+  /** A switch-linked rect changed existence (never fires for permanent rects, traps or cannons: device
+   *  state is read from `switches`, device moments come from the trap and cannon events). */
   | { type: 'bridgeToggle'; rectId: string; kind: LevelRectKind; active: boolean; switchId: string }
+  /** A ball came to rest inside an armed trap (also after a teleport onto one), or its trap re-armed around it. */
+  | { type: 'trapCaught'; playerId: PlayerId; pos: Vec; rectId: string }
+  /** A caught ball's trap opened (a release is held, or the cup started holding one): FREE where it sits. */
+  | { type: 'trapFreed'; playerId: PlayerId; pos: Vec; rectId: string }
+  /** Scoped reset of a WAITING ball to its safe spot (or, as a guard, its tee) with BACK_PENALTY;
+   *  `strokes` is the player's level total after it. View SNAPS the ball. */
+  | { type: 'trapReturn'; playerId: PlayerId; pos: Vec; respawnPos: Vec; strokes: number; toTee: boolean }
+  /** A ball came to rest on a COLD cannon breech: LOADED until that ball's `cannonFire`. */
+  | { type: 'cannonLoad'; playerId: PlayerId; pos: Vec; rectId: string }
+  /** A lit breech fired a ball (on entry, or a loaded ball the tick its cannon lit). */
+  | { type: 'cannonFire'; playerId: PlayerId; pos: Vec; rectId: string; launch: Vec }
+  /** The WAITING rule passed over this slot at a hand-off; always in the same tick as, and before, the
+   *  `turnStart` of `nextPlayer`. */
+  | { type: 'turnSkipped'; playerId: PlayerId; reason: 'caught' | 'loaded'; rectId: string; nextPlayer: PlayerId }
+  /** The flight watchdog ended a flight: the moving ball went to its safe spot, no penalty. View SNAPS the ball. */
+  | { type: 'flightTimeout'; playerId: PlayerId; pos: Vec; respawnPos: Vec }
   /** Ball fell below the kill line; respawned at lastRest with FALL_PENALTY strokes. View SNAPS the ball. */
   | { type: 'fellOffWorld'; playerId: PlayerId; pos: Vec; respawnPos: Vec; strokes: number }
   /** Ball came to rest (not sunk). */
@@ -429,6 +472,8 @@ export const IMMEDIATE_SNAPSHOT_EVENTS: readonly SimEventType[] = Object.freeze(
   'levelComplete',
   'campaignComplete',
   'levelRestart',
+  'trapReturn',
+  'flightTimeout',
 ] as const);
 
 // ---------------------------------------------------------------------------------------------
@@ -469,8 +514,10 @@ export type BallSnap = [
 export type CampaignSnap = [number, number][];
 
 /**
- * Dynamic fields only (no config, no geometry). JSON of this is ~145-211 bytes (measured).
+ * Dynamic fields only (no config, no geometry). JSON of this is ~105-155 bytes (measured on the World 1
+ * golden lines and the device scenario; serialize.test caps it at 260).
  * `switchMask` bit i = level.switches[i] pressed. Decoding needs the SimConfig (level ids).
+ * Version 2 appended `flightTicks` as the LAST element (every earlier index is unchanged).
  */
 export type SimSnapshot = [
   version: typeof SNAPSHOT_VERSION,
@@ -484,6 +531,7 @@ export type SimSnapshot = [
   switchMask: number,
   rng: number,
   campaign: CampaignSnap,
+  flightTicks: number,
 ];
 
 /** Compact config for share links: [playerCount, modeCode, seed, levelIds]. modeCode 0 solo 1 local 2 online. */
@@ -492,7 +540,7 @@ export type SimConfigSnap = [playerCount: 1 | 2, modeCode: 0 | 1 | 2, seed: numb
 /** Payload of a `?state=` link: base64url(JSON.stringify(ShareLinkPayload)). */
 export type ShareLinkPayload = { v: typeof SNAPSHOT_VERSION; c: SimConfigSnap; s: SimSnapshot };
 
-export const SNAPSHOT_VERSION = 1 as const;
+export const SNAPSHOT_VERSION = 2 as const;
 
 // ---------------------------------------------------------------------------------------------
 // Constants (one place; nothing else may redefine these numbers)
@@ -545,6 +593,14 @@ export const SUNK_BALL_DROP = 10;
 
 /** Strokes added when a ball falls off the world. */
 export const FALL_PENALTY = 1;
+/** Strokes added by the WAITING rule's scoped reset ("BACK +1"). */
+export const BACK_PENALTY = 1;
+/** A flight still running on its 1,800th consecutive tick (30 s) ends: every moving ball goes to its safe spot. */
+export const FLIGHT_WATCHDOG_TICKS = 1800;
+/** A cannon launches at least this sideways: |launch.x| >= CANNON_MIN_SIDEWAYS * |launch.y| (steeper is a spring). */
+export const CANNON_MIN_SIDEWAYS = 0.5;
+/** The first px along a cannon's launch ray must be clear of terrain and permanent walls (validity). */
+export const CANNON_MUZZLE_CLEAR_PX = 60;
 /** Kill line: pos.y > level.height + KILL_MARGIN. */
 export const KILL_MARGIN = 160;
 /** Soft ceiling (world y): vertical velocity zeroed above it. */

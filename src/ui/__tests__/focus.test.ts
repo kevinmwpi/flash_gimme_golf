@@ -5,8 +5,11 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { levelsOfWorld } from '../../sim/levels/index';
+import CampaignResults, { type CampaignRow } from '../CampaignResults';
+import { COPY } from '../copy';
 import { blurAfterPointerClick, speakerState } from '../Hud';
-import { Modal, restoreTarget } from '../Pause';
+import { ConfirmDialog, Modal, restoreTarget } from '../Pause';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -87,5 +90,61 @@ describe('HUD buttons and the keyboard', () => {
     expect(speakerState(false, false).icon).toBe('unmute');
     expect(speakerState(false, true).pressed).toBe(true);
     expect(speakerState(true, false).pressed).toBeUndefined();
+  });
+});
+
+// A player who presses Space/Enter through every card (Tee off, Next hole, See results) keeps pressing on the
+// next one. Two presses must never take them out of an online room: on the guest's world card the first press
+// used to open "Leave the game?" from Level select and the second confirmed it, stranding the host (D10.2).
+describe('cards a repeated Space/Enter cannot leave through', () => {
+  const noop = (): void => {};
+
+  beforeEach(() => {
+    document.body.appendChild(host);
+  });
+
+  function confirm(danger: boolean): React.ReactElement {
+    return danger
+      ? React.createElement(ConfirmDialog, { title: COPY.pause.leaveTitle, body: COPY.pause.leaveBody(0), confirmLabel: COPY.pause.leaveConfirm, cancelLabel: COPY.pause.quitCancel, danger, onConfirm: noop, onCancel: noop })
+      : React.createElement(ConfirmDialog, { title: COPY.pause.restartTitle(2), body: COPY.pause.restartBody, confirmLabel: COPY.pause.restartConfirm, cancelLabel: COPY.pause.restartCancel, onConfirm: noop, onCancel: noop });
+  }
+
+  function worldCard(seat: 0 | 1): React.ReactElement {
+    const rows: CampaignRow[] = levelsOfWorld(1).map((level) => ({ level, result: { levelId: level.id, par: level.par, strokes: [3, 3], medal: 'silver' } }));
+    const coursePar = rows.reduce((n, r) => n + r.level.par, 0);
+    return React.createElement(CampaignResults, {
+      world: 1,
+      nextWorld: 2,
+      rows,
+      coursePar,
+      total: 24,
+      medal: 'gold',
+      mode: 'online',
+      seat,
+      isHost: seat === 0,
+      waitingForHost: true,
+      onContinue: noop,
+      onPlayAgain: noop,
+      onLevelSelect: noop,
+      onTitle: noop,
+    });
+  }
+
+  it('a danger confirm (leave, quit, reset) focuses its cancel button; any other confirm focuses the confirm', () => {
+    act(() => root.render(confirm(true)));
+    expect(document.activeElement?.textContent).toBe(COPY.pause.quitCancel);
+    act(() => root.render(null));
+    act(() => root.render(confirm(false)));
+    expect(document.activeElement?.textContent).toBe(COPY.pause.restartConfirm);
+  });
+
+  it("the online guest's world card parks focus on its waiting line, never on Level select; the host's focuses Continue", () => {
+    act(() => root.render(worldCard(1)));
+    const focused = document.activeElement;
+    expect(focused?.tagName).toBe('SPAN');
+    expect(focused?.textContent).toBe(COPY.toast.waitingNewRound(0));
+    act(() => root.render(null));
+    act(() => root.render(worldCard(0)));
+    expect(document.activeElement?.textContent).toBe(COPY.campaign.nextWorld(2));
   });
 });

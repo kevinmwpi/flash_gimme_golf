@@ -5,6 +5,7 @@
  * function below. Numbers come only from types.ts (two local tolerances quoted from the notes are
  * named at the top). `Math.sin/cos` appear ONLY in `launchVelocity`.
  */
+import { breechAt, isCannonLit, onCannonBreech, restEventOf, trapHolding } from './devices';
 import type { Collider, Contact } from './terrain';
 import {
   collidersFor,
@@ -25,6 +26,7 @@ import type {
   BallState,
   BounceSurface,
   BumperRect,
+  CannonRect,
   FanRect,
   Hole,
   Level,
@@ -172,9 +174,19 @@ function wakeIfNeeded(ball: BallState, ctx: BallContext, out: StepBallOut): bool
     wake(ball);
     return true;
   }
+  // A LOADED ball fires the tick its cannon lights: woken here, the same tick's ground contact fires it in applyPads.
+  if (onLitBreech(ctx, ball.pos)) {
+    wake(ball);
+    return true;
+  }
   if (hasSupport(ctx.level, ctx.switches, ball, ctx.playerId)) return false;
   wake(ball);
   return true;
+}
+
+function onLitBreech(ctx: BallContext, pos: Vec): boolean {
+  const cannon = breechAt(ctx.level, pos);
+  return cannon !== null && isCannonLit(cannon, ctx.switches);
 }
 
 /** D2: a door that closed on a parked ball; the normal contact resolution ejects it through the nearest face. */
@@ -319,10 +331,11 @@ function ejectFromPieces(t: Tick, ctx: BallContext): void {
 
 // ---- step 4: flush pads ---------------------------------------------------------------------------
 
-type Pad = SandRect | SpringRect | BumperRect;
+/** Flush pads. A cannon is one only while LIT: `padAt` skips inactive pads, so a cold breech is ordinary ground. */
+type Pad = SandRect | SpringRect | BumperRect | CannonRect;
 
 function isPad(rect: LevelRect): rect is Pad {
-  return rect.kind === 'sand' || rect.kind === 'spring' || rect.kind === 'bumper';
+  return rect.kind === 'sand' || rect.kind === 'spring' || rect.kind === 'bumper' || rect.kind === 'cannon';
 }
 
 function sandAt(level: Level, switches: Readonly<Record<string, boolean>>, x: number): SandRect | null {
@@ -368,6 +381,12 @@ function applyPads(t: Tick, ctx: BallContext, out: StepBallOut): void {
       t.vy = pad.launch.y;
       t.contact = null;
       out.events.push({ type: 'spring', playerId: ctx.playerId, pos, rectId: pad.id, launch: pad.launch });
+      return;
+    case 'cannon':
+      t.vx = pad.launch.x;
+      t.vy = pad.launch.y;
+      t.contact = null;
+      out.events.push({ type: 'cannonFire', playerId: ctx.playerId, pos, rectId: pad.id, launch: pad.launch });
       return;
     case 'bumper': {
       if (t.impact < PAD_MIN_IMPACT) return;
@@ -457,6 +476,8 @@ function respawn(ball: BallState, t: Tick, ctx: BallContext, out: StepBallOut): 
   ball.asleep = true;
   ball.restTicks = REST_TICKS;
   ball.grounded = true;
+  const device = restEventOf(ctx.level, ctx.switches, ball, ctx.playerId);
+  if (device !== null) out.events.push(device);
   return FALL_PENALTY;
 }
 
@@ -557,6 +578,11 @@ function tryCup(ball: BallState, t: Tick, ctx: BallContext, out: StepBallOut): b
 
 // ---- step 12: rest test + gimme -------------------------------------------------------------------
 
+/** A resting ball records its safe spot only on permanent ground while FREE: never caught, never on a cannon breech. */
+function isSafeSpot(ball: BallState, permanentGround: boolean, ctx: BallContext): boolean {
+  return permanentGround && trapHolding(ctx.level, ctx.switches, ball) === null && !onCannonBreech(ctx.level, ball.pos);
+}
+
 function settle(ball: BallState, ctx: BallContext, out: StepBallOut): number {
   const g = groundAt(ctx.level, ctx.switches, ball.pos, ctx.playerId);
   const slow = vec.len(ball.vel) < REST_SPEED;
@@ -568,7 +594,7 @@ function settle(ball: BallState, ctx: BallContext, out: StepBallOut): number {
   ball.vel = { x: 0, y: 0 };
   ball.asleep = true;
   ball.pos = { x: quantize2(ball.pos.x), y: quantize2(ball.pos.y) };
-  if (g.permanent) ball.lastRest = ball.pos;
+  if (isSafeSpot(ball, g.permanent, ctx)) ball.lastRest = ball.pos;
   const restPos = ball.pos;
   const d = distanceToCup(ctx.level, restPos);
   if (d <= GIMME_RADIUS) {
@@ -577,6 +603,8 @@ function settle(ball: BallState, ctx: BallContext, out: StepBallOut): number {
     return 1;
   }
   out.events.push({ type: 'ballRest', playerId: ctx.playerId, pos: restPos, onPermanentGround: g.permanent });
+  const device = restEventOf(ctx.level, ctx.switches, ball, ctx.playerId);
+  if (device !== null) out.events.push(device);
   if (d <= NEAR_CUP_RADIUS) out.events.push({ type: 'nearCup', playerId: ctx.playerId, pos: restPos, distance: d });
   return 0;
 }
@@ -688,4 +716,32 @@ export function predictShot(
     out.events.length = 0;
   }
   return { points, landing, outcome };
+}
+
+/**
+ * A launcher's flight (CONTRACT §4a; the view draws a cannon's dotted arc with it): the REAL stepBall on a
+ * scratch ball at `from` with velocity `launch`, the switches FIXED, no other balls, nothing emitted. `points`
+ * holds the centre after every tick; a fall ends the list at the last tick above the kill line.
+ */
+export function predictLaunch(
+  level: Level,
+  switches: Readonly<Record<string, boolean>>,
+  from: Vec,
+  launch: Vec,
+  playerId: PlayerId,
+  maxTicks = 600,
+): { points: Vec[]; outcome: ShotOutcome } {
+  const scratch: BallState = { pos: from, vel: launch, asleep: false, sunk: false, grounded: false, restTicks: 0, lastRest: from };
+  const ctx: BallContext = { level, switches, playerId, colliders: collidersFor(solidColliders(level, switches), playerId) };
+  const out: StepBallOut = { events: [] };
+  const points: Vec[] = [];
+  for (let i = 0; i < maxTicks; i += 1) {
+    stepBall(scratch, ctx, out);
+    if (out.events.some((e) => e.type === 'fellOffWorld')) return { points, outcome: 'fell' };
+    points.push(scratch.pos);
+    if (scratch.sunk) return { points, outcome: out.events.some((e) => e.type === 'gimme') ? 'gimme' : 'sink' };
+    if (scratch.asleep) return { points, outcome: 'rest' };
+    out.events.length = 0;
+  }
+  return { points, outcome: 'running' };
 }
