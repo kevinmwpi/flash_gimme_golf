@@ -43,7 +43,12 @@ Crossfire flat softlock and a door-ejection freeze (Colour Lift, and latently Wo
    sessions, and for L10's chain reaction, now the loudest moment in the game (within AUDIO.md's policy).
 8. **Coverage gap.** The watchdog's immediate online broadcast (`flightTimeout`) is proven only by a scratch harness;
    no shipped hole can fly 30 s, and `RoomManager` has no public way to seat a crafted state.
-9. Older polish items still open: the floors sit about 100 px lower than the mockup, so the bottom HUD band covers
+9. From the browser playthroughs (all low): `pullReachable` (and so `input-reach.test.ts`) counts pulls inside
+   the 24 px cancel ring as shots, so three beats in that test use a 15.6-power tap the slingshot would cancel
+   (every line still completes with a 24 px minimum, power 19.0); on compact touch the floating power number
+   follows the 10 Hz summary and lags the drag by about 90 ms; online, a long waiting chip ('LOADED · needs FIRE or
+   TOP') shortens the level chip's hole name with an ellipsis.
+10. Older polish items still open: the floors sit about 100 px lower than the mockup, so the bottom HUD band covers
    some dirt; the power meter and AIMING chip stay up in flight; on a portrait phone the title's server pill
    overlaps the logo; `public/og.png` is a placeholder and the iOS icons have transparent corners.
 
