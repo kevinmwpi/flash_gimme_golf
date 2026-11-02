@@ -253,7 +253,14 @@ a plate reacts late and a ball rolling over a button does nothing, which reads a
   tick, by when the ball's leading edge is at most `(MAX_BALL_SPEED + GRAVITY * DT) * DT + BALL_RADIUS` = 30.5 px past
   the plate, and every plate ends farther than that from each door, window, bridge or breech it drives (tightest:
   L4's B 32 px from the bridge, the L9 and L12 trap seats 40 px from their doors, then 50 px; `levels.test.ts`); a
-  loaded ball fires the moment any ball touches a FIRE plate; a release plate frees a caught ball only while a ball
+  loaded ball fires the moment any ball touches a FIRE plate, including on L10 where A, B and the DECK both fire the
+  cannon and hold the bridge the fired ball needs about 126 ticks later: a firm flat shot that skims across A's (or
+  B's) bowl and rolls off fires the LOADED partner and lets the planks vanish before it lands, so it falls (+1, back
+  to its tee). Review 2026-11-02: 0 of the 2,579 partner-firing first shots from the tee flat (the spring ride and
+  every bowl landing end on A), 47-52 of 2,789-4,003 from spire-top spots, all at power 72+ within 12 degrees of flat
+  (1-3 of 105-148 on the human grid); no softlock. Kept rather than special-casing cannons, since firing on a touch
+  is what the owner asked for; the L10 copy now says the firing ball stays on A until its partner lands. A release
+  plate frees a caught ball only while a ball
   is on it (a rescue must still stay on FREE/TOP to hold at the hand-off); World 1 plays differently (doors react
   sooner, a holder's stall tap keeps the door open), so its goldens and the D10.3 World 1 equivalence are
   re-baselined on purpose.
