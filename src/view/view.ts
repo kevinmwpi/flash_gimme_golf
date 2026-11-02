@@ -8,7 +8,9 @@
 import type { Aim, BallState, Level, LevelRect, MutVec, PlayerId, PressureSwitch, SimEvent, SimState, Vec } from '../sim/types';
 import { BALL_RADIUS, MAX_POWER, VIEWPORT_H, VIEWPORT_W } from '../sim/types';
 import { waitingOf } from '../sim/devices';
+import { hasLevel, levelById } from '../sim/levels/index';
 import { isRectActive } from '../sim/terrain';
+import { createPlateTracker, type PlateMoment, type PlateTracker } from './plates';
 import { cannonGeometry, cannonSpan, seatOf } from './render/devices';
 import { calloutExtent } from './render/effects';
 import { PALETTE, PLAYER_VIEW } from './render/palette';
@@ -96,6 +98,11 @@ export type Callout = {
   sub?: string;
   subColour?: string;
   stars?: boolean;
+  /**
+   * What the callout is about (`switch:<id>`, `rect:<id>`, a trap's ball): a newer callout about the same thing
+   * replaces it, so DOOR SHUT never stacks over DOOR OPEN, nor SNAP! over the FREE! a ball rolling across FREE caused.
+   */
+  subject?: string;
 };
 export type BallHop = { from: Vec; to: Vec; t: number };
 export type RenderBall = {
@@ -181,6 +188,10 @@ export type ViewState = {
   jaws: [JawAnim | null, JawAnim | null];
   /** View seconds at the last turnStart: the turn banner (UI, ~1.6 s) may cover the top of the stage until then. */
   turnAt: number;
+  /** Which plate presses last (BUILD_DECISIONS D11, plates.ts): sparks on a fresh press, HELD and OPEN / SHUT words only when it lasts. */
+  plates: PlateTracker;
+  /** switchId -> view seconds until which its cap stays fully down: a ball clipping a plate for a tick still reads as a click. */
+  plateClicks: Map<string, number>;
 };
 
 /** Follow camera keeps the active ball at this fraction of the viewport width (aiming right / left). */
@@ -219,6 +230,13 @@ const BACKSWING_CLEAR_PX = 92;
 const FACING_FLIP_DEBOUNCE = 0.25;
 const SWITCH_PRESS_RATE = 1 / 0.06;
 const SWITCH_RELEASE_RATE = 1 / 0.09;
+/**
+ * A press holds the plate cap fully down at least this long (the press stroke is 0.06 s), however briefly the sim
+ * kept it pressed (D11: a ball clipping a plate's edge presses it for as little as one tick, and 9 % of the presses
+ * on the shipped holes end within 0.1 s). Cosmetic only: the plate is not a collider, and doors, planks, the lamps
+ * on doors and the wires follow the sim exactly.
+ */
+export const PLATE_CLICK_SEC = 0.1;
 const BRIDGE_IN_RATE = 1 / 0.2;
 const BRIDGE_OUT_RATE = 1 / 0.15;
 const GIMME_HOP_DURATION = 0.4;
@@ -311,10 +329,16 @@ export function createMotionPreference(): () => boolean {
   };
 }
 
+/** The level a levelStart names: the view's own (fixtures included), else the registry's; null for an unknown id. */
+function levelFor(view: ViewState, id: string): Level | null {
+  if (id === view.level.id) return view.level;
+  return hasLevel(id) ? levelById(id) : null;
+}
+
 export function createViewState(level: Level, state: SimState): ViewState {
   const mode: CameraMode = state.phase === 'intro' ? 'overview' : 'follow';
   const camera = cameraFor(level, state, mode);
-  return {
+  const view: ViewState = {
     level,
     camera: { ...camera },
     cameraTarget: camera,
@@ -350,7 +374,11 @@ export function createViewState(level: Level, state: SimState): ViewState {
     deviceLift: [false, false],
     jaws: [null, null],
     turnAt: -Infinity,
+    plates: createPlateTracker((id) => levelFor(view, id)),
+    plateClicks: new Map(),
   };
+  view.plates.sync(level, state.switches, state.balls);
+  return view;
 }
 
 // ---- small helpers -----------------------------------------------------------------------------
@@ -446,9 +474,11 @@ function calloutLift(view: ViewState, c: CalloutSpec): number {
 /**
  * At most MAX_CALLOUTS alive and the newest replaces the oldest, except that a device moment (SNAP!, BOOM! …)
  * is never pushed out by a switch or bridge callout, and a new device moment pushes those out first (L10's
- * A HELD + BRIDGE OPEN + BOOM! in one landing keeps BOOM!). A callout born over a live one stacks above it.
+ * BOOM! as a ball touches A outlives the A HELD + BRIDGE OPEN its rest on A says). A callout about the same
+ * `subject` as a live one replaces it outright; a callout born over a live one stacks above it.
  */
 function pushCallout(view: ViewState, c: CalloutSpec): void {
+  if (c.subject !== undefined) view.callouts = view.callouts.filter((old) => old.subject !== c.subject);
   while (view.callouts.length >= MAX_CALLOUTS) {
     const evictable = view.callouts.filter((old) => !outranks(old.kind, c.kind));
     const victim = evictable.find((old) => outranks(c.kind, old.kind)) ?? evictable[0];
@@ -772,8 +802,12 @@ export function missRingsProgress(view: ViewState): number | null {
  * Hard reset for levelStart / levelRestart: balls snap, golfers pop to their tees. The camera opens
  * in overview only for an intro; a restart or a resumed `?state=` link that is already in play follows.
  */
-function resetForLevel(view: ViewState, state: SimState): void {
+function resetForLevel(view: ViewState, state: SimState, levelId: string): void {
   resetAnims(view);
+  // the hole the event names; the state's plates only when the state is already on that hole
+  const known = state.levelId === levelId;
+  view.plates.sync(levelFor(view, levelId), known ? state.switches : {}, known ? state.balls : []);
+  view.plateClicks.clear();
   view.switchAnims.clear();
   view.rectAnims.clear();
   for (const r of view.level.rects) view.rectAnims.set(r.id, isRectActive(r, state.switches) ? 1 : 0);
@@ -833,7 +867,7 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
     case 'levelStart':
     case 'levelRestart':
       if (e.type === 'levelRestart') view.flash = FLASH_DURATION * 2;
-      resetForLevel(view, state);
+      resetForLevel(view, state, e.levelId);
       break;
     case 'playStart':
       view.cameraMode = 'follow';
@@ -917,56 +951,11 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
       });
       break;
     }
-    case 'switchOn': {
-      const sw = switchById(level, e.switchId);
-      view.stickerPulse.set(switchStickerKey(e.switchId), 0);
-      for (let i = 0; i < 4; i += 1) {
-        spawn(view, {
-          pos: { x: e.pos.x + (i < 2 ? -30 : 30), y: e.pos.y - 6 - (i % 2) * 8 },
-          vel: { x: (i < 2 ? -1 : 1) * 60, y: -40 },
-          maxLife: 0.2,
-          size: 3,
-          colour: PALETTE.ink,
-          gravity: 0,
-          shape: 'streak',
-        });
-      }
-      pushCallout(view, {
-        text: switchHeldCallout(sw?.label, switchIndex(level, e.switchId)),
-        worldPos: { x: e.pos.x, y: e.pos.y - 20 },
-        colour: PALETTE.sw,
-        kind: 'switch',
-        sizePx: CALLOUT_TINY,
-      });
-      break;
-    }
+    case 'switchOn':
     case 'switchOff':
+    case 'bridgeToggle':
+      // D11: plates, doors and bridges speak through the plate moments (applyPlateMoment); their drawing follows SimState
       break;
-    case 'bridgeToggle': {
-      const rect = rectById(level, e.rectId);
-      if (rect === undefined) break;
-      const centre = { x: rect.x + rect.w / 2, y: rect.y };
-      if (rect.kind === 'bridge') {
-        if (!e.active) spawnPuffs(view, centre, 4, PALETTE.plank, 120, [5, 7], 0.4, false);
-        pushCallout(view, {
-          text: e.active ? COPY.callouts.bridgeOn : COPY.callouts.bridgeOff,
-          worldPos: centre,
-          colour: e.active ? PALETTE.mint : PALETTE.bump,
-          kind: 'bridge',
-          sizePx: CALLOUT_SMALL,
-        });
-      } else if (rect.kind === 'blocker') {
-        const word = gateWord(rect.label, switchIndex(level, e.switchId));
-        pushCallout(view, {
-          text: `${word} ${e.active ? COPY.callouts.gateShut : COPY.callouts.gateOpen}`,
-          worldPos: { x: centre.x, y: rect.y + rect.h / 2 },
-          colour: e.active ? PALETTE.bump : PALETTE.mint,
-          kind: 'bridge',
-          sizePx: CALLOUT_SMALL,
-        });
-      }
-      break;
-    }
     case 'fellOffWorld': {
       const rb = view.renderBalls[e.playerId];
       const col = PLAYER_VIEW[e.playerId].col;
@@ -989,16 +978,13 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
       pushCallout(view, { text: COPY.callouts.oob, worldPos: e.respawnPos, colour: PALETTE.bump, kind: 'oob', sizePx: CALLOUT_SIZE });
       break;
     }
+    // the jaws move on every catch and free; SNAP! / FREE! (and the puffs, the sticker pop) wait for the plate moment
+    // that says the change lasts (D11: a rescuer rolling across FREE lets its partner go only while it is on it)
     case 'trapCaught':
       view.jaws[e.playerId] = { kind: 'snap', rectId: e.rectId, at: e.pos, t: 0 };
-      view.stickerPulse.set(deviceStickerKey(level, e.rectId), 0);
-      spawnPuffs(view, { x: e.pos.x, y: e.pos.y + BALL_RADIUS }, 4, PALETTE.white, 90, [3, 5], 0.25);
-      pushCallout(view, { text: COPY.callouts.snap, worldPos: e.pos, colour: PALETTE.coil, kind: 'trap', sizePx: CALLOUT_SIZE });
       break;
     case 'trapFreed':
       view.jaws[e.playerId] = { kind: 'free', rectId: e.rectId, at: e.pos, t: 0 };
-      view.stickerPulse.set(deviceStickerKey(level, e.rectId), 0);
-      pushCallout(view, { text: COPY.callouts.free, worldPos: e.pos, colour: PALETTE.mint, kind: 'trap', sizePx: CALLOUT_SIZE });
       break;
     case 'trapReturn':
       teleport(view, e.playerId, e.pos);
@@ -1081,9 +1067,111 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
   }
 }
 
-/** Apply a tick's events (particles, shake, callouts, trails, pad/switch/bridge anims, golfer walk). */
+/** SNAP! and FREE! on one ball are one subject: a ball rolling across FREE frees and re-catches it, and the newer word wins. */
+function jawSubject(p: PlayerId): string {
+  return `jaws:${p}`;
+}
+
+/** The press: four ink streaks kicked out of the plate's ends. */
+function spawnPressSparks(view: ViewState, pos: Vec): void {
+  for (let i = 0; i < 4; i += 1) {
+    spawn(view, {
+      pos: { x: pos.x + (i < 2 ? -30 : 30), y: pos.y - 6 - (i % 2) * 8 },
+      vel: { x: (i < 2 ? -1 : 1) * 60, y: -40 },
+      maxLife: 0.2,
+      size: 3,
+      colour: PALETTE.ink,
+      gravity: 0,
+      shape: 'streak',
+    });
+  }
+}
+
+/** DOOR OPEN / SHUT, BRIDGE OPEN / GONE (plank puffs as it goes) for a lasting change; fans have no word. */
+function wayCallout(view: ViewState, m: Extract<PlateMoment, { kind: 'way' }>): void {
+  const level = view.level;
+  const rect = rectById(level, m.rectId);
+  if (rect === undefined) return;
+  const centre = { x: rect.x + rect.w / 2, y: rect.y };
+  const subject = rectStickerKey(rect.id);
+  if (rect.kind === 'bridge') {
+    if (!m.active) spawnPuffs(view, centre, 4, PALETTE.plank, 120, [5, 7], 0.4, false);
+    pushCallout(view, {
+      text: m.active ? COPY.callouts.bridgeOn : COPY.callouts.bridgeOff,
+      worldPos: centre,
+      colour: m.active ? PALETTE.mint : PALETTE.bump,
+      kind: 'bridge',
+      sizePx: CALLOUT_SMALL,
+      subject,
+    });
+  } else if (rect.kind === 'blocker') {
+    const word = gateWord(rect.label, switchIndex(level, m.switchId));
+    pushCallout(view, {
+      text: `${word} ${m.active ? COPY.callouts.gateShut : COPY.callouts.gateOpen}`,
+      worldPos: { x: centre.x, y: rect.y + rect.h / 2 },
+      colour: m.active ? PALETTE.bump : PALETTE.mint,
+      kind: 'bridge',
+      sizePx: CALLOUT_SMALL,
+      subject,
+    });
+  }
+}
+
+/**
+ * BUILD_DECISIONS D11 (plates.ts): every press clicks the cap fully down; a FRESH press also kicks ink streaks and
+ * pops the plate's sticker (a ball rocking in the dish re-presses without them); `<PLATE> HELD` and the door or
+ * bridge words wait until the press lasts, and so do SNAP! and FREE! for the trap a release plate drives. A ball
+ * rolling across a plate gets the click (and the jaws or the door move) and nothing it would contradict.
+ */
+function applyPlateMoment(view: ViewState, m: PlateMoment): void {
+  const level = view.level;
+  switch (m.kind) {
+    case 'press':
+      view.plateClicks.set(m.switchId, view.timeSec + PLATE_CLICK_SEC);
+      if (!m.fresh) break;
+      view.stickerPulse.set(switchStickerKey(m.switchId), 0);
+      spawnPressSparks(view, m.pos);
+      break;
+    case 'release':
+      break;
+    case 'held': {
+      const sw = switchById(level, m.switchId);
+      pushCallout(view, {
+        text: switchHeldCallout(sw?.label, switchIndex(level, m.switchId)),
+        worldPos: { x: m.pos.x, y: m.pos.y - 20 },
+        colour: PALETTE.sw,
+        kind: 'switch',
+        sizePx: CALLOUT_TINY,
+        subject: switchStickerKey(m.switchId),
+      });
+      break;
+    }
+    case 'way':
+      wayCallout(view, m);
+      break;
+    case 'jaws':
+      if (!m.lasting) break;
+      view.stickerPulse.set(deviceStickerKey(level, m.rectId), 0);
+      if (m.caught) {
+        spawnPuffs(view, { x: m.pos.x, y: m.pos.y + BALL_RADIUS }, 4, PALETTE.white, 90, [3, 5], 0.25);
+        pushCallout(view, { text: COPY.callouts.snap, worldPos: m.pos, colour: PALETTE.coil, kind: 'trap', sizePx: CALLOUT_SIZE, subject: jawSubject(m.playerId) });
+      } else {
+        pushCallout(view, { text: COPY.callouts.free, worldPos: m.pos, colour: PALETTE.mint, kind: 'trap', sizePx: CALLOUT_SIZE, subject: jawSubject(m.playerId) });
+      }
+      break;
+  }
+}
+
+/**
+ * Apply a tick's events (particles, shake, callouts, trails, pad/switch/bridge anims, golfer walk), then the plate
+ * moments each one causes (D11). A levelStart re-syncs the plate tracker from `state` in resetForLevel instead.
+ */
 export function applySimEvents(view: ViewState, events: readonly SimEvent[], state: SimState): void {
-  for (const e of events) applyEvent(view, e, state);
+  for (const e of events) {
+    applyEvent(view, e, state);
+    if (e.type === 'levelStart') continue;
+    for (const m of view.plates.feed(e, state.switches)) applyPlateMoment(view, m);
+  }
 }
 
 // ---- per-frame update -------------------------------------------------------------------------
@@ -1209,7 +1297,7 @@ function updateMechanicAnims(view: ViewState, next: SimState, dt: number): void 
     if (g.t > 1) view.gateAnims.delete(k);
   }
   for (const sw of view.level.switches) {
-    const pressed = next.switches[sw.id] === true;
+    const pressed = next.switches[sw.id] === true || view.timeSec < (view.plateClicks.get(sw.id) ?? -Infinity);
     tween(view.switchAnims, sw.id, pressed ? 1 : 0, pressed ? SWITCH_PRESS_RATE : SWITCH_RELEASE_RATE, dt);
   }
   for (const r of view.level.rects) {

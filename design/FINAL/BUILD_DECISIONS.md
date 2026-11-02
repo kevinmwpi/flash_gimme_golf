@@ -211,9 +211,22 @@ a plate reacts late and a ball rolling over a button does nothing, which reads a
 - A plate is PRESSED by any non-sunk ball whose centre x is over it and whose ground is the plate's own surface (a
   terrain piece, or the deck rect for a deck plate), rolling, bouncing or resting. It goes down on CONTACT (bottom
   within `SWITCH_CONTACT_TOLERANCE`).
-- Once down it STAYS down while a ball over it is at most `PLATE_HOLD_HEIGHT_PX` (56) above it, so landing bounces and
-  stall taps never flicker the door; it comes UP the tick no ball is on it. No latching: holding a door open for a
-  partner still means staying on the plate.
+- Once down it STAYS down while a ball over it is at most `PLATE_HOLD_HEIGHT_PX` (56) above it, so vertical landing
+  hops and stall taps never lift it (measured: a straight-up tap holds every plate up to power 41); it comes UP the
+  tick no ball is on it. No latching: holding a door open for a partner still means staying on the plate.
+- A ball that ROCKS sideways in a plate's dish leaves the plate's x-range and lets it up: 77 % of plate landings
+  press their plate 2-4 times before settling, and the door follows. That is the honest physics of the rule and is
+  kept in the sim: holding the press sideways over the dish ramps would let Two Doors' ball hold its own door open
+  up the ramp that ends at the door face, and a release delay long enough to cover rocking (p90 48 ticks) is longer
+  than the 6-10 ticks a passing ball needs to reach its door. Gameplay is unaffected: hand-offs and the WAITING
+  rule only ever look at settled balls.
+- Presentation (amends VISUAL.md §4/§13, AUDIO.md and UX.md §9.3; `src/view/plates.ts` classifies every press for
+  view and audio alike): the plate cap, lamp and the way it drives react on contact (a fresh press also gets ink
+  sparks); the words `<PLATE> HELD`, DOOR/BRIDGE OPEN and SHUT/GONE, SNAP!/FREE!, the confirm chime and the door
+  and bridge slides come only for a LASTING change (a ball comes to rest on the plate, or the cup holds it); a
+  newer callout about the same door or ball replaces the old one. The HOLDS chip and the CAUGHT/LOADED chip read
+  only resting balls (what the WAITING rule decides). The holder tip may name deck plates, since a stall tap on a
+  deck now keeps the bridge up. Copy: 'Any ball on it presses it. Stay on it to keep it down.'
 - Consequences accepted with it: a ball rolling across a plate opens its door or bridge while it passes (never long
   enough to let itself through: every plate ends 28-50 px before its own door); a loaded ball fires the moment any
   ball touches a FIRE plate; a release plate frees a caught ball only while a ball is on it (a rescue must still

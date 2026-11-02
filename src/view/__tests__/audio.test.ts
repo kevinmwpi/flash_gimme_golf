@@ -3,8 +3,11 @@
 // ARCH.md §4 view row (audio debounce) + AUDIO.md §8 item 8 and §11 (Worlds 2-3), under a stubbed AudioContext.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { campaignFrom, levelsOfWorld, WORLD1_IDS, WORLD_IDS } from '../../sim/levels';
+import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
+import { level as skyBridge } from '../../sim/levels/w3-10-sky-bridge';
+import { level as grandMachine } from '../../sim/levels/w3-12-grand-machine';
 import { createSim, isShotReady, stepSim } from '../../sim/sim';
-import { BALL_RADIUS, DT } from '../../sim/types';
+import { AIM_ANGLE_MAX, BALL_RADIUS, DT } from '../../sim/types';
 import type { BallState, Level, LevelRectKind, PlayerId, SimConfig, SimEvent, SimEventType, SimState, Vec, WorldId } from '../../sim/types';
 import { createAudio, MUSIC_TRACKS, type AudioSystem, type Sfx, type SfxName } from '../audio';
 
@@ -216,6 +219,14 @@ const skippedAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'turn
 const againAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'turnStart', tick, playerId, readyInTicks: 27, sameAsBefore: true });
 const cannonFireAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'cannonFire', tick, playerId, pos: P0, rectId: 'cannon', launch: { x: 400, y: -700 } });
 const bridgeToggleOf = (kind: LevelRectKind, tick = 1): SimEvent => ({ type: 'bridgeToggle', tick, rectId: `${kind}-1`, kind, active: true, switchId: 'a' });
+/** Two Doors' DOOR (a blocker: active = shut) as the sim toggles it. */
+const doorToggle = (tick: number, active: boolean): SimEvent => ({ type: 'bridgeToggle', tick, rectId: 'door-gate', kind: 'blocker', active, switchId: 'door' });
+
+function plateOf(level: Level, id: string): Level['switches'][number] {
+  const sw = level.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error(`${level.id} has no plate ${id}`);
+  return sw;
+}
 
 /** Every ball-owned event a trap, a cannon or the watchdog adds (D10.4), built for one ball, and the voice it must reach. */
 const DEVICE_VOICES: ReadonlyArray<{ readonly voice: keyof Sfx; readonly make: (playerId: PlayerId) => SimEvent }> = [
@@ -451,29 +462,94 @@ describe('audio with a stubbed AudioContext', () => {
     expect(melody(ding)).toEqual([[RED_NOTE, Math.round((returnedAt + 0.35) * 1000)]]);
   });
 
-  it('bridgeToggle slides only for rects that appear or vanish (bridge, door, fan), never for a trap or a cannon', () => {
+  it('D11: a door slides only when its change lasts: never for a ball passing over its plate, once when a ball settles there, back when it leaves', () => {
     const audio = createAudio({ seed: 1 });
     audio.unlock();
-    for (const kind of ['bridge', 'blocker', 'fan'] as const) {
-      settleVoices();
-      expect(voicesDuring(() => audio.handleEvents([bridgeToggleOf(kind)], 0)), kind).toBe(1);
-    }
-    for (const kind of ['trap', 'cannon', 'sand', 'spring', 'bumper', 'colourGate'] as const) {
-      settleVoices();
-      expect(voicesDuring(() => audio.handleEvents([bridgeToggleOf(kind)], 0)), kind).toBe(0);
-    }
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const press = vi.spyOn(audio.sfx, 'switchOn');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    audio.handleEvents([levelStartOf(twoDoors.id, 0)], 0);
+    // a ball rolls across the DOOR plate: a click down, a bare tick up, and the door's flick is silent
+    audio.handleEvents([{ type: 'switchOn', tick: 10, switchId: 'door', byPlayer: 0, pos: top }, doorToggle(10, false)], 0);
+    audio.handleEvents([{ type: 'switchOff', tick: 20, switchId: 'door', pos: top }, doorToggle(20, true)], 0);
+    expect(slide).not.toHaveBeenCalled();
+    expect(press.mock.calls.map(([o]) => o)).toEqual([expect.objectContaining({ chime: false })]);
+    expect(lift.mock.calls.map(([o]) => o)).toEqual([expect.objectContaining({ chime: false })]);
+    // a ball lands on it: the click as it touches, then the HELD confirm and the door's slide when it rests
+    audio.handleEvents([{ type: 'switchOn', tick: 100, switchId: 'door', byPlayer: 0, pos: top }, doorToggle(100, false)], 0);
+    expect(slide).not.toHaveBeenCalled();
+    audio.handleEvents([{ type: 'ballRest', tick: 130, playerId: 0, pos: { x: top.x, y: top.y - BALL_RADIUS }, onPermanentGround: true }], 0);
+    expect(slide.mock.calls).toEqual([[false, expect.objectContaining({ playerId: 'door-gate' })]]);
+    expect(press).toHaveBeenLastCalledWith(expect.objectContaining({ click: false, playerId: 'door' }));
+    // it leaves: the falling confirm and the door's slide shut
+    audio.handleEvents([{ type: 'switchOff', tick: 300, switchId: 'door', pos: top }, doorToggle(300, true)], 0);
+    expect(slide).toHaveBeenLastCalledWith(true, expect.objectContaining({ playerId: 'door-gate' }));
+    expect(lift.mock.lastCall?.[0]?.chime).toBeUndefined();
   });
 
-  it("L10's chain reaction keeps every cue: plate, bridge and the cannon fired one tick later", () => {
+  it("D11: a trap's or a cannon's state never slides, and an unknown rect is ignored", () => {
     const audio = createAudio({ seed: 1 });
     audio.unlock();
-    const chain: SimEvent[] = [
-      { type: 'ballRest', tick: 40, playerId: 0, pos: P0, onPermanentGround: true },
-      { type: 'switchOn', tick: 40, switchId: 'a', byPlayer: 0, pos: P0 },
-      bridgeToggleOf('bridge', 40),
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    audio.handleEvents([levelStartOf(grandMachine.id, 0)], 0);
+    const devices = grandMachine.rects.filter((r) => r.kind === 'trap' || r.kind === 'cannon');
+    expect(devices.length).toBeGreaterThanOrEqual(2);
+    for (const r of devices) audio.handleEvents([{ type: 'bridgeToggle', tick: 5, rectId: r.id, kind: r.kind, active: true, switchId: 'top' }], 0);
+    for (const kind of ['bridge', 'blocker', 'fan', 'sand', 'spring', 'bumper', 'colourGate'] as const) audio.handleEvents([bridgeToggleOf(kind, 6)], 0);
+    expect(slide).not.toHaveBeenCalled();
+  });
+
+  it("L10's chain under D11: red's touch on A clicks and BOOMs at once; A's confirm and the bridge's slide wait for its rest", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const a = plateOf(skyBridge, 'a');
+    const top = { x: a.x + a.w / 2, y: a.surfaceY };
+    audio.handleEvents([levelStartOf(skyBridge.id, 0)], 0);
+    settleVoices();
+    const touch: SimEvent[] = [
+      { type: 'switchOn', tick: 40, switchId: 'a', byPlayer: 0, pos: top },
+      { type: 'bridgeToggle', tick: 40, rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' },
       cannonFireAt(41, 1),
     ];
-    expect(voicesDuring(() => audio.handleEvents(chain, 0))).toBe(4);
+    // the plate's click and the cannon's thoom
+    expect(voicesDuring(() => audio.handleEvents(touch, 0))).toBe(2);
+    settleVoices();
+    // the roll-stop, A's confirm and the bridge's slide
+    expect(voicesDuring(() => audio.handleEvents([{ type: 'ballRest', tick: 70, playerId: 0, pos: { x: top.x, y: top.y - BALL_RADIUS }, onPermanentGround: true }], 0))).toBe(3);
+  });
+
+  it('D11 on the real sim: a ball rolling across the DOOR plate and rocking back onto it slides the door once and confirms once, when it settles', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const press = vi.spyOn(audio.sfx, 'switchOn');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const start = createSim({ playerCount: 2, levelIds: [twoDoors.id], seed: 7, mode: 'local' });
+    const intro = stepSim(start.state, [{ type: 'continue', playerId: 0 }]);
+    audio.handleEvents([...start.events, ...intro.events], 0);
+    // red rolls flat out from its tee (the plates.test.ts line): across the plate, off the shut door, back, settles on it
+    let r = stepSim(intro.state, [
+      { type: 'setAim', playerId: 0, angle: AIM_ANGLE_MAX, power: 100 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const events: SimEvent[] = [...r.events];
+    audio.handleEvents(r.events, 0);
+    for (let i = 0; i < 1200 && r.state.phase === 'flying'; i += 1) {
+      context().currentTime += DT;
+      r = stepSim(r.state, []);
+      events.push(...r.events);
+      audio.handleEvents(r.events, 0);
+    }
+    const presses = events.filter((e) => e.type === 'switchOn' && e.switchId === 'door').length;
+    expect(presses).toBeGreaterThanOrEqual(2);
+    expect(r.state.switches.door).toBe(true);
+    expect(slide.mock.calls).toEqual([[false, expect.objectContaining({ playerId: 'door-gate' })]]);
+    expect(press.mock.calls.filter(([o]) => o?.chime === false)).toHaveLength(presses);
+    expect(press.mock.calls.filter(([o]) => o?.click === false)).toHaveLength(1);
+    expect(lift.mock.calls.every(([o]) => o?.chime === false)).toBe(true);
+    expect(lift).toHaveBeenCalledTimes(presses - 1);
   });
 
   it('setFan(false) stops the loop even while the context is suspended (leaving a game, NEXT_STEPS #6)', async () => {
@@ -887,10 +963,13 @@ function introducing(mechanic: 'trap' | 'cannon'): Level {
   return level;
 }
 
-/** The hole on its own, intro dismissed: red (slot 0) to play. */
-function onHole(level: Level): SimState {
+/** The hole on its own, intro dismissed: red (slot 0) to play. Like GameCanvas, the audio hears the start (its levelStart included). */
+function onHole(level: Level, audio?: AudioSystem): SimState {
   const config: SimConfig = { playerCount: 2, levelIds: [level.id], seed: 7, mode: 'local' };
-  return stepSim(createSim(config).state, [{ type: 'continue', playerId: 0 }]).state;
+  const start = createSim(config);
+  const intro = stepSim(start.state, [{ type: 'continue', playerId: 0 }]);
+  audio?.handleEvents([...start.events, ...intro.events], 0);
+  return intro.state;
 }
 
 /** A crafted flight: the shooter `slot` drops from `pos` at rest speed; the other ball stays where it is. */
@@ -922,7 +1001,7 @@ const ofType = (events: readonly SimEvent[], type: SimEventType): SimEvent[] => 
 describe('the shipped World 2 devices reach their voices through the real sim', () => {
   beforeEach(installFakeContext);
 
-  it("Booby Trap: SNAP!, then a skipped turn (red's muffled note, blue's ding), then FREE! with its chime", () => {
+  it("Booby Trap: SNAP!, then a skipped turn (red's muffled note, blue's ding), then FREE! with its chime once blue settles on FREE", () => {
     const level = introducing('trap');
     const trap = level.rects.find((r) => r.kind === 'trap');
     const release = level.switches.find((sw) => sw.id === trap?.switchIds?.[0]);
@@ -932,10 +1011,11 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
     const caught = vi.spyOn(audio.sfx, 'trapCaught');
     const freed = vi.spyOn(audio.sfx, 'trapFreed');
 
-    // red drops into the armed jaws: caught, so blue shoots next
-    const snap = flyInto(audio, dropping(onHole(level), 0, { x: trap.x + trap.w / 2, y: trap.y + BALL_RADIUS }));
+    // red drops into the armed jaws: caught (the whole snap and clink), so blue shoots next
+    const snap = flyInto(audio, dropping(onHole(level, audio), 0, { x: trap.x + trap.w / 2, y: trap.y + BALL_RADIUS }));
     expect(ofType(snap.events, 'trapCaught')).toMatchObject([{ playerId: 0, rectId: trap.id }]);
-    expect(caught).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0 }));
+    expect(caught.mock.calls).toEqual([[expect.objectContaining({ playerId: 0 })]]);
+    expect(caught.mock.calls[0]?.[0]?.chime).toBeUndefined();
     expect(snap.state.activePlayer).toBe(1);
 
     // blue's flight ends anywhere free: red is passed over, blue shoots again, and still hears its ding
@@ -951,11 +1031,22 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
       [BLUE_NOTE, at + 120],
     ]);
 
-    // blue lands on the release plate: red is freed where it sits (the turn passes on the next tick, ARCH R5)
+    // blue lands on the release plate (D11): red's jaws spring open as blue touches it, a quiet latch, and the FREE
+    // chime waits until blue settles there and holds it (the turn passes on the next tick, ARCH R5)
     settleVoices();
-    flyInto(audio, dropping(skip.state, 1, { x: release.x + release.w / 2, y: release.surfaceY - BALL_RADIUS - 4 }));
-    expect(freed).toHaveBeenCalledTimes(1);
-    expect(freed).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0, chime: true }));
+    const freeing = flyInto(audio, dropping(skip.state, 1, { x: release.x + release.w / 2, y: release.surfaceY - BALL_RADIUS - 4 }));
+    const [touch] = ofType(freeing.events, 'trapFreed');
+    const blueRest = freeing.events.find((e) => e.type === 'ballRest' && e.playerId === 1);
+    expect(touch).toMatchObject({ playerId: 0, rectId: trap.id });
+    expect((blueRest?.tick ?? 0) - (touch?.tick ?? 0)).toBeGreaterThan(0);
+    expect(freed.mock.calls.map(([o]) => o)).toEqual([
+      expect.objectContaining({ playerId: 0, chime: false }),
+      expect.objectContaining({ playerId: 0, click: false }),
+    ]);
+    // the late chime really sounds: E5 then A5, 80 ms apart, with no latch under it
+    const chime = FakeAudioContext.created.filter((o) => o.type === 'triangle' && (pitchOf(o) === 659.25 || pitchOf(o) === 880));
+    expect(chime.map(pitchOf).slice(-2)).toEqual([659.25, 880]);
+    expect(Math.round(((chime.at(-1)?.startAt ?? 0) - (chime.at(-2)?.startAt ?? 0)) * 1000)).toBe(80);
   });
 
   it('Load & Fire: LOADED! on the cold breech, then BOOM! the tick after the partner lands on FIRE, never the boing', () => {
@@ -970,7 +1061,7 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
     const spring = vi.spyOn(audio.sfx, 'spring');
     const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
 
-    const loaded = flyInto(audio, dropping(onHole(level), 0, { x: cannon.x + cannon.w / 2, y: cannon.y - BALL_RADIUS - 4 }));
+    const loaded = flyInto(audio, dropping(onHole(level, audio), 0, { x: cannon.x + cannon.w / 2, y: cannon.y - BALL_RADIUS - 4 }));
     expect(ofType(loaded.events, 'cannonLoad')).toMatchObject([{ playerId: 0, rectId: cannon.id }]);
     expect(load).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0 }));
 

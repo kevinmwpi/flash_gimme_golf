@@ -161,7 +161,14 @@ describe('device callouts (D10)', () => {
       return view.callouts[view.callouts.length - 1]?.text;
     };
     expect(say(ev('trapCaught', { playerId: 0, pos, rectId: 'snare' }))).toBe('SNAP!');
-    expect(say(ev('trapFreed', { playerId: 0, pos, rectId: 'snare' }))).toBe('FREE!');
+    // D11: blue rolling onto FREE lets red go only while it is on the plate, so FREE! waits until blue settles there
+    const freeDown = { ...state, switches: { ...state.switches, free: true } };
+    applySimEvents(view, [ev('switchOn', { switchId: 'free', byPlayer: 1, pos: { x: 350, y: 600 } }, 20), ev('trapFreed', { playerId: 0, pos, rectId: 'snare' }, 20)], freeDown);
+    expect(view.callouts.map((c) => c.text)).toEqual(['SNAP!']);
+    applySimEvents(view, [ev('ballRest', { playerId: 1, pos: { x: 350, y: 588 }, onPermanentGround: true }, 40)], freeDown);
+    // the newer word about red's jaws replaces SNAP!
+    expect(view.callouts.map((c) => c.text)).toEqual(['FREE HELD', 'FREE!']);
+    expect(view.callouts.find((c) => c.text === 'FREE!')?.worldPos).toEqual(pos);
     expect(say(ev('trapReturn', { playerId: 0, pos, respawnPos: { x: 100, y: 588 }, strokes: 2, toTee: false }))).toBe('BACK +1');
     expect(say(ev('trapReturn', { playerId: 0, pos, respawnPos: { x: 100, y: 588 }, strokes: 3, toTee: true }))).toBe('BACK TO TEE +1');
     const breech = { x: 1200, y: 603 };
@@ -202,33 +209,54 @@ describe('device callouts (D10)', () => {
     expect(calm.shake.t).toBe(0);
   });
 
-  it('a device moment is never pushed out by a switch or bridge callout (L10: A HELD + BRIDGE OPEN + BOOM! keeps BOOM!)', () => {
+  it('a device moment is never pushed out by a switch or bridge callout (L10: BOOM! as red touches A outlives A HELD + BRIDGE OPEN at its rest)', () => {
     const state = stateOn(skyBridge, { activePlayer: 0 });
     const view = createViewState(skyBridge, state);
     const texts = (): string[] => view.callouts.map((c) => c.text);
     const a = switchOf(skyBridge, 'a');
-    applySimEvents(view, [ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 730, y: 404 } }), ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' })], state);
-    expect(texts()).toEqual([`SWITCH ${a.label} HELD`, 'BRIDGE OPEN']);
-    applySimEvents(view, [ev('cannonFire', { playerId: 1, pos: { x: 100, y: 588 }, rectId: 'cannon', launch: rectOf(skyBridge, 'cannon').launch })], state);
-    expect(texts()).toEqual(['BRIDGE OPEN', 'BOOM!']);
-    applySimEvents(view, [ev('switchOn', { switchId: 'b', byPlayer: 1, pos: { x: 1685, y: 404 } })], state);
+    const b = switchOf(skyBridge, 'b');
+    const top = (sw: typeof a): { x: number; y: number } => ({ x: sw.x + sw.w / 2, y: sw.surfaceY });
+    const restOn = (sw: typeof a): { x: number; y: number } => ({ x: sw.x + sw.w / 2, y: sw.surfaceY - BALL_RADIUS });
+    const aDown = { ...state, switches: { ...state.switches, a: true } };
+    const bothDown = { ...state, switches: { ...state.switches, a: true, b: true } };
+    // red touches A (D11): the bridge rises and the loaded blue fires at once; only the device speaks
+    applySimEvents(view, [ev('switchOn', { switchId: 'a', byPlayer: 0, pos: top(a) }), ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' })], aDown);
+    expect(texts()).toEqual([]);
+    applySimEvents(view, [ev('cannonFire', { playerId: 1, pos: { x: 100, y: 588 }, rectId: 'cannon', launch: rectOf(skyBridge, 'cannon').launch }, 11)], aDown);
+    expect(texts()).toEqual(['BOOM!']);
+    // red comes to rest on A: SWITCH A HELD, then BRIDGE OPEN, which pushes out the HELD, never the BOOM!
+    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: restOn(a), onPermanentGround: true }, 40)], aDown);
+    expect(texts()).toEqual(['BOOM!', 'BRIDGE OPEN']);
+    expect(a.label).toBe('A');
+    // blue lands on B and rests there: the bridge was announced already, so only SWITCH B HELD
+    applySimEvents(view, [ev('switchOn', { switchId: 'b', byPlayer: 1, pos: top(b) }, 90), ev('ballRest', { playerId: 1, pos: restOn(b), onPermanentGround: true }, 120)], bothDown);
     expect(texts()).toEqual(['BOOM!', 'SWITCH B HELD']);
-    applySimEvents(view, [ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: false, switchId: 'b' })], state);
+    // both leave: the bridge goes for good
+    applySimEvents(
+      view,
+      [ev('switchOff', { switchId: 'a', pos: top(a) }, 200), ev('switchOff', { switchId: 'b', pos: top(b) }, 200), ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: false, switchId: 'b' }, 200)],
+      state,
+    );
     expect(texts()).toEqual(['BOOM!', 'BRIDGE GONE']);
-    applySimEvents(view, [ev('trapCaught', { playerId: 0, pos: { x: 730, y: 404 }, rectId: 'cannon' })], state);
+    applySimEvents(view, [ev('trapCaught', { playerId: 0, pos: restOn(a), rectId: 'cannon' }, 210)], state);
     expect(texts()).toEqual(['BOOM!', 'SNAP!']);
-    applySimEvents(view, [ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 730, y: 404 } })], state);
+    applySimEvents(view, [ev('switchOn', { switchId: 'a', byPlayer: 0, pos: top(a) }, 300), ev('ballRest', { playerId: 0, pos: restOn(a), onPermanentGround: true }, 330)], aDown);
     expect(texts()).toEqual(['BOOM!', 'SNAP!']);
-    applySimEvents(view, [ev('sink', { playerId: 0, pos: { x: 1875, y: 400 }, strokes: 3, speed: 90 })], state);
+    applySimEvents(view, [ev('sink', { playerId: 0, pos: { x: 1875, y: 400 }, strokes: 3, speed: 90 }, 400)], aDown);
     expect(texts()).toEqual(['SNAP!', 'IN THE HOLE!']);
   });
 
   it('a launcher landing on a plate in a sand bowl stacks FIRE HELD above SAND… for its whole life, never over it (L7 far side)', () => {
     const state = stateOn(loadAndFire);
     const view = followView(loadAndFire, state, 680);
+    const far = switchOf(loadAndFire, 'fire-far');
     applySimEvents(view, [ev('enterSand', { playerId: 0, pos: { x: 1610, y: 392 }, rectId: 'landing' })], state);
+    // D11: the plate goes down as the ball rolls onto it; FIRE HELD comes once it rests there, a moment later
+    const farDown = { ...state, switches: { ...state.switches, 'fire-far': true } };
+    applySimEvents(view, [ev('switchOn', { switchId: 'fire-far', byPlayer: 0, pos: { x: far.x + far.w / 2, y: far.surfaceY } }, 11)], farDown);
+    expect(view.callouts.map((c) => c.text)).toEqual(['SAND…']);
     view.timeSec += 0.25;
-    applySimEvents(view, [ev('switchOn', { switchId: 'fire-far', byPlayer: 0, pos: { x: 1640, y: 398 } })], state);
+    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: { x: 1640, y: far.surfaceY - BALL_RADIUS }, onPermanentGround: true }, 26)], farDown);
     const centres = (): Map<string, { x: number; y: number }> => {
       const { ctx, calls } = recorder();
       drawCallouts(ctx, view, (p) => worldToScreen(view, p));

@@ -225,7 +225,7 @@ describe('view state: balls', () => {
 });
 
 describe('view state: callouts, golfers, anims', () => {
-  it('builds callouts for gimme / sink / fellOffWorld / hazardBlock / nearCup / switch events (max 2 alive)', () => {
+  it('builds callouts for gimme / sink / fellOffWorld / hazardBlock / nearCup events (max 2 alive)', () => {
     const state = stateFor(mechanicsLevel);
     const view = createViewState(mechanicsLevel, state);
     const pos = { x: 500, y: 588 };
@@ -240,10 +240,49 @@ describe('view state: callouts, golfers, anims', () => {
     expectCallout(ev('fellOffWorld', { playerId: 0, pos, respawnPos: pos, strokes: 3 }), 'OUT! +1');
     expectCallout(ev('hazardBlock', { playerId: 1, pos, rectId: 'red-field', colour: 'red' }), 'LOCKED!');
     expectCallout(ev('nearCup', { playerId: 0, pos, distance: 60 }), 'SO CLOSE');
-    expectCallout(ev('switchOn', { switchId: 'a', byPlayer: 0, pos }), 'SWITCH A HELD');
-    expectCallout(ev('switchOn', { switchId: 'deck', byPlayer: 0, pos }), 'DECK HELD');
-    expectCallout(ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }), 'DOOR OPEN');
-    expectCallout(ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }), 'BRIDGE OPEN');
+  });
+
+  it('a plate says HELD, and its door and bridge OPEN, when a ball comes to REST on it, not when one touches it (D11)', () => {
+    const state = stateFor(mechanicsLevel);
+    const view = createViewState(mechanicsLevel, state);
+    const texts = (): string[] => view.callouts.map((c) => c.text);
+    const onA = { x: 415, y: GROUND_Y - BALL_RADIUS };
+    const aDown = { ...state, switches: { a: true, deck: false } };
+    // a ball touches A: the plate, the door and the bridge move, nothing is said
+    applySimEvents(
+      view,
+      [
+        ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 415, y: GROUND_Y } }),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }),
+      ],
+      aDown,
+    );
+    expect(texts()).toEqual([]);
+    // it comes to rest there: SWITCH A HELD, then the ways it keeps open (two at most alive: the newest win)
+    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: onA, onPermanentGround: true }, 30)], aDown);
+    expect(texts()).toEqual(['BRIDGE OPEN', 'DOOR OPEN']);
+    // the holder leaves: the hold is over, the bridge goes and the door shuts at once
+    applySimEvents(
+      view,
+      [
+        ev('switchOff', { switchId: 'a', pos: { x: 415, y: GROUND_Y } }, 50),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: false, switchId: 'a' }, 50),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: true, switchId: 'a' }, 50),
+      ],
+      state,
+    );
+    expect(texts()).toEqual(['BRIDGE GONE', 'DOOR SHUT']);
+  });
+
+  it('a ball settling on a plate that is already down (its ways open) says only HELD: SWITCH A HELD, DECK HELD', () => {
+    // both plates down (balls rolling on them), the bridge up and the door open: nothing left to announce but the holds
+    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true } });
+    const view = createViewState(mechanicsLevel, state);
+    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: { x: 415, y: GROUND_Y - BALL_RADIUS }, onPermanentGround: true }, 30)], state);
+    expect(view.callouts.map((c) => c.text)).toEqual(['SWITCH A HELD']);
+    applySimEvents(view, [ev('ballRest', { playerId: 1, pos: { x: 800, y: 601 - BALL_RADIUS }, onPermanentGround: false }, 31)], state);
+    expect(view.callouts.map((c) => c.text)).toEqual(['SWITCH A HELD', 'DECK HELD']);
   });
 
   it('turnStart walks the active golfer to 42 px behind its ball, facing the shot direction', () => {

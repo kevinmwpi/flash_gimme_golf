@@ -211,7 +211,7 @@ export const COPY = Object.freeze({
       keyboard: '…Space to shoot',
       gamepad: '…Ⓐ to shoot',
     }),
-    step3: 'A resting ball keeps a switch pressed — hold it for your partner.',
+    step3: 'A ball on a switch keeps it pressed — stay on it for your partner.',
     passive: (p: PlayerId) => `${nameOf(p)} goes first — you'll get the same prompt on your turn`,
     gotIt: 'Got it',
   }),
@@ -360,16 +360,19 @@ export const COPY = Object.freeze({
   }),
 });
 
-/** Intro-card and title-tray one-liners per mechanic (UX.md §9.3). */
+/**
+ * Intro-card and title-tray one-liners per mechanic (UX.md §9.3). Plates follow BUILD_DECISIONS D11: any ball on a
+ * plate presses it, rolling across included, and only a ball that stays on it keeps it down.
+ */
 export const MECHANIC_COPY: Readonly<Record<MechanicKind, { name: string; blurb: string }>> = Object.freeze({
   sand: { name: 'SAND', blurb: 'Slows the ball and kills the bounce.' },
   spring: { name: 'SPRING', blurb: 'Lands you here, throws you up.' },
   bumper: { name: 'BUMPER', blurb: 'Bounces the ball away hard.' },
   fan: { name: 'FAN', blurb: 'Lifts anything that flies through it.' },
   colourGate: { name: 'COLOUR GATE', blurb: 'Only the matching ball passes; the other bounces off.' },
-  switch: { name: 'PRESSURE SWITCH', blurb: 'A resting ball holds it down. Leave, and it releases.' },
-  bridge: { name: 'BRIDGE', blurb: 'Exists only while its switch is held.' },
-  blocker: { name: 'GATE', blurb: 'Vanishes while its switch is held.' },
+  switch: { name: 'PRESSURE SWITCH', blurb: 'Any ball on it presses it. Stay on it to keep it down.' },
+  bridge: { name: 'BRIDGE', blurb: 'Exists only while its switch is pressed.' },
+  blocker: { name: 'GATE', blurb: 'Vanishes while its switch is pressed.' },
   trap: { name: 'TRAP', blurb: 'Stop in its jaws and you wait for your partner.' },
   cannon: { name: 'CANNON', blurb: 'Rest inside it; a ball on FIRE shoots you across.' },
 });

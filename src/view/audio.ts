@@ -5,10 +5,13 @@
  * sound is synthesized (oscillators, one shared noise buffer, ADSR envelopes); no asset files.
  * audio.ts owns the persistence of `flashgolf.audio.*` (D4) and is a safe no-op without AudioContext.
  * Worlds 2-3 (BUILD_DECISIONS D10.11, AUDIO.md §11): trap / cannon / reset / skip voices and one bed per world.
+ * Plates (D11): a plate clicks the moment a ball touches it; its HELD confirm and the slide of the door or bridge it
+ * drives wait until the press lasts (plates.ts), so a ball rolling across or rocking in a plate's dish never rattles.
  */
 import { hasLevel, levelById } from '../sim/levels';
 import type { BounceSurface, LevelRectKind, Medal, PlayerId, SimEvent, WorldId } from '../sim/types';
 import { DT, MAX_POWER } from '../sim/types';
+import { createPlateTracker, type PlateMoment } from './plates';
 
 declare global {
   interface Window {
@@ -63,7 +66,10 @@ export interface SfxOpts {
   at?: number;
   playerId?: PlayerId | string;
   volume?: number;
+  /** false drops a voice's melodic part: the plate's click without its HELD confirm, the trap's latch without its chime. */
   chime?: boolean;
+  /** false drops a plate voice's mechanical click, leaving its confirm notes (a press that lasts, BUILD_DECISIONS D11). */
+  click?: boolean;
   sameAsBefore?: boolean;
 }
 export interface FilterOpts {
@@ -245,9 +251,14 @@ const TURN_SKIP_LEAD_SEC = 0.12;
 const TRAP_RETURN_LEAD_SEC = 0.35;
 /** Old pad fade on a world track change; the new pad's 1.2 s attack overlaps it. */
 const TRACK_XFADE_SEC = 0.8;
-/** bridgeToggle kinds voiced with the wooden slide: rects that appear or vanish. Trap and cannon state changes are
- *  voiced by their own events and the plate's confirm (the sim no longer emits bridgeToggle for them; kept as a guard). */
+/** Way kinds voiced with the wooden slide: rects that appear or vanish. Trap and cannon state changes are voiced by
+ *  their own events and the plate's confirm (the sim emits no bridgeToggle for them, and plates.ts no way moment). */
 const SLIDE_KINDS: ReadonlySet<LevelRectKind> = new Set<LevelRectKind>(['bridge', 'blocker', 'fan']);
+/**
+ * BUILD_DECISIONS D11: a ball rocking in a plate's dish re-presses it (and a ball passing over lets it up) without the
+ * press lasting; those clicks sound at this volume, so the same landing never rattles at full level.
+ */
+const PLATE_FLICK_VOLUME = 0.6;
 
 type Poly = { max: number; minMs: number };
 type PolyName =
@@ -286,7 +297,9 @@ type PolyName =
   | 'cannonLoad'
   | 'cannonFire'
   | 'turnSkipped'
-  | 'flightTimeout';
+  | 'flightTimeout'
+  | 'plateHeld'
+  | 'trapChime';
 
 /** Per-SFX polyphony: max simultaneous voices (per name) and minimum retrigger interval (ms, per key). */
 const POLY: Readonly<Record<PolyName, Poly>> = Object.freeze({
@@ -326,6 +339,10 @@ const POLY: Readonly<Record<PolyName, Poly>> = Object.freeze({
   cannonFire: { max: 2, minMs: 300 },
   turnSkipped: { max: 1, minMs: 300 },
   flightTimeout: { max: 2, minMs: 400 },
+  // the HELD confirm alone (switchOn without its click): its own slot, so a press and its hold on one tick both sound
+  plateHeld: { max: 2, minMs: 250 },
+  // the FREE chime alone (trapFreed without its latch), for a free that comes to last after the jaws sprang
+  trapChime: { max: 2, minMs: 200 },
 });
 
 const C4 = 261.63;
@@ -548,6 +565,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   let suppressUntil = 0;
   let pendingUntil = 0;
   const lastGimmeAt: [number, number] = [-Infinity, -Infinity];
+  /** Which plate presses last (D11), fed every event like the view's own tracker: clicks vs confirms and slides. */
+  const plates = createPlateTracker();
   /** Scheduled time of the last trapReturn: the hand-off cues after it wait TRAP_RETURN_LEAD_SEC (across frames). */
   let lastReturnAt = -Infinity;
   const readyCbs: Array<() => void> = [];
@@ -1005,20 +1024,31 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       if (v === null) return;
       osc(v.out, { type: 'square', freq: 440, freqEnd: 880, glide: 0.06, at: v.at, a: 0.002, d: 0.06, gain: dB(-16), filter: { type: 'lowpass', freq: 2500 } });
     },
+    // The plate (D11): the click is the press, the rising E4-A4 the HELD confirm; `chime: false` is a bare press,
+    // `click: false` a bare confirm (a press that came to last). Called with neither flag, the whole cue as before.
     switchOn(o = {}) {
-      const v = begin('switchOn', o, 0.25);
+      const click = o.click !== false;
+      const chime = o.chime !== false;
+      if (!click && !chime) return;
+      const v = begin(click ? 'switchOn' : 'plateHeld', o, 0.25);
       if (v === null) return;
       const { at, out } = v;
-      noise(out, { at, d: 0.012, gain: dB(-10), filter: { type: 'highpass', freq: 2000, q: 0.7 } });
-      osc(out, { type: 'sine', freq: 140, freqEnd: 70, glide: 0.04, at, a: 0.001, d: 0.05, gain: dB(-12) });
-      osc(out, { type: 'square', freq: E4, at: at + 0.03, a: 0.002, d: 0.05, gain: dB(-14), filter: { type: 'lowpass', freq: 2500 } });
-      osc(out, { type: 'square', freq: A4, at: at + 0.085, a: 0.002, d: 0.08, gain: dB(-12), filter: { type: 'lowpass', freq: 2500 } });
+      if (click) {
+        noise(out, { at, d: 0.012, gain: dB(-10), filter: { type: 'highpass', freq: 2000, q: 0.7 } });
+        osc(out, { type: 'sine', freq: 140, freqEnd: 70, glide: 0.04, at, a: 0.001, d: 0.05, gain: dB(-12) });
+      }
+      if (!chime) return;
+      const notes = click ? at + 0.03 : at;
+      osc(out, { type: 'square', freq: E4, at: notes, a: 0.002, d: 0.05, gain: dB(-14), filter: { type: 'lowpass', freq: 2500 } });
+      osc(out, { type: 'square', freq: A4, at: notes + 0.055, a: 0.002, d: 0.08, gain: dB(-12), filter: { type: 'lowpass', freq: 2500 } });
     },
+    // The plate lets go: a tick; the falling A4-E4 only when a hold ends (`chime: false` for a ball passing over).
     switchOff(o = {}) {
       const v = begin('switchOff', o, 0.25);
       if (v === null) return;
       const { at, out } = v;
       noise(out, { at, d: 0.01, gain: dB(-13), filter: { type: 'highpass', freq: 1500, q: 0.7 } });
+      if (o.chime === false) return;
       osc(out, { type: 'square', freq: A4, at: at + 0.02, a: 0.002, d: 0.05, gain: dB(-17), filter: { type: 'lowpass', freq: 2200 } });
       osc(out, { type: 'square', freq: E4, at: at + 0.075, a: 0.002, d: 0.08, gain: dB(-15), filter: { type: 'lowpass', freq: 2200 } });
     },
@@ -1176,6 +1206,7 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       if (v === null) return;
       osc(v.out, { type: 'triangle', freq: 600 + 900 * clamp01(power01), at: v.at, a: 0.001, d: 0.012, gain: dB(TUNE.aimTick) });
     },
+    // `chime: false` (jaws that close again on a ball a rescuer only rolled past, D11): the snap without the clink
     trapCaught(o = {}) {
       const v = begin('trapCaught', o, 0.3);
       if (v === null) return;
@@ -1183,22 +1214,31 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       const j = jitterCents(25);
       noise(out, { at, a: 0.001, d: 0.018, gain: dB(-14), filter: { type: 'bandpass', freq: 2600, q: 1.4 } });
       osc(out, { type: 'sine', freq: 190 * j, freqEnd: 95 * j, glide: 0.04, at, a: 0.001, d: 0.05, gain: dB(-13) });
+      if (o.chime === false) return;
       osc(out, { type: 'sine', freq: E6 * j, at: at + 0.03, a: 0.001, d: 0.14, gain: dB(TUNE.trapClink) });
       osc(out, { type: 'sine', freq: C7 * j, at: at + 0.03, a: 0.001, d: 0.08, gain: dB(TUNE.trapClink - 6) });
       osc(out, { type: 'sine', freq: E6 * j, at: at + 0.11, a: 0.001, d: 0.06, gain: dB(TUNE.trapClink - 8) });
     },
+    // the latch is the jaws springing open, the E5-A5 chime the FREE; `click: false` is the chime alone, for a free
+    // that comes to last after the jaws already sprang (a rescuer settling on FREE, D11)
     trapFreed(o = {}) {
+      const latch = o.click !== false;
       const chime = o.chime !== false;
-      const v = begin('trapFreed', o, chime ? 0.45 : 0.2);
+      if (!latch && !chime) return;
+      // the chime alone has its own slot: a rescuer can settle on FREE within 200 ms of the latch it sprang landing
+      const v = begin(latch ? 'trapFreed' : 'trapChime', o, chime ? 0.45 : 0.2);
       if (v === null) return;
       const { at, out } = v;
-      noise(out, { at, d: 0.01, gain: dB(-14), filter: { type: 'highpass', freq: 2200, q: 0.7 } });
-      noise(out, { at, a: 0.005, d: 0.12, gain: dB(-20), filter: { type: 'bandpass', freq: 1500, freqEnd: 4000, sweep: 0.12, q: 2 } });
-      osc(out, { type: 'sine', freq: C7, at: at + 0.01, a: 0.001, d: 0.06, gain: dB(-22) });
+      if (latch) {
+        noise(out, { at, d: 0.01, gain: dB(-14), filter: { type: 'highpass', freq: 2200, q: 0.7 } });
+        noise(out, { at, a: 0.005, d: 0.12, gain: dB(-20), filter: { type: 'bandpass', freq: 1500, freqEnd: 4000, sweep: 0.12, q: 2 } });
+        osc(out, { type: 'sine', freq: C7, at: at + 0.01, a: 0.001, d: 0.06, gain: dB(-22) });
+      }
       if (chime) {
-        // the release plate's E4-A4 confirm an octave up, landing after it
-        osc(out, { type: 'triangle', freq: E5, at: at + 0.14, a: 0.003, d: 0.08, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
-        osc(out, { type: 'triangle', freq: A5, at: at + 0.22, a: 0.003, d: 0.16, gain: dB(-13), filter: { type: 'lowpass', freq: 3000 } });
+        // the release plate's E4-A4 confirm an octave up, landing after it (at once when there is no latch)
+        const notes = latch ? at + 0.14 : at;
+        osc(out, { type: 'triangle', freq: E5, at: notes, a: 0.003, d: 0.08, gain: dB(-14), filter: { type: 'lowpass', freq: 3000 } });
+        osc(out, { type: 'triangle', freq: A5, at: notes + 0.08, a: 0.003, d: 0.16, gain: dB(-13), filter: { type: 'lowpass', freq: 3000 } });
       }
     },
     trapReturn(o = {}) {
@@ -1710,20 +1750,13 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
         sfx.gatePass({ at, playerId: ev.playerId });
         break;
       case 'switchOn':
-        sfx.switchOn({ at, playerId: ev.switchId });
-        break;
       case 'switchOff':
-        sfx.switchOff({ at, playerId: ev.switchId });
-        break;
       case 'bridgeToggle':
-        if (SLIDE_KINDS.has(ev.kind)) sfx.bridgeToggle(ev.active, { at, playerId: ev.rectId });
+        // D11: plates and the ways they drive are voiced from their plate moments (routeMoment)
         break;
       case 'trapCaught':
-        sfx.trapCaught({ at, playerId: ev.playerId });
-        break;
       case 'trapFreed':
-        // freed by the cup starting to hold a release: the hole-out's own chime carries the moment
-        sfx.trapFreed({ at, playerId: ev.playerId, chime: !batch.holeOutTicks.has(ev.tick) });
+        // D11: voiced from their jaws moments (routeMoment), which know whether the catch or the free lasts
         break;
       case 'trapReturn':
         lastReturnAt = Math.max(lastReturnAt, at);
@@ -1790,21 +1823,60 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   }
 
   /**
+   * BUILD_DECISIONS D11 (plates.ts): every press clicks (softer when the same landing rocks back onto the plate), the
+   * HELD confirm and a door's or bridge's slide wait until the press lasts, and a ball passing over lets the plate up
+   * with a bare tick; the falling confirm and the closing slide sound when a hold ends.
+   */
+  function routeMoment(m: PlateMoment, at: number, batch: Batch): void {
+    switch (m.kind) {
+      case 'press':
+        sfx.switchOn({ at, playerId: m.switchId, chime: false, ...(m.fresh ? {} : { volume: PLATE_FLICK_VOLUME }) });
+        break;
+      case 'release':
+        sfx.switchOff({ at, playerId: m.switchId, ...(m.ended ? {} : { chime: false, volume: PLATE_FLICK_VOLUME }) });
+        break;
+      case 'held':
+        sfx.switchOn({ at, playerId: m.switchId, click: false });
+        break;
+      case 'way':
+        if (SLIDE_KINDS.has(m.rectKind)) sfx.bridgeToggle(m.active, { at, playerId: m.rectId });
+        break;
+      case 'jaws':
+        // a catch snaps and clinks; a free latches and chimes, except when the cup frees it (the hole-out's own chime
+        // carries that moment); jaws a rescuer only rolls across snap or latch quietly, and a free that comes to last
+        // later adds just its chime
+        if (m.caught) sfx.trapCaught({ at, playerId: m.playerId, ...(m.lasting ? {} : { chime: false, volume: PLATE_FLICK_VOLUME }) });
+        else if (!m.lasting) sfx.trapFreed({ at, playerId: m.playerId, chime: false, volume: PLATE_FLICK_VOLUME });
+        else if (m.late) sfx.trapFreed({ at, playerId: m.playerId, click: false });
+        else sfx.trapFreed({ at, playerId: m.playerId, chime: !batch.holeOutTicks.has(m.tick) });
+        break;
+    }
+  }
+
+  /**
    * Events from a multi-tick frame are scheduled at base + (tick - firstTick) * DT (capped at 250 ms)
    * so two balls acting on different ticks keep their spacing. `nowMs` is the frame clock (unused by
    * the audio clock, which schedules on ctx.currentTime); `delaySec` aligns online sounds with the
-   * render delay.
+   * render delay. Each event's plate moments sound at its own time, after it.
    */
   function handleEvents(events: readonly SimEvent[], nowMsArg: number, delaySec = 0): void {
     void nowMsArg;
     if (events.length === 0) return;
-    for (const ev of events) trackBed(ev);
+    // bed and plate tracking run before the ready() gate, so a locked context never desyncs them
+    const moments = events.map((ev) => {
+      trackBed(ev);
+      return plates.feed(ev);
+    });
     if (ctx === null || !ready()) return;
     const first = events[0];
     if (first === undefined) return;
     const base = ctx.currentTime + delaySec;
     const batch = batchOf(events);
-    for (const ev of events) routeEvent(ev, base + Math.min(MULTI_TICK_CAP_SEC, (ev.tick - first.tick) * DT), batch);
+    events.forEach((ev, i) => {
+      const at = base + Math.min(MULTI_TICK_CAP_SEC, (ev.tick - first.tick) * DT);
+      routeEvent(ev, at, batch);
+      for (const m of moments[i] ?? []) routeMoment(m, at, batch);
+    });
   }
 
   function dispose(): void {

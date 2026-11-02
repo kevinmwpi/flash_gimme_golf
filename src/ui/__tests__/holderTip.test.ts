@@ -1,12 +1,15 @@
 // OWNER: ui
 // The holder tip names a plate only when a stall tap really keeps the partner's way open (BUILD_DECISIONS D2),
-// and never while a ball waits in a device or for a plate that only drives traps or cannons (D10.10).
+// and never while a ball waits in a device or for a plate that only drives traps or cannons (D10.10). Under D11
+// a stall tap keeps the plate down from the shot to the landing, deck plates included (proved on the real sim).
 import { describe, expect, it } from 'vitest';
 import { GOLDEN_LINES, goldenConfig, type GoldenLine } from '../../sim/__tests__/levels-golden';
+import { waitingOf } from '../../sim/devices';
 import { LEVELS } from '../../sim/levels/index';
-import { runReplay } from '../../sim/sim';
-import { BALL_RADIUS } from '../../sim/types';
-import type { Level, LevelRect, PlayerId, ReplayEntry, SimEvent } from '../../sim/types';
+import { evaluateSwitches } from '../../sim/physics';
+import { runReplay, stepSim } from '../../sim/sim';
+import { BALL_RADIUS, REST_TICKS, quantize4 } from '../../sim/types';
+import type { BallState, Level, LevelRect, PlayerId, ReplayEntry, SimEvent, SimState, Vec } from '../../sim/types';
 import { COPY, switchLabel } from '../copy';
 import { UNKNOWN_SPOTS, advanceSpots, holderTipSwitch, spotsOf, teeSpots, type BallSpot, type Spots } from '../holderTip';
 
@@ -52,6 +55,39 @@ function inDevice(level: Level, id: string): BallSpot {
 const at = (x: number, y = 600): BallSpot => ({ pos: { x, y }, sunk: false, waiting: false });
 const sunk: BallSpot = { pos: { x: 0, y: 0 }, sunk: true, waiting: false };
 const spots = (red: BallSpot | null, blue: BallSpot | null): Spots => [red, blue];
+
+const restingAt = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+
+/**
+ * The tip's own advice on the real sim: `holder` rests on plate `id` (`dx` px off its centre) with the partner on
+ * its tee, and taps straight up at `power`. Returns how often the plate came up during the tap and whether it
+ * is still down when the turn passes. A deck plate needs its bridge up to be stood on, so the plate is seeded down.
+ */
+function stallTap(level: Level, id: string, holder: PlayerId, dx: number, power: number): { lifts: number; downAfter: boolean; waiting: boolean } {
+  const sw = level.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error(`no plate ${id}`);
+  const partner: PlayerId = holder === RED ? BLUE : RED;
+  const mine = restingAt({ x: sw.x + sw.w / 2 + dx, y: sw.surfaceY - BALL_RADIUS });
+  const theirs = restingAt(level.starts[partner]);
+  const balls: [BallState, BallState] = holder === RED ? [mine, theirs] : [theirs, mine];
+  const seeded = Object.fromEntries(level.switches.map((s) => [s.id, s.id === id]));
+  const switches = evaluateSwitches(level, evaluateSwitches(level, seeded, balls), balls);
+  const intro = runReplay(goldenConfig(level.id), [{ tick: 0, cmd: { type: 'continue', playerId: RED } }], 1).state;
+  let state: SimState = { ...intro, balls, switches, activePlayer: holder, turnDelayTicks: 0, phase: 'aiming' };
+  const waiting = waitingOf(level, switches, balls[holder]) !== null;
+  let lifts = 0;
+  let r = stepSim(state, [
+    { type: 'setAim', playerId: holder, angle: quantize4(-Math.PI / 2), power },
+    { type: 'shoot', playerId: holder },
+  ]);
+  for (let i = 0; i < 900; i += 1) {
+    lifts += r.events.filter((e) => e.type === 'switchOff' && e.switchId === id).length;
+    state = r.state;
+    if (state.phase !== 'flying' && state.turnDelayTicks === 0) break;
+    r = stepSim(state, []);
+  }
+  return { lifts, downAfter: state.switches[id] === true, waiting };
+}
 
 /** Replays a log through the real sim and returns every tip the App would show (once per hole). */
 function tipsAlong(levelId: string, log: readonly ReplayEntry[], untilTick: number): { tick: number; slot: PlayerId; plate: string }[] {
@@ -127,20 +163,59 @@ describe('holder tip', () => {
     expect(holderTipSwitch(colourKeys, spots(red, at(door1.x + 10)), RED)).toBe('door1');
   });
 
-  it('Plate & Bridge: plate A matters only while nothing else holds the bridge and blue has not reached it', () => {
+  it('Plate & Bridge: plate A matters only while nothing else holds the bridge and blue has not crossed it', () => {
     const bridge = rect(plateAndBridge, 'bridge', 'near');
     const holder = onPlate(plateAndBridge, 'near');
     expect(holderTipSwitch(plateAndBridge, spots(holder, teeSpots(plateAndBridge)[BLUE]), RED)).toBe('near');
     // Blue parked on the deck or on plate B holds the bridge itself, so red may cross.
     expect(holderTipSwitch(plateAndBridge, spots(holder, onPlate(plateAndBridge, 'deck')), RED)).toBeNull();
     expect(holderTipSwitch(plateAndBridge, spots(holder, onPlate(plateAndBridge, 'far')), RED)).toBeNull();
-    // Blue on the planks outside the deck strip falls whatever red does, so a tap would only waste a stroke.
-    expect(holderTipSwitch(plateAndBridge, spots(holder, at(bridge.x + 10, bridge.y - BALL_RADIUS)), RED)).toBeNull();
+    // Blue across the chasm needs the bridge no more.
+    expect(holderTipSwitch(plateAndBridge, spots(holder, at(bridge.x + bridge.w + 40, 608)), RED)).toBeNull();
   });
 
-  it('a deck plate is never named (a tap releases it and drops the bridge under the tapper)', () => {
-    expect(holderTipSwitch(plateAndBridge, spots(teeSpots(plateAndBridge)[RED], onPlate(plateAndBridge, 'deck')), BLUE)).toBeNull();
+  it('a partner resting on planks that no plate under it holds needs the bridge: a stall tap keeps it up (D11)', () => {
+    // Plate & Bridge without its deck plate: blue on the planks stands on nothing that holds the bridge.
+    const bridge = rect(plateAndBridge, 'bridge', 'near');
+    const bare: Level = {
+      ...plateAndBridge,
+      switches: plateAndBridge.switches.filter((s) => s.onRectId === undefined),
+      rects: plateAndBridge.rects.map((r) => (r.id === bridge.id ? { ...r, switchIds: driversOf(r).filter((id) => id !== 'deck') } : r)),
+    };
+    const planks = at(bridge.x + 10, bridge.y - BALL_RADIUS);
+    expect(holderTipSwitch(bare, spots(onPlate(bare, 'near'), planks), RED)).toBe('near');
+    expect(holderTipSwitch(bare, spots(onPlate(bare, 'near'), at(bridge.x + bridge.w / 2, bridge.y - BALL_RADIUS)), RED)).toBe('near');
+    // Off the planks: below the deck height it is not resting on them (and over the chasm it rests on nothing).
+    expect(holderTipSwitch(bare, spots(onPlate(bare, 'near'), at(bridge.x + bridge.w + 40, 608)), RED)).toBeNull();
+  });
+
+  it('a deck plate is named like any other: a stall tap keeps it down, so the bridge stays under the tapper (D11, real sim)', () => {
+    expect(holderTipSwitch(plateAndBridge, spots(teeSpots(plateAndBridge)[RED], onPlate(plateAndBridge, 'deck')), BLUE)).toBe('deck');
+    // Both on the deck: the partner holds the bridge itself.
     expect(holderTipSwitch(plateAndBridge, spots(onPlate(plateAndBridge, 'deck', 180), onPlate(plateAndBridge, 'deck', -180)), BLUE)).toBeNull();
+    expect(COPY.toast.holderTip(switchLabel(plateAndBridge, 'deck'), RED)).toBe('Stay on the DECK plate for Red — tap straight up at low power');
+    for (const power of [10, 25, 40]) expect(stallTap(plateAndBridge, 'deck', BLUE, 0, power), `power ${power}`).toEqual({ lifts: 0, downAfter: true, waiting: false });
+  });
+
+  it('the stall tap the tip asks for keeps every plate it can name down from the shot to the landing (D11, real sim)', () => {
+    let checked = 0;
+    for (const level of LEVELS) {
+      for (const sw of level.switches) {
+        if (sw.id === level.cupHoldsSwitch) continue;
+        if (!level.rects.some((r) => (r.kind === 'blocker' || r.kind === 'bridge') && driversOf(r).includes(sw.id))) continue;
+        for (const holder of [RED, BLUE] as const) {
+          for (const dx of [-0.45 * sw.w, 0, 0.45 * sw.w]) {
+            for (const power of [10, 40]) {
+              const tap = stallTap(level, sw.id, holder, dx, power);
+              if (tap.waiting) continue; // a caught ball never gets the tip (L9's BAIT seat)
+              expect(tap, `${level.id} ${sw.id} P${holder + 1} dx ${Math.round(dx)} power ${power}`).toEqual({ lifts: 0, downAfter: true, waiting: false });
+              checked += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(50);
   });
 
   it('advanceSpots follows the events: tees, rests, falls and sinks', () => {
@@ -239,7 +314,7 @@ describe('holder tip', () => {
   it('every tippable plate opens a door or raises a bridge, and every other plate consumer is a device (the rule assumes it; a new level must not break it silently)', () => {
     for (const level of LEVELS) {
       for (const sw of level.switches) {
-        if (sw.id === level.cupHoldsSwitch || sw.onRectId !== undefined) continue;
+        if (sw.id === level.cupHoldsSwitch) continue;
         for (const r of level.rects) {
           if (!driversOf(r).includes(sw.id)) continue;
           const opensDoor = r.kind === 'blocker' && r.activeWhen !== true;

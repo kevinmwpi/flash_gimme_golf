@@ -26,6 +26,8 @@ src/net/
   wsUrl.ts            VITE_WS_URL or same-origin /ws on localhost; null => online hidden
 src/view/             client-only presentation; may use Math.random/performance; never writes SimState
   view.ts             ViewState: camera, particles, trails, shake, golfer anims, callouts, aim preview
+  plates.ts           which plate presses LAST (D11): view and audio both classify every press with it, so
+                      a pass-over clicks the cap but only a lasting hold gets words, chimes and slides
   render/             Canvas 2D in a fixed 1280x720 logical space (world, mechanics, devices: trap jaws and
                       cannons with their predictLaunch arc, parts: shared hardware, surface: terrain
                       queries, entities, aim, text)
@@ -203,7 +205,8 @@ version validation and show a "from an older version" card.
 | `src/view/__tests__/{view,audio}.test.ts` | snap flags on teleports, no interpolation of sunk balls, SFX debounce; every device event's sound, the skip cue, one music bed per world on white keys, the fan stop |
 | `src/view/__tests__/{devices-view,stickers-levels}.test.ts` | jaws, barrels, lamps and arcs follow the switches; device callouts and their priority; the camera follows launched balls; golfers beside waiting balls; every must-label prop on holes 5-12 keeps its sticker under the cap at every follow position |
 | `src/ui/__tests__/{copy,storage,worlds,callouts}.test.ts` | no competitive copy; `fg.v1.*` storage validates ids and survives blocked storage; world picker and continue helpers; skip banner lines |
-| `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; shared plate, deck, bridge planks, doorway middle, own colour field, unknown spots, waiting balls and device-only plates never tip |
+| `src/view/__tests__/plates.test.ts` | D11 presentation on the real sim: a pass-over or a ball rocking in a dish presses without words, a lasting hold gets HELD/OPEN once, trap flicks stay quiet, the waiting chip stays steady while a rescuer rocks on FREE |
+| `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; a stall tap keeps every plate the tip can name pressed (deck plates included); shared plate, bridge planks, doorway middle, own colour field, unknown spots, waiting balls and device-only plates never tip |
 
 ## Tooling
 

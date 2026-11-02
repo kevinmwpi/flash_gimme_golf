@@ -305,8 +305,8 @@ export type PlayerState = {
 export type BallState = {
   pos: Vec;
   vel: Vec;
-  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls hold plates and
-   *  wait in devices. Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
+  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls wait in devices
+   *  and decide hand-offs (any ball on a plate presses it, D11). Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
    *  closed on it (a door), it rests on the breech of a cannon that is now lit (it fires), or its support
    *  vanished. */
   asleep: boolean;
