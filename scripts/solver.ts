@@ -12,6 +12,10 @@
  * - devices.ts: the launchers, loops and traps passes;
  * - verify.ts: the criteria and `verifyLevel`.
  *
+ * Plates follow BUILD_DECISIONS D11 (pressed by any ball on them, held through hops of PLATE_HOLD_HEIGHT_PX, up the
+ * tick none is on them). The checks that encoded the older resting-only rule state the D11 property they prove:
+ * the lone-plate rule (sweeps.ts), the stall taps and the deck (plates.ts) and the launcher landings (devices.ts).
+ *
  *   npm run solve -- <levelId|w1|w2|w3|all> [--pass coop,wide,solo,aces,walls,gaps,scripted,stall,deck,launchers,loops,traps]
  *                   [--depth N] [--beam N] [--wideBeam N] [--angles N] [--powers N] [--maxSeconds S] [--games N] [--json out.json]
  *   npm run solve -- <levelId|w1|w2|w3|all> --write-goldens

@@ -3,8 +3,12 @@
  * World 1, hole 2 — TWO DOORS (LEVELS.md "Level 2"). One 420 px wall at x 900-940 carrying a
  * DOOR at its foot (opened by the DOOR plate in a dish on the tee side, the wall face being the
  * dish's far rim) and a WINDOW above it (opened by the WINDOW plate in the dish right behind the
- * wall, where a ball that rolls through the door stops). Teaches the HELD plate + blocker gate.
- * Red shoots first and holds first. A sunk ball holds the WINDOW from the cup (D2).
+ * wall, where a ball that rolls through the door stops). Teaches the HELD plate + blocker gate: a
+ * plate is down while any ball is on it, rolling or resting, and up the tick it is empty
+ * (BUILD_DECISIONS D11), so the holder has to stay; a stall tap (straight up, low power) keeps it
+ * down the whole time. The DOOR plate ends 50 px short of the door, so a ball rolling across it
+ * never gets through on its own. Red shoots first and holds first. A sunk ball holds the WINDOW from
+ * the cup (D2).
  *
  * Intended line (par 7): red parks on the DOOR plate -> blue rolls through the open door and
  * settles on the WINDOW plate -> red lobs through the window -> both approach the raised green.
@@ -30,8 +34,8 @@ export const level: Level = compileLevel({
   world: 1,
   order: 2,
   par: 7,
-  hint: 'A plate works only while a ball is RESTING on it. Park on the DOOR plate for your partner, then they open the WINDOW for you from the far side.',
-  aha: 'A plate is held, not pressed: the door shuts the moment you leave, so the crosser goes first while the holder waits, and the holder follows later through the window the crosser holds open.',
+  hint: 'A plate works only while a ball is ON it. Park on the DOOR plate for your partner, then they open the WINDOW for you from the far side.',
+  aha: 'A plate works only while a ball is on it: the door shuts the moment you leave, so the crosser goes first while the holder waits, and the holder follows later through the window the crosser holds open.',
   watchOut:
     'The DOOR shuts the moment its plate is empty, so the holder stays put while the partner rolls through. The first ball through should settle on the WINDOW plate (a ball in the cup holds the WINDOW too). If you must shoot while holding, tap straight up at low power.',
   mechanicsIntroduced: ['switch'],

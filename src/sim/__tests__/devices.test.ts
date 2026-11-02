@@ -26,6 +26,7 @@ import type {
   LevelRect,
   PlayerCommand,
   PlayerId,
+  PressureSwitch,
   SimConfig,
   SimEvent,
   SimEventType,
@@ -62,6 +63,18 @@ function rectOf<K extends LevelRect['kind']>(level: Level, kind: K): Extract<Lev
 
 const SNARE: TrapRect = rectOf(trapLevel, 'trap');
 const CANNON: CannonRect = rectOf(cannonLevel, 'cannon');
+
+function plateOf(level: Level, id: string): PressureSwitch {
+  const sw = level.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error(`fixture ${level.id} has no plate ${id}`);
+  return sw;
+}
+
+/** trapLevel's release plate and cannonLevel's FIRE plate: both x 370-470 on the fairway. */
+const FREE = plateOf(trapLevel, 'free');
+const FIRE = plateOf(cannonLevel, 'fire');
+
+const onPlate = (sw: PressureSwitch, ball: Readonly<BallState>): boolean => ball.pos.x >= sw.x && ball.pos.x <= sw.x + sw.w;
 
 /** A resting ball at x on the flat fairway; `lastRest` defaults to the spot itself. */
 function parked(x: number, lastRest: Vec = { x, y: TEE_Y }): BallState {
@@ -240,20 +253,72 @@ describe('TRAP', () => {
     expect(waitingOf(trapLevel, stop.state.switches, stop.state.balls[0])).toEqual({ reason: 'caught', rectId: 'snare' });
   });
 
-  it('a release plate frees the caught ball (trapFreed); letting go of it catches the ball again (trapCaught)', () => {
-    const freeing = run(flyingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), rolling(380, 72, 260)], 1), 120);
-    const onTick = freeing.results.find((r) => r.events.some((e) => e.type === 'switchOn'));
-    expect(onTick?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['ballRest', 'switchOn', 'trapFreed']);
+  it('a release plate frees the caught ball the tick a ball first touches it (trapFreed); letting go of it catches the ball again (trapCaught)', () => {
+    // blue rolls onto FREE (x 370-470) from the left and stops on it: red is freed on blue's first contact,
+    // while blue is still rolling (D11), and stays free as blue comes to rest there
+    const start = flyingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), rolling(330, 100, 260)], 1);
+    expect(start.switches.free).toBe(false);
+    expect(waitingOf(trapLevel, start.switches, start.balls[0])).toEqual({ reason: 'caught', rectId: 'snare' });
+    const freeing = run(start, 120);
+    const onAt = freeing.results.findIndex((r) => r.events.some((e) => e.type === 'switchOn'));
+    expect(onAt).toBeGreaterThan(0);
+    expect(onAt).toBe(freeing.results.findIndex((r) => onPlate(FREE, r.state.balls[1])));
+    const onTick = freeing.results[onAt];
+    expect(onTick?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['switchOn', 'trapFreed']);
+    expect(onTick?.state.balls[1].asleep).toBe(false);
     expect(ofType(freeing.events, 'trapFreed')).toEqual([{ type: 'trapFreed', playerId: 0, pos: { x: 750, y: TEE_Y }, rectId: 'snare', tick: onTick?.state.tick }]);
+    const restAt = freeing.results.findIndex((r) => r.events.some((e) => e.type === 'ballRest' && e.playerId === 1));
+    expect(restAt).toBeGreaterThan(onAt);
+    expect(onPlate(FREE, freeing.state.balls[1])).toBe(true);
+    for (const r of freeing.results.slice(onAt)) expect(r.state.switches.free).toBe(true);
+    expect(ofType(freeing.events, 'switchOff')).toEqual([]);
+    expect(ofType(freeing.events, 'trapCaught')).toEqual([]);
     expect(waitingOf(trapLevel, freeing.state.switches, freeing.state.balls[0])).toBeNull();
 
-    // blue holds FREE, red is free in the open jaws; blue's shot releases the plate and the jaws close on red
+    // blue holds FREE, red is free in the open jaws; blue's putt rolls off the plate and the jaws close on red
+    // the tick blue's centre leaves x 370-470, not on the shot tick (blue is still on the plate then)
     const held = aimingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), parked(420)], 1);
     expect(held.switches.free).toBe(true);
-    const leaving = stepSim(held, shot(1, -0.03, 20));
-    expect(leaving.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['ballHit', 'switchOff', 'trapCaught']);
-    expect(ofType(leaving.events, 'trapCaught')[0]).toMatchObject({ playerId: 0, pos: { x: 750, y: TEE_Y }, rectId: 'snare' });
+    const leaving = run(held, 120, { 0: shot(1, -0.03, 20) });
+    expect(leaving.results[0]?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['ballHit']);
+    const offAt = leaving.results.findIndex((r) => r.events.some((e) => e.type === 'switchOff'));
+    expect(offAt).toBeGreaterThan(0);
+    expect(offAt).toBe(leaving.results.findIndex((r) => !onPlate(FREE, r.state.balls[1])));
+    for (const r of leaving.results.slice(0, offAt)) expect(r.state.switches.free).toBe(true);
+    const offTick = leaving.results[offAt];
+    expect(offTick?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['switchOff', 'trapCaught']);
+    expect(ofType(offTick?.events ?? [], 'trapCaught')).toEqual([{ type: 'trapCaught', playerId: 0, pos: { x: 750, y: TEE_Y }, rectId: 'snare', tick: offTick?.state.tick }]);
     expect(ofType(leaving.events, 'bridgeToggle')).toEqual([]);
+    expect(ofType(leaving.events, 'trapFreed')).toEqual([]);
+  });
+
+  it('a partner rolling ACROSS a release plate frees the caught ball only while it is on it (trapFreed, then trapCaught); still caught at the hand-off, it is skipped', () => {
+    const start = flyingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), rolling(330, 200, 260)], 1);
+    const trace = untilAiming(start);
+    const freedAt = trace.results.findIndex((r) => onPlate(FREE, r.state.balls[1]));
+    const caughtAt = trace.results.findIndex((r, i) => i > freedAt && !onPlate(FREE, r.state.balls[1]));
+    expect(freedAt).toBeGreaterThan(0);
+    expect(caughtAt - freedAt).toBeGreaterThan(3);
+    // FREE is down, and the jaws open, exactly while blue's centre is over x 370-470
+    trace.results.forEach((r, i) => {
+      const on = i >= freedAt && i < caughtAt;
+      expect(r.state.switches.free, `tick ${r.state.tick}`).toBe(on);
+      expect(waitingOf(trapLevel, r.state.switches, r.state.balls[0]), `tick ${r.state.tick}`).toEqual(on ? null : { reason: 'caught', rectId: 'snare' });
+    });
+    for (const r of trace.results.slice(freedAt, caughtAt)) expect(r.state.balls[1].asleep).toBe(false);
+    expect(trace.results[freedAt]?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['switchOn', 'trapFreed']);
+    expect(trace.results[caughtAt]?.events.filter((e) => e.type !== 'bounce').map((e) => e.type)).toEqual(['switchOff', 'trapCaught']);
+    expect(ofType(trace.events, 'trapFreed')).toEqual([expect.objectContaining({ playerId: 0, pos: { x: 750, y: TEE_Y }, rectId: 'snare' })]);
+    expect(ofType(trace.events, 'trapCaught')).toEqual([expect.objectContaining({ playerId: 0, pos: { x: 750, y: TEE_Y }, rectId: 'snare' })]);
+    // blue rests beyond the plate (short of the jaws): red is caught at the hand-off, skipped, and keeps its safe spot
+    const last = trace.results[trace.results.length - 1];
+    expect(last?.events.map((e) => e.type)).toEqual(['ballRest', 'turnSkipped', 'turnStart']);
+    expect(last?.events[1]).toMatchObject({ type: 'turnSkipped', playerId: 0, reason: 'caught', rectId: 'snare', nextPlayer: 1 });
+    expect(last?.events[2]).toMatchObject({ type: 'turnStart', playerId: 1, sameAsBefore: true });
+    expect(trace.state.balls[1].pos.x).toBeGreaterThan(FREE.x + FREE.w);
+    expect(trace.state.balls[1].pos.x).toBeLessThan(SNARE.x);
+    for (const r of trace.results) expect(r.state.balls[0].lastRest).toEqual({ x: 200, y: TEE_Y });
+    expectR5(trace.results);
   });
 
   it('the cup holding a release frees a caught ball the tick its partner holes out', () => {
@@ -265,14 +330,23 @@ describe('TRAP', () => {
     expect(trace.state.activePlayer).toBe(0);
   });
 
-  it('a ball freed in place records its safe spot at the hand-off (not before)', () => {
-    const trace = untilAiming(flyingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), rolling(380, 72, 260)], 1));
+  it('a ball freed in place records its safe spot at the hand-off (not before), and only because its partner STAYS on the release plate', () => {
+    // blue rolls onto FREE and stops there: red is freed on blue's first contact, many ticks before the hand-off
+    const start = flyingState(trapLevel, [parked(750, { x: 200, y: TEE_Y }), rolling(330, 100, 260)], 1);
+    const trace = untilAiming(start);
     const freedAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'trapFreed'));
-    expect(freedAt).toBeGreaterThanOrEqual(0);
-    expect(trace.results[freedAt]?.state.balls[0].lastRest).toEqual({ x: 200, y: TEE_Y });
-    const handOff = trace.results[freedAt + 1];
-    expect(ofType(handOff?.events ?? [], 'turnStart')).toEqual([expect.objectContaining({ playerId: 0 })]);
+    expect(freedAt).toBeGreaterThan(0);
+    const handOffAt = trace.results.length - 1;
+    expect(handOffAt - freedAt).toBeGreaterThan(REST_TICKS);
+    for (const r of trace.results.slice(0, handOffAt)) expect(r.state.balls[0].lastRest).toEqual({ x: 200, y: TEE_Y });
+    // blue's rest on the plate changes no switch, so that same tick hands the turn to the freed red ball
+    const handOff = trace.results[handOffAt];
+    expect(handOff?.events.map((e) => e.type)).toEqual(['ballRest', 'turnStart']);
+    expect(handOff?.events[1]).toMatchObject({ type: 'turnStart', playerId: 0, sameAsBefore: false });
+    expect(onPlate(FREE, handOff!.state.balls[1])).toBe(true);
+    expect(handOff?.state.switches.free).toBe(true);
     expect(handOff?.state.balls[0].lastRest).toEqual({ x: 750, y: TEE_Y });
+    expectSafeSpotsOnlyWhileFree(trapLevel, start, trace.results);
   });
 });
 
@@ -421,18 +495,38 @@ describe('CANNON', () => {
     }
   });
 
-  it('a loaded ball fires the tick after its partner comes to rest on FIRE (the wake rule); no turnStart meanwhile', () => {
-    const start = flyingState(cannonLevel, [parked(700, { x: 200, y: TEE_Y }), rolling(380, 72, 260)], 1);
-    const trace = run(start, 200);
+  it('a loaded ball fires the tick after its partner first touches FIRE (the wake rule), even when the partner only rolls across it; no turnStart meanwhile', () => {
+    // blue rolls across FIRE (x 370-470) from the left and comes to rest beyond it, short of the breech
+    const start = flyingState(cannonLevel, [parked(700, { x: 200, y: TEE_Y }), rolling(330, 200, 260)], 1);
+    expect(start.switches.fire).toBe(false);
+    expect(waitingOf(cannonLevel, start.switches, start.balls[0])).toEqual({ reason: 'loaded', rectId: 'cannon' });
+    const trace = run(start, 300);
     const onAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'switchOn' && e.switchId === 'fire'));
     const fireAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'cannonFire'));
     expect(onAt).toBeGreaterThan(0);
+    expect(onAt).toBe(trace.results.findIndex((r) => onPlate(FIRE, r.state.balls[1])));
     expect(fireAt).toBe(onAt + 1);
-    expect(ofType(trace.results[fireAt]?.events ?? [], 'cannonFire')).toEqual([expect.objectContaining({ playerId: 0, rectId: 'cannon' })]);
+    expect(ofType(trace.results[fireAt]?.events ?? [], 'cannonFire')).toEqual([expect.objectContaining({ playerId: 0, rectId: 'cannon', launch: CANNON_LAUNCH })]);
+    // on the tick FIRE goes down red still sits loaded and blue is rolling, not resting
     expect(trace.results[onAt]?.state.balls[0].asleep).toBe(true);
+    expect(trace.results[onAt]?.state.balls[1].asleep).toBe(false);
+    // blue rolls on off the plate: FIRE comes up and the cannon goes cold, but red's shot is already away
+    const offAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'switchOff' && e.switchId === 'fire'));
+    expect(offAt).toBe(trace.results.findIndex((r, i) => i > onAt && !onPlate(FIRE, r.state.balls[1])));
+    expect(offAt).toBeGreaterThan(fireAt);
+    expect(trace.results[offAt]?.state.balls[0].pos.y).toBeLessThan(TEE_Y - 100);
+    expect(ofType(trace.events, 'cannonFire')).toHaveLength(1);
+    expect(ofType(trace.events, 'cannonLoad')).toEqual([]);
     for (const r of trace.results.slice(0, fireAt + 1)) expect(r.events.some((e) => e.type === 'turnStart')).toBe(false);
     expect(ofType(trace.events, 'bridgeToggle')).toEqual([]);
     expectR5(trace.results);
+    // both come to rest, blue short of the breech and red on the landing sand: red (the other ball) shoots next
+    expect(trace.state.phase).toBe('aiming');
+    expect(trace.state.activePlayer).toBe(0);
+    expect(trace.state.balls[1].pos.x).toBeGreaterThan(FIRE.x + FIRE.w);
+    expect(trace.state.balls[1].pos.x).toBeLessThan(CANNON.x);
+    expect(trace.state.balls[0].pos.x).toBeGreaterThan(1350);
+    expect(trace.state.switches.fire).toBe(false);
   });
 
   it('a safe spot is never recorded on a breech, lit or cold', () => {
@@ -639,15 +733,31 @@ describe('device scenario (fixture-machine, real shots)', () => {
       ['trapCaught', 'trapFreed', 'trapReturn', 'cannonLoad', 'cannonFire', 'turnSkipped', 'flightTimeout'].includes(e.type),
     ).map((e) => `${e.type}:${'playerId' in e ? e.playerId : ''}`);
     expect(moments).toEqual([
-      'trapCaught:0',
-      'trapCaught:1',
-      'trapReturn:1',
-      'turnSkipped:0',
-      'trapFreed:0',
-      'cannonLoad:0',
-      'turnSkipped:0',
-      'cannonFire:0',
-      'cannonFire:1',
+      'trapCaught:0', // red stops in the jaws
+      'trapFreed:0', // blue's roll to the jaws crosses FREE: red is free while blue is on it (D11) ...
+      'trapCaught:0', // ... and caught again as blue rolls off
+      'trapCaught:1', // blue stops in the jaws too
+      'trapReturn:1', // nobody can shoot: BACK +1 for blue, which moved last
+      'turnSkipped:0', // red is still caught: blue shoots again
+      'trapFreed:0', // blue stops on FREE: red is freed where it sits
+      'cannonLoad:0', // red rolls into the cold breech
+      'turnSkipped:0', // blue taps along FREE: red stays loaded
+      'cannonFire:0', // blue rolls into the FIRE dish: red fires the tick after blue first touches FIRE
+      'cannonFire:1', // red holed out (the cup holds FIRE): blue rolls into the lit breech, fired on entry
+    ]);
+    // every press and release of FREE, with the trap moment it caused in the same tick
+    const freePlate = STEPS.flatMap((r) =>
+      r.events
+        .filter((e) => (e.type === 'switchOn' || e.type === 'switchOff') && e.switchId === 'free')
+        .map((e) => [e.type, ...r.events.filter((x) => x.type === 'trapFreed' || x.type === 'trapCaught').map((x) => x.type)].join('+')),
+    );
+    expect(freePlate).toEqual([
+      'switchOn', // red rolls over FREE on its way to the jaws: nobody is caught yet
+      'switchOff',
+      'switchOn+trapFreed', // blue crosses FREE on its way to the jaws
+      'switchOff+trapCaught',
+      'switchOn+trapFreed', // blue stops on FREE
+      'switchOff', // blue leaves FREE for FIRE: red is loaded by then, not caught
     ]);
     const end = STEPS[STEPS.length - 1]!.state;
     expect(end.phase).toBe('levelResults');
@@ -663,29 +773,48 @@ describe('device scenario (fixture-machine, real shots)', () => {
     expectFlightTicksInRange(STEPS);
     expectSafeSpotsOnlyWhileFree(machineLevel, FIRST, STEPS);
     expect(ofType(EVENTS, 'bridgeToggle')).toEqual([]);
-    // the partner-fired flight happens on the tick after FIRE is held, during the partner's turn
-    const fireOn = STEPS.findIndex((r) => r.events.some((e) => e.type === 'switchOn' && e.switchId === 'fire'));
+    // red's own roll through the FIRE dish before it is loaded fires nothing
+    const loadAt = STEPS.findIndex((r) => r.events.some((e) => e.type === 'cannonLoad'));
+    const fireOnAt = (from: number): number => STEPS.findIndex((r, i) => i > from && r.events.some((e) => e.type === 'switchOn' && e.switchId === 'fire'));
+    const early = fireOnAt(-1);
+    expect(early).toBeLessThan(loadAt);
+    expect(STEPS.slice(early, loadAt).some((r) => r.events.some((e) => e.type === 'cannonFire'))).toBe(false);
+    // the partner-fired flight happens on the tick after FIRE is next pressed, during the partner's turn, while the
+    // partner is still rolling into the dish (D11: touching FIRE is enough)
+    const fireOn = fireOnAt(loadAt);
     expect(STEPS[fireOn + 1]?.events.some((e) => e.type === 'cannonFire' && e.playerId === 0)).toBe(true);
     expect(STEPS[fireOn + 1]?.state.activePlayer).toBe(1);
+    expect(STEPS[fireOn]?.state.balls[1].asleep).toBe(false);
   });
 
-  it('runReplay twice is identical, and a split run equals the whole run', () => {
+  it('runReplay twice is identical, and a run split anywhere (a pass-over press, a turn delay, a partner-fired flight) equals the whole run', () => {
     const a = runReplay(CONFIG, MACHINE_LOG, MACHINE_LOG_TICKS);
     const b = runReplay(CONFIG, MACHINE_LOG, MACHINE_LOG_TICKS);
     expect(JSON.stringify(encodeSnapshot(a.state))).toBe(JSON.stringify(encodeSnapshot(b.state)));
     expect(a.state).toEqual(b.state);
     expect(a.events).toEqual(b.events);
     expect(a.state).toEqual(STEPS[STEPS.length - 1]?.state);
-    const half = runReplay(CONFIG, MACHINE_LOG, 1000);
-    let state = half.state;
-    const events = [...half.events];
-    for (let t = 1000; t < MACHINE_LOG_TICKS; t += 1) {
-      const r = stepSim(state, MACHINE_LOG.filter((e) => e.tick === t).map((e) => e.cmd));
-      state = r.state;
-      events.push(...r.events);
+    // split while blue's roll holds FREE down (red freed in passing), while blue aims, and while blue rolls in the
+    // FIRE dish with red in the air: a resumed run carries the switch map the hold band depends on
+    const freeOn = STEPS.findIndex((r) => r.events.some((e) => e.type === 'trapFreed'));
+    const fired = STEPS.findIndex((r) => r.events.some((e) => e.type === 'cannonFire'));
+    const splits = [freeOn + 3, 1000, fired + 3];
+    expect(STEPS[freeOn + 2]?.state.switches.free).toBe(true);
+    expect(STEPS[freeOn + 2]?.state.balls[1].asleep).toBe(false);
+    expect(STEPS[fired + 2]?.state.switches.fire).toBe(true);
+    expect(STEPS[fired + 2]?.state.balls.every((ball) => !ball.asleep)).toBe(true);
+    for (const split of splits) {
+      const half = runReplay(CONFIG, MACHINE_LOG, split);
+      let state = half.state;
+      const events = [...half.events];
+      for (let t = split; t < MACHINE_LOG_TICKS; t += 1) {
+        const r = stepSim(state, MACHINE_LOG.filter((e) => e.tick === t).map((e) => e.cmd));
+        state = r.state;
+        events.push(...r.events);
+      }
+      expect(state, `split at ${split}`).toEqual(a.state);
+      expect(events, `split at ${split}`).toEqual(a.events);
     }
-    expect(state).toEqual(a.state);
-    expect(events).toEqual(a.events);
   });
 
   it('every tick round-trips through the snapshot codec (settled states losslessly, flights within 2 dp)', () => {

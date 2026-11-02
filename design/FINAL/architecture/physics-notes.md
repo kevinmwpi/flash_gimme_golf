@@ -75,7 +75,9 @@ export function hasSupport(level, switches, ball, playerId): boolean;   // g !==
 - `evaluateSwitches` uses `groundAt(...)` too: pressed when `ball.asleep && x in [sw.x, sw.x + sw.w] &&
   |pos.y + R - sw.surfaceY| <= SWITCH_CONTACT_TOLERANCE && g.source === 'piece'` (a RESTING ball holds a plate,
   LEVELS.md plate rule; a ball rolling or bouncing across one never presses it; a ball parked on a blocker
-  above a plate does not press it).
+  above a plate does not press it). Superseded by BUILD_DECISIONS D11: `switchPresser` presses on contact for any
+  non-sunk ball (no `asleep` test) and, once down, holds while a ball over the plate is at most
+  `PLATE_HOLD_HEIGHT_PX` above it; the ground-source rule is unchanged.
 - `restsOnPermanentGround(level, switches, pos, playerId)` = `groundAt(...)?.permanent === true`.
 
 Authoring-only (compile time, `levels/authoring.ts` and `validateLevel`), never called by physics:

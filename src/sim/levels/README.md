@@ -32,14 +32,15 @@ lists `sand` on every hole (worlds 2-3 keep the rule: 45-70 px behind the cup, s
 | 8 | `w2-08-colour-lift` | Colour Lift | 1960 × 720 | 8 | **blue** | cup → `door` | — (the World 2 exam) | — |
 | 9 | `w3-09-bait` | Bait | 1960 × 720 | 8 | red | cup → `top` | — | trap `bait-trap` [`top`] (the BAIT seat) |
 | 10 | `w3-10-sky-bridge` | Sky Bridge | 1960 × 720 | 7 | **blue** | cup → `b` | — | cannon `cannon` [`a`, `b`, `deck`] |
-| 11 | `w3-11-crossfire` | Crossfire | 1960 × 720 | 8 | red | cup → `far` | — | cannon `cannon` [`fire`, `far`] |
+| 11 | `w3-11-crossfire` | Crossfire | 1960 × 720 | 7 | red | cup → `far` | — | cannon `cannon` [`fire`, `far`] |
 | 12 | `w3-12-grand-machine` | Grand Machine | 1960 × 720 | 7 | red | cup → `top` | — | trap `pit` [`fire`, `top`], cannon `cannon` [`fire`, `top`], trap `door-seat` [`top`] (the DOOR seat) |
 
 Every trap and cannon lists the cup's plate among its own, so a sunk partner always frees a caught ball and
 lights a cold cannon (asserted in `levels.test.ts`). Back bunkers sit 60 / 50 / 50 / 70 / 70 / 45 / 50 / 50 px
 behind the cups of holes 5-12; every plate edge is at least 135 px from its cup (L10 B, the tightest). Course
-pars 29 (World 2) and 30 (World 3): the solver calibrated the design's proposals (30 and 32) to solver minimum ≤
-par ≤ minimum + 2 (D10.13), lowering holes 6, 9 and 12 by one each ("Pars" at the end).
+pars 29 (World 2) and 29 (World 3): the solver calibrated the design's proposals (30 and 32) to solver minimum ≤
+par ≤ minimum + 2 (D10.13), lowering holes 6, 9 and 12 by one each, and D11 (plates pressed on contact) lowered
+Crossfire's minimum and so its par by one more ("Pars" at the end).
 
 World 1 course par 28 (LEVELS.md authored 6 / 7 / 9 / 8 = 30; the re-verification against the real sim moved Colour Keys
 and Plate & Bridge down one each, see "Pars" at the end). Everything is verified for `SHOT_SPEED_PER_POWER = 6.5` (max launch 650 px/s, vacuum range
@@ -58,8 +59,8 @@ an x), quantises compiled y values with `quantize2` and derives `mechanicsPresen
 | wall | `blocker` without a switch (permanent) | `{ kind: 'blocker', centerX, h, bottom }` |
 | door / window | `blocker` with `switchId`, `activeWhen: false` (solid until held) | `{ kind: 'blocker', ..., switchId, activeWhen: false, label }` |
 | colour field | `colourGate` | `{ kind: 'colourGate', centerX, h, bottom, colour }` |
-| plate | `PressureSwitch` (HELD: pressed while a RESTING (asleep) ball's centre is inside `[x, x+w]`; released the tick the holder moves, so a moving ball presses nothing) | `{ id, centerX, w, colour: SWITCH_COLOUR, label }` |
-| deck plate | `PressureSwitch.onRectId` = the bridge; `surfaceY` = the bridge top | `{ ..., onRectId: 'bridge' }` |
+| plate | `PressureSwitch` (BUILD_DECISIONS D11: PRESSED by any non-sunk ball whose centre is inside `[x, x+w]` over the plate's own ground, rolling, bouncing or resting; down on contact, held while a ball over it is at most `PLATE_HOLD_HEIGHT_PX` above it, up the tick no ball is on it, no latching) | `{ id, centerX, w, colour: SWITCH_COLOUR, label }` |
+| deck plate | `PressureSwitch.onRectId` = the bridge; `surfaceY` = the bridge top; spans the bridge lip to lip (D11, below) | `{ ..., onRectId: 'bridge' }` |
 | dish / bowl | ordinary terrain polyline, 20 px deep, 50 px ramps (≈ 22°, above `REST_MAX_SLOPE`, so balls roll back onto the flat plate) | surface points |
 | bridge | one `bridge` rect, `x = gap.x1`, `w = gap width`, top = mean lip height, `switchIds` (OR) | `{ kind: 'bridge', gap, switchIds, label: 'BRIDGE' }` |
 | sand | flush `sand` range | `{ kind: 'sand', x1, x2 }` |
@@ -199,9 +200,63 @@ found a softlock (D10.12). Three holes change:
   (World 1's `switchId` is equivalent).
 - **Copy.** Hints are the design's "In-game hint" verbatim and `aha` its "Aha"; `watchOut` is player-facing
   "Stuck?" copy written from "Watch for in playtests" and the hole's recovery rules, without solver numbers.
+  One exception since D11 (plates press on contact): L7's hint said the cannon "fires only while a ball RESTS on a
+  FIRE plate", which is no longer true, so it reads "fires the moment a ball touches a FIRE plate. Whoever lands
+  across stays on the far FIRE plate to fire the other." (its `aha` and `watchOut` follow; the L10 `watchOut`
+  teaches the lip-to-lip deck).
 - **Pars** started from the design's proposals (7 / 7 / 8 / 8 and 9 / 7 / 8 / 8); the solver's calibration (D10.13)
-  lowered Booby Trap, Bait and Grand Machine by one each, so they ship at 7 / 6 / 8 / 8 and 8 / 7 / 8 / 7 ("Pars" at
-  the end).
+  lowered Booby Trap, Bait and Grand Machine by one each, and the D11 re-verification lowered Crossfire by one
+  more, so they ship at 7 / 6 / 8 / 8 and 8 / 7 / 7 / 7 ("Pars" at the end).
+
+### D11: plates pressed by any ball on them (owner request, 2026-11-02)
+
+BUILD_DECISIONS D11 replaced D2's resting-only plate rule: a plate goes down the tick any non-sunk ball over its
+own ground touches it (rolling, bouncing or resting), stays down while a ball over it is at most
+`PLATE_HOLD_HEIGHT_PX` (72) above it, and comes up the tick no ball is on it. All twelve holes were re-verified
+at a hold height of 56 and again at 72 (solver results in "Final table" below). What it changed:
+
+- **Hold height 72 (56 at first).** A landing's first hop rises about (0.35 v)² / 2g for a vertical impact of
+  v px/s (`GROUND_RESTITUTION` 0.35), so 56 held the hops of landings up to about 750 px/s and 72 holds them up to
+  about 850. At 56 a back-smash onto L5's DOOR plate (155°/100 from the plateau at x 1100, off the wall's cap,
+  803 px/s down) hopped 62.1 px and let the plate up for 34 ticks mid-bounce, shutting the door; at 72 the same
+  landing keeps it down. A hop scan of 307,004 single-ball flights (the 94 `loops` shots from every restable spot
+  every 20 px of every hole, both colours, all plates up and all held) finds no landing on any of the 26 plates
+  that lets it up mid-bounce at 72; at 56 it finds the 4 flights of that back-smash. The scan's hardest landings
+  are 811 px/s (L12 FIRE), 803 (L5 DOOR) and 767 (L6 FREE); on every other plate they stay at or under 654.
+  Finer lob grids from higher ground (BUILD_DECISIONS D11) find first hops up to 71.4 px on reachable landings
+  (from the top of L6's backboard onto FREE, the thinnest margin); the one higher hop, 81.1 px onto L11's FIRE,
+  starts on top of the blue field, which red cannot reach (`wall-top-clear`) and blue passes through.
+  Re-run at 72, every solver criterion still passes; the few numbers that moved are listed under "Final table".
+- **Decks lip to lip (L4, L10).** The DECK plates were inset 24 px from both lips so that a ball resting at a lip
+  would not hold the bridge. Under D11 a lone deck ball rolling for a lip let the deck go 21.7–23.9 px short of
+  it and the planks vanished under it: 120 of 1,120 lone-deck rolls (0–7° either way, power 10–100, every 48 px
+  along the deck) fell into the chasm, the rest crossing or not depending on speed, a gotcha nobody could read.
+  Both DECK plates now span their bridge exactly (L4 520–1240, L10 860–1580), and 0 of 1,200 such rolls fall
+  (on each hole, the same at a hold height of 56 and of 72). A ball resting AT a lip still never holds the
+  bridge: its centre stands on the lip's terrain, and only the deck rect itself presses a deck plate
+  (`switchPresser`'s ground source; 0 of 48 lip rests press it, `deck-lip`). The copy now says "roll off the
+  deck"; a high lob still lifts off it (`deck-lone-lob-lifts-off`).
+- **No plate lets its own ball through.** A plate a ball passes comes up at the end of the tick the ball leaves
+  it, and what it drives changes from the next tick, so meanwhile the ball's leading edge advances at most
+  `(MAX_BALL_SPEED + GRAVITY · DT) · DT + BALL_RADIUS` = 30.5 px past the plate's end. Every plate ends farther
+  than that from each door, window, bridge or cannon breech it drives (`levels.test.ts`): the tightest are L4's
+  B (32 px from the bridge end), the L9 BAIT and L12 DOOR seats (40 px from their doors), then 50 px (L2 DOOR
+  and WINDOW, L4 A, L5 DOOR, L10 B). No other terrain lies within the hold height above any plate (re-checked
+  at 72: over every plate's x-range the only ground is the plate's own, with no other terrain piece, wall or
+  bridge above it at any height), so a ball standing on other ground never keeps a plate down.
+- **Landings.** Every launcher landing holds its target plate through its bounce hops (`launchers-hops-hold`,
+  0 of 24,138 landings let it up mid-bounce, at 56 and at 72); 2,069 of them (L5 TOP, L7 far FIRE, L8 WINDOW,
+  L11 FAR) roll off the plate's end onto the bowl's ramp and back before resting, so the plate is up for a few
+  ticks: a pass-over, which D11 accepts.
+- **Pars and copy.** Crossfire's minimum fell from 6 to 5, so its par from 8 to 7 ("Pars"). Copy says "on" a
+  plate where "resting on" became wrong: the L2 hint and aha, the L4 hint, aha and watchOut, the L7 hint, aha and
+  watchOut (the cannon fires on a touch), the L10 watchOut.
+- **Goldens** were re-recorded on purpose: every line keeps its commands (shooter, angle, power) and its strokes,
+  and every final snapshot differs only in its tick. A landing on a plate no longer flips a switch on its rest
+  tick, so the hand-off after it (ARCH R5) comes a tick sooner: World 1 L2 and L3 −2 ticks, L4 −3, L1 unchanged
+  (no plates); L5–L9 and L11 −2; and a LOADED ball now fires on the partner's first touch of its plate, L10 −19
+  (red's spring landing on A) and L12 −145 (blue's roll onto FIRE). Raising the hold height from 56 to 72 moved
+  no golden: the slow suite re-records all twelve exactly as committed.
 
 ## Walkthroughs
 
@@ -226,7 +281,8 @@ Line: red parks on the DOOR plate → door opens → blue rolls through low (5�
 the WINDOW plate → window opens → red lobs through the window (50–60°, 90–100) → both approach and sink.
 Watch-outs: the first ball through plays on toward the cup instead of settling on the WINDOW plate (the
 holder is stuck until it comes back or sinks: `cupHoldsSwitch`); the holder must shoot before the partner is
-through → stall tap (straight up, low power), taught by the holder tip (`src/ui/holderTip.ts`).
+through → stall tap (straight up, low power), taught by the holder tip (`src/ui/holderTip.ts`); the tap rises
+at most 13 px, so the plate never comes up and the door stays open throughout (D11, `stall-taps-safe`).
 
 ### 3 · Colour Keys (par 8, BLUE first, cup holds `door2`)
 
@@ -244,14 +300,14 @@ leaves the DOOR 2 plate early (red can come back through its own field; a sunk r
 Near piece `[0,624] … [220,630] [320,630] (tee flat) [350,620] [400,640] [470,640] [520,620]` (plate A dish
 350–520, lip 520); gap 520–1240 (720 px); far piece `[1240,620] [1256,620] [1272,628] [1540,628] (plate B
 bowl) [1560,620] … [1800,584] [1920,584] (green, cup 1860) [1960,590]`. Plate A `near` 400–470, plate B `far`
-1272–1540, bridge 520–1240 top 620 active while `near` OR `far` OR `deck` is held, DECK plate 544–1216
-(inset 24 px from both lips) on top of the bridge. Line: red chips onto plate A (bridge appears) → blue takes
-a full swing from the tee and rests on the deck or in the far bowl → red crosses from plate A → whoever is
-on the deck flies off (the partner on B or the deck holds) → both putt out. Watch-outs: the tee chip
-overshoots plate A into the chasm (+1, respawn on the tee flat); a deck ball tries to ROLL off while nobody
-else holds: the deck is held only while that ball is parked, so the planks vanish the tick it moves and it
-must FLY all the way to the far lip (from the deck centre a 45° lob at power 80+ carries; every roll of
-≤ 7° drops into the chasm, `deck-lone-roll-falls`); the ball on plate B putts out before the partner is
+1272–1540, bridge 520–1240 top 620 active while `near` OR `far` OR `deck` is held, DECK plate 520–1240 on top
+of the bridge, lip to lip (D11; inset 24 px from both lips until then). Line: red chips onto plate A (bridge
+appears) → blue takes a full swing from the tee and rests on the deck or in the far bowl → red crosses from
+plate A → whoever is on the deck rolls off it (the deck holds the bridge under it to the lip) → both putt
+out. Watch-outs: the tee chip overshoots plate A into the chasm (+1, respawn on the tee flat); a lone deck
+ball LOBS off: a lob rising more than `PLATE_HOLD_HEIGHT_PX` above the planks lifts off the deck, the planks
+vanish and it falls unless it carries to a lip, whereas every roll keeps them under it
+(`deck-lone-roll-keeps-bridge`, `deck-lone-lob-lifts-off`); the ball on plate B putts out before the partner is
 across (`cupHoldsSwitch: 'far'`).
 
 ### 5 · Spring Step (par 7, red first and HOLDS first, cup holds `top`)
@@ -282,9 +338,9 @@ Floor 620; FIRE 500–600 in the dish 450–650; mount 841–960 (top 540) with 
 around the breech 890–930 at y 565 (launch (400, −700), lit by `fire` OR `fire-far`). Chasm 961–1520. Far
 plateau at y 400: landing sand 1540–1740 carrying the far FIRE plate 1560–1720 at y 410; cup 1870, back bunker
 1920–1960. Line: red moves up to x 650–830 → blue rests on FIRE → red lobs into the funnel and is fired onto
-the far plate (or rests LOADED and blue's landing fires it) → blue leaves FIRE (the far plate keeps the cannon
-lit) and lobs in → both putt. Watch-outs: expecting the cannon to fire by itself; overshooting the mount into
-the chasm (+1, back to the safe spot).
+the far plate (or rests LOADED and blue's first touch on FIRE fires it, D11) → blue leaves FIRE (the far
+plate keeps the cannon lit) and lobs in → both putt. Watch-outs: expecting the cannon to fire by itself;
+overshooting the mount into the chasm (+1, back to the safe spot).
 
 ### 8 · Colour Lift (par 8, BLUE first, cup holds `door`)
 
@@ -315,13 +371,14 @@ keeping every turn while red is caught, and lands on TOP (red freed, the door he
 Cannon drum 41–160 (top 580) around the breech 76–124 at y 600 (launch (520, −760), lit by `a`, `b` OR
 `deck`). Tees 280 / 330 on the flat to 600; SPRING 442–498 (launch (120, −690)). Spire A (face at 600, top 400):
 plate A 670–790 in the sand bowl 640–820. Chasm 860–1580 under the BRIDGE at y 400 (held by `a`, `b` OR `deck`;
-DECK 884–1556). Spire B: plate B 1630–1740 in the sand bowl 1600–1770, green 1830–1960 at y 390, cup 1875, back
-bunker 1920–1960. Line: blue chips LEFT into the cold cannon and waits, LOADED → red rides the spring onto A:
-the bridge rises, the cannon lights and fires blue onto B → blue putts → red crosses from A and putts. Second
-route: both ride the spring onto A and cross one at a time. Watch-outs: whether A, the bridge and BOOM read as
-one cause and effect; trusting the wait in a cold cannon; a lone DECK ball must fly off, never roll.
+DECK 860–1580, lip to lip since D11). Spire B: plate B 1630–1740 in the sand bowl 1600–1770, green 1830–1960 at
+y 390, cup 1875, back bunker 1920–1960. Line: blue chips LEFT into the cold cannon and waits, LOADED → red rides
+the spring onto A: the touch raises the bridge, lights the cannon and fires blue onto B → blue putts → red
+crosses from A and putts. Second route: both ride the spring onto A and cross one at a time. Watch-outs:
+whether A, the bridge and BOOM read as one cause and effect; trusting the wait in a cold cannon; a lone DECK
+ball rolls off (a high lob lifts off the deck and drops the planks).
 
-### 11 · Crossfire (par 8, red first, cup holds `far`)
+### 11 · Crossfire (par 7, red first, cup holds `far`)
 
 FIRE ledge 0–200 at y 520 (FIRE 60–180 at y 530) behind a full-height BLUE field 230–270 (200–640). Floor 620
 (tees 420 / 470) to 740; RED field 700–740 (200–520) over the DOOR 520–640 (`far`). Cannon pit: sand 741–779 /
@@ -342,8 +399,8 @@ Pit 0–40 at y 640 under the jaws `pit` (12–40 × 590–640, released by FIRE
 is a seat inside the jaws `door-seat` (680–780 × 590–640, released only by TOP); SPRING 972–1028 on the channel
 floor (launch (180, −800)). 320 px cliff at 1180: the TOP basin 1215–1690 at y 334 (sand 1205–1690, plate
 1230–1680), a dirt face at 1691, a step down at 1731 to the green at 400, cup 1850, back bunker 1900–1960.
-Lines: FLY (red lobs LEFT into the cannon and waits LOADED → blue rests on FIRE → red flies onto TOP → blue
-lobs in and flies up) or CLIMB (red rolls onto the DOOR seat and is caught → blue rolls through to the spring
+Lines: FLY (red lobs LEFT into the cannon and waits LOADED → blue rolls onto FIRE, whose first touch fires red
+onto TOP (D11) → blue lobs in and flies up) or CLIMB (red rolls onto the DOOR seat and is caught → blue rolls through to the spring
 and lands on TOP, freeing red → red climbs). TOP holds the door, lights the cannon and frees both traps; the
 cup holds TOP. Watch-outs: which route first-time pairs pick; overshooting the mount into the pit; the
 leftward lob near the left edge on touch.
@@ -422,7 +479,9 @@ device passes report only on holes that have their subject):
   `par − 2 ≤ minimum ≤ par`, the LEVELS.md rule "par = scripted line, at most solver minimum + 2" (D9, D10.13).
   `PAR_SLACK_BY_ID` carries the one documented exception, `w1-03-colour-keys` at slack 3 ("Pars" below), shared
   with the suite.
-- `solo` — `predictShot` chains (depth ≥ 10, beam 40) with the partner parked on its tee; a lone ball that ends
+- `solo` — `predictShot` chains (depth ≥ 10, beam 40) with the partner parked on its tee; `predictShot` re-evaluates
+  the plates every tick, so a lone ball that presses a plate on its way (D11: rolling or bouncing across it) opens
+  that door or bridge for exactly as long as it does in the game. A lone ball that ends
   caught or loaded is a dead end (the WAITING rule would hand every turn to the parked partner). On every co-op
   hole (a plate, a colour field, a trap or a cannon: holes 2–12) neither ball holes out and 0 first shots sink
   (`solo-not-bypassable`, `solo-first-shot-zero`); hole 1 is solvable alone by design (`solo-reference`).
@@ -437,8 +496,13 @@ device passes report only on holes that have their subject):
   radius below the wall top (`wall-top-clear`: y > 188 under a top at 200).
 - `gaps` — with no plate held (bridges absent, cannons cold), 0 shots of either ball from its tee or from
   300/200/100/40 px short of the near lip end past the far lip (`gap-crossing-zero`); over a bridged chasm a lone
-  ball leaving a near bridge plate (partner on its tee) drops the bridge the tick it moves (a plate is held only by
-  a resting ball) and never rests beyond the far lip (`lone-plate-never-crosses`).
+  ball shooting at the chasm from a bridge plate (partner on its tee; five shots into the chasm plus the 162-shot
+  human grid, rightward from a near plate and mirrored from a far one, from the plate's centre and from its
+  chasm-side end) keeps the bridge only while it is on that plate (D11), which ends 32 px or more short of its lip
+  while a ball moves at most 18.5 px a tick, so it never touches the planks, every shot that leaves the plate drops
+  the bridge, the five chasm shots from the plate's centre all fall and none rests across the chasm
+  (`lone-plate-never-crosses`; until D11 a plate came up the tick its ball was struck, and only those five shots
+  from the near plate were played).
 - `OPT_OUTS` — the only exceptions to `walls` and `gaps`, one row each (D10.13): Booby Trap's `backboard` column is
   not swept (a backstop behind the PERCH bowl, not a gate); Crossfire's rows from the FIRE ledge (x 0–200) are
   exempt from `wall-top-clear` (their passes still count); the Load & Fire and Crossfire chasms get no lone-plate
@@ -451,20 +515,28 @@ device passes report only on holes that have their subject):
   the line), the sim's turn order (the WAITING rule included) must match the line's, and both balls must be sunk
   within par + 2. Exactly one line per hole is `golden`.
 - `stall` — holder taps (90/10, 90/15, 80/20, 100/15) from every plate but the seats (L9 BAIT, L12 DOOR: a caught
-  holder never shoots) re-hold the plate; a partner parked on its tee, on another plate or on the bridge deck
-  never falls (`stall-taps-safe`).
-- `deck` — balls resting 1–24 px outside either lip never press DECK; every on-deck rest does (`deck-lip: …`); a
-  lone deck ball (`{deck}` held, partner on its tee) shot from the near end, the centre and 240 px short of the
-  far lip drops into the chasm on every roll of ≤ 7° at power 40–100 (`deck-lone-roll-falls`) and at least one
-  45° lob at power 80–100 reaches the far side (`deck-lone-lob-crosses`): the rule the L4 and L10 watchOut copy
-  teaches.
+  holder never shoots) never let the plate up: the highest rises 13 px, far under `PLATE_HOLD_HEIGHT_PX`, so there
+  is no `switchOff` during the tap and its door or bridge never flickers (D11); the holder ends on its plate and a
+  partner parked on its tee, on another plate or on the bridge deck never falls (`stall-taps-safe`). Until D11
+  the plate came up for the whole tap and only the re-hold on landing was asserted.
+- `deck` — balls resting 1–24 px outside either lip (on the terrain) never press DECK; every rest on the planks
+  does, 1 px inside either lip included, because the DECK spans its bridge (`deck-lip: …`); a lone deck ball
+  (`{deck}` held, partner on its tee) shot from the near end, the centre and 240 px short of the far lip keeps
+  the planks under it on every roll within 7° of the horizontal, either way, at power 40–100: none falls and
+  rolls toward the cup reach the far side (`deck-lone-roll-keeps-bridge`); every 45° lob at power 80–100 rises
+  above `PLATE_HOLD_HEIGHT_PX`, releases DECK in flight and never comes down on the planks, and at least one
+  carries to the far side (`deck-lone-lob-lifts-off`): the rule the L4 and L10 watchOut copy teaches. Until D11
+  the opposite held (the deck let go the tick its ball moved, so every roll fell).
 - `launchers` — every spring and cannon ride of the intended lines (`LAUNCHER_CASES`, both colours where both ride,
   with the plates the line holds at that moment fixed): a ball dropped 1 px above every pad or breech x in 0.5 px
   steps, for 9 launch perturbations (each component at 97 / 100 / 103 %), rests holding its target plate after
   exactly one launch, and a cannon is also fired LOADED (resting on its breech as it lights). Every spring and
   cannon has a case and every case names the hole's own rects and plates (`launchers-cover-every-launcher`), every
   drop lands on target (`launchers-land-on-target`), 0 re-fires and 0 drops that never launch
-  (`launchers-fire-once`).
+  (`launchers-fire-once`), and no bounce of a landing lets the target plate up while the ball is still over it
+  (`launchers-hops-hold`, D11: a landing's hops stay under `PLATE_HOLD_HEIGHT_PX`, so its door, trap or cannon
+  never flickers through bounces; a landing that rolls off the plate's end onto its bowl and back is a pass-over
+  D11 accepts, counted in the detail).
 - `loops` — on holes with a spring, trap or cannon: single-ball flights with the switches fixed (all plates up,
   then all held) from every restable spot every 20 px plus each plate, trap and breech centre, both colours, 94
   shots each (5–175° step 10 × power 20–100 step 20, plus the stall taps): none is still flying when the
@@ -495,52 +567,111 @@ vitest workers (World 3, the heaviest, took about 14 min alone and all three abo
 `levels.test.ts` (fast) replays each hole's golden from `levels-golden.ts` through `runReplay` and compares the
 final snapshot bit for bit.
 
-### Final table (World 1: re-verification against the SIM delivery of 2026-10-02, `npm run solve -- all`)
+### Final table (D11 at a hold height of 72, all 12 holes, 2026-11-02: `npm run solve -- w1`, `w2`, `w3`)
 
-| hole | par | co-op beam 6 | wide beam 60 | solo P1 / P2 (reachableX) | aces | walls | gaps | scripted | stall | deck |
+Plates pressed by any ball on them (BUILD_DECISIONS D11) and held through hops of up to 72 px, the L4 and L10 decks
+lip to lip, Crossfire at par 7. All 222 criteria pass (8 / 11 / 11 / 15 on World 1, 16 / 21 / 24 / 16 on World 2,
+23 / 27 / 26 / 24 on World 3; `par-calibrated` on Colour Keys with the documented slack, below), every solved co-op
+line and every scripted line replays bit-exactly through `runReplay`, and the slow suite (`npm run test:levels`)
+passes on the same code. Times on a shared 4-vCPU machine: World 1 4 min, World 2 8 min, World 3 14 min.
+
+| hole | par | co-op beam 6 | wide beam 60 | min | solo P1 / P2 (reachableX) | aces | walls (passes, highest y) | gaps (crossings) / lone plate | scripted | stall |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 First Fairway | 6 | 4 (2+2) | 4 (2+2), 22 021 shots | 2 / 2 by design (1190) | 0/429 · 0/429 | — | — | 4 · sand line 4 | — | — |
-| 2 Two Doors | 7 | 5 (3+2) | 5 (3+2), 86 020 shots | NO 850 / NO 850 | 0/429 · 0/429 | 0/6006, highest y 264 | — | 5 | 16/16 | — |
-| 3 Colour Keys | 8 | 5 (2+3) | 5 (2+3), 60 550 shots | NO 428 / NO 1148 | 0/429 · 0/429 | 0/5577, highest y 273 | — | 7 | 16/16 | — |
-| 4 Plate & Bridge | 7 | 5 (3+2) | 5 (3+2), 93 572 shots | NO 470 / NO 469 | 0/429 · 0/429 | — | 0/4290 crossings, lone ball falls 5/5 | 9 · deck line 8 | 24/24 (8 with a partner on the deck, 8 with one on the other plate) | 0/48 lip, 15/15 deck |
+| 1 First Fairway | 6 | 4 (2+2), 2,436 shots | 4 (2+2), 23,172 shots | 4 | SOLVED 2 / SOLVED 2 by design (1190) | 0/858 · 0/858 | — | — | 4 · sand line 5 | — |
+| 2 Two Doors | 7 | 5 (3+2), 9,860 shots | 6 (3+3), 53,032 shots | 5 | no (850) / no (850) | 0/858 · 0/858 | 0/6,006, y 264 | — | 6 | 16 taps, 0 releases |
+| 3 Colour Keys | 8 | 6 (3+3), 9,861 shots | 5 (2+3), 68,358 shots | 5 | no (428) / no (1148) | 0/858 · 0/858 | 0/5,577, y 273 | — | 7 | 16 taps, 0 releases |
+| 4 Plate & Bridge | 7 | 6 (3+3), 11,652 shots | 6 (3+3), 100,740 shots | 6 (5, "Pars") | no (470) / no (469) | 0/858 · 0/858 | — | 0/4,290; 0/660 | 7 · deck line 7 | 24 taps, 0 releases |
+| 5 Spring Step | 7 | 5 (3+2), 10,500 shots | 5 (3+2), 92,420 shots | 5 | no (600) / no (600) | 0/858 · 0/858 | 0/6,006, y 273 | — | 5 | 16 taps, 0 releases |
+| 6 Booby Trap | 6 | 4 (3+1), 9,240 shots | 4 (3+1), 60,440 shots | 4 | no (968) / no (968) | 0/858 · 0/858 | 0/5,148, y 273 | — | 5 · rescue 7 | 36 taps, 0 releases |
+| 7 Load & Fire | 8 | 6 (3+3), 17,029 shots | 6 (3+3), 145,925 shots | 6 | no (926) / no (925) | 0/858 · 0/858 | — | 0/3,432 | 8 · load line 8 | 16 taps, 0 releases |
+| 8 Colour Lift | 8 | 6 (3+3), 8,352 shots | 6 (3+3), 64,800 shots | 6 | no (188) / no (1187) | 0/858 · 0/858 | 0/4,290, y −27 | — | 7 | 16 taps, 0 releases |
+| 9 Bait | 8 | 6 (3+3), 19,464 shots | 6 (3+3), 176,007 shots | 6 | no (638) / no (638) | 0/858 · 0/858 | 0/4,290, y 273 | — | 7 | 8 taps, 0 releases |
+| 10 Sky Bridge | 7 | 5 (2+3), 20,488 shots | 5 (2+3), 173,838 shots | 5 | no (860) / no (859) | 0/858 · 0/858 | — | 0/4,290; 0/660 | 5 · spring route 7 | 24 taps, 0 releases |
+| 11 Crossfire | 7 | 5 (2+3), 15,110 shots | 5 (2+3), 127,750 shots | 5 | no (837) / no (688) | 0/858 · 0/858 | 0/6,006, y 273 | 0/2,574 | 8 | 16 taps, 0 releases |
+| 12 Grand Machine | 7 | 5 (3+2), 37,029 shots | 5 (3+2), 315,429 shots | 5 | no (808) / no (808) | 0/858 · 0/858 | 0/4,290, y 273 | — | fly 5 · climb 5 | 24 taps, 0 releases |
 
-Every criterion passes on every hole (`par-calibrated` on Colour Keys with the documented slack, below); every
-solved co-op line and every scripted line replays bit-exactly through `runReplay`. Highest ball centre against
-a 420 px wall: y 264 (wall top 200, the centre would need y 188): 76 px of margin. Gap: 3361 falls, 0
-crossings, with the bridge absent.
+| hole | deck (lip / planks; lone rolls; lone 45° lobs) | launchers (on target; hop releases; roll-offs) | loops (running / flights, plates up · held) | traps (rescued; resets; finished games; shots) |
+|---|---|---|---|---|
+| 4 Plate & Bridge | 0/48 lip rests press it, 16/16 plank rests do; 0/72 rolls fall, 28 cross; 9/9 lift off, 6 cross | — | — | — |
+| 5 Spring Step | — | 2,034/2,034; 0; 1,934 | 0/14,852 · 0/15,228 | — |
+| 6 Booby Trap | — | — | 0/12,220 · 0/13,348 | 54/54; 1,125; 4/400; 13,519 |
+| 7 Load & Fire | — | 2,916/2,916; 0; 30 | 0/10,904 · 0/10,904 | 43/43; 1; 9/400; 13,896 |
+| 8 Colour Lift | — | 2,034/2,034; 0; 57 | 0/14,194 · 0/14,758 | — |
+| 9 Bait | — | 2,322/2,322; 0; 0 | 0/14,852 · 0/16,732 | 88/88; 755; 5/400; 12,885 |
+| 10 Sky Bridge | 0/48 lip rests press it, 16/16 plank rests do; 0/72 rolls fall, 28 cross; 9/9 lift off, 6 cross | 5,526/5,526; 0; 0 | 0/9,588 · 0/9,588 | 40/40; 73; 94/400; 12,770 |
+| 11 Crossfire | — | 4,356/4,356; 0; 48 | 0/10,152 · 0/10,716 | 16/16; 0; 21/400; 12,742 |
+| 12 Grand Machine | — | 4,950/4,950; 0; 0 | 0/13,536 · 0/15,792 | 123/123; 310; 78/400; 12,713 |
 
-Solver lines (degrees/power → rest x; `[held]`):
+**72 against 56.** These tables were first measured at a hold height of 56. Re-run at 72, every search, solo chain,
+ace, wall and gap sweep, scripted line, stall tap, deck check, launcher drop and loop flight returns the same
+result. The only numbers that moved come from a ball rising between 56 and 72 px above the plate it stood on: at 56
+the plate came up in flight (and went down again if the ball landed back on it), at 72 it stays down.
 
-- L1: P1 18/94 → 909 · P2 29/94 → 944 · P1 7/72 SINK · P2 7/61 SINK.
-- L2: P1 7/61 → 844 [door] · P2 29/83 → 1111 [door, window] · P1 73/72 → 1123 [window] · P2 7/72 SINK · P1 7/72 SINK.
-- L3: P2 62/83 → 928 [door1] · P1 151/94 → 999 (a bank off the LEFT level edge through the open door 1) ·
-  P2 73/61 → 1142 · P1 51/94 SINK (the red-field lob holes out; the cup now holds DOOR 2) · P2 7/72 SINK.
-- L4: P1 7/38 → 434 [near] · P2 18/72 → 1190 [deck] · P1 18/94 → 1668 · P2 7/83 SINK [far] · P1 7/49 SINK.
+- **L4.** In `lone-plate-never-crosses`, one of the 660 shots (115°/50 from plate B's centre, 67.5 px up) drops
+  the bridge once instead of twice. It still falls.
+- **L6.** In the traps pass, 24 of the 13,519 shots are near-vertical lobs (73–102°, power 42–47) off FREE (23) or
+  the PERCH (1), and none of them lets its plate up now. In 8 of them the partner sat in the jaws, which closed on
+  it again until the landing: trapCaught 4,787 → 4,779, trapFreed 3,428 → 3,420. The state after every shot is
+  unchanged.
+- **L10.** Lobs off A, B or the DECK behave the same way. Six from the DECK (power 44–97) now end differently: at
+  56 the planks vanished under them and they fell (+1); at 72 the deck keeps the planks until the ball lands on
+  them, on the near spire, on A or B, or (one 26°/97 drive) in the cup. One of those games then runs 30 shots
+  instead of finishing in 25. That shifts the seeded draws of the last 71 games: 94 of 400 games finish (93 at
+  56), 12,770 shots (12,800), cannonLoad 223 (221), cannonFire 456 (454), turnSkipped 447 (439), and 597 turns
+  have a waiting ball (587). The rescues (40 / 40) and the resets (73) are unchanged.
+- **L12.** Lobs off TOP, FIRE or the DOOR seat behave the same way, and the 8 among them with a partner in the
+  jaws no longer re-catch it mid-lob: trapCaught 915 → 907, trapFreed 670 → 662. In two seeded games red's lob
+  off TOP used to shut the door on blue standing in the doorway, pushing it 15 or 26 px aside; now the door
+  stays open. No game changes length, so every other count stands.
 
-Scripted lines (first grid shot per beat): L1 7/83 → 889 (sand) · 7/72 → 880 (sand) · 7/83 SINK · 7/83 SINK.
-L2 red 7/61 → 844 [door] · blue 7/83 → 1057 [window] · red 73/72 → 1123 · blue 7/83 SINK · red 7/72 SINK.
-L3 blue 40/94 → 744 [door1] · red 7/49 → 952 · blue 7/61 → 1054 · red 51/83 → 1359 [door2] · blue 7/16 → 1502 ·
-red 7/72 SINK · blue 7/61 SINK. L4 red 7/38 → 434 [near] · blue 7/49 → 716 [deck] · red 7/38 → 649 [deck] ·
-blue 7/49 → 1519 [far] · red 7/49 → 1482 [far] · blue 7/61 → 1779 · red 7/61 → 1780 · blue 7/16 SINK · red 7/16 SINK.
+Every traps row also has 0 send-to-tee guards, 0 watchdog endings, 0 stalled hand-offs, every reset on its ball's
+safe spot and every stroke accounted for. Beyond the passes, three scratch hunts aimed at what D11 could break
+found nothing, at 56 and again at 72: a lone ball shot ACROSS every plate at the door, window or bridge it drives
+(from every restable spot up to 320 px behind it, every 20 px, both colours unless the wall has a field of their own
+colour, 1–31° × power 20–100) got through 0 times in 265,965 shots; 1,800 seeded random full-sim games on the six
+holes without a trap or cannon (52,134 shots) ended no flight by the watchdog, stalled no hand-off and ran no tee
+guard; and no other terrain lies within `PLATE_HOLD_HEIGHT_PX` above any plate (none lies above any plate at all).
+
+Solver lines under D11 (the better of the two searches; degrees/power → rest x; `[held]` after the shot):
+
+- L1 (4): P1 29/94 → 986 · P2 29/94 → 993 · P1 7/49 SINK · P2 7/49 SINK.
+- L2 (5): P1 18/94 → 814 [door] · P2 7/72 → 1178 [door, window] · P1 62/94 → 1472 [window] · P2 7/72 SINK · P1 7/49 SINK.
+- L3 (5): P2 62/94 → 970 [door1] · P1 29/61 → 966 [door1] · P2 29/38 → 1147 [door1] · P1 51/94 SINK [door2] · P2 7/72 SINK.
+- L4 (6): P1 62/72 → 430 [near] · P2 29/72 → 1233 [deck, near] · P1 7/94 → 1680 [deck] · P2 7/72 SINK (a gimme) · P1 7/49 SINK.
+- L5 (5): P1 7/94 → 588 [door] · P2 73/94 → 1300 [door, top] · P1 40/72 → 1323 [top] · P2 7/49 SINK · P1 7/49 SINK.
+- L6 (4): P1 118/83 → 270 [perch] · P2 29/94 SINK [far, perch] · P1 29/94 SINK.
+- L7 (6): P1 62/94 → 804 · P2 7/94 → 575 [fire] · P1 73/72 → 1682 BOOM · P2 51/83 → 1681 BOOM · P1 7/61 SINK · P2 7/61 SINK.
+- L8 (6): P2 40/72 → 1070 [window] · P1 73/83 → 1580 [door, window] · P2 7/49 → 1146 · P1 18/49 SINK · P2 40/94 SINK.
+- L9 (6): P1 18/94 → 603 CAUGHT [bait] · P2 40/94 → 923 · P2 73/61 → 1388 [bait, top] · P1 18/83 → 1335 [top] · P2 7/83 SINK · P1 7/94 SINK.
+- L10 (5): P2 29/27 → 751 [a] · P1 129/49 → 1703 BOOM [a, b] · P2 18/72 → 1530 [b, deck] · P1 7/83 SINK · P2 7/94 SINK.
+- L11 (5): P1 51/83 → 802 LOADED · P2 118/83 → 26, its touch on FIRE fires red onto FAR [far] · P1 7/72 SINK ·
+  P2 18/83 → 1655 BOOM (off the ledge, through the door the cup holds open, into the cannon) · P2 7/72 SINK.
+- L12 (5): P1 73/72 → 531 [fire] · P2 106/72 → 1503 BOOM [fire, top] · P1 129/83 → 1503 BOOM [top] · P2 51/61 SINK · P1 51/61 SINK.
+
+The golden lines (first grid shot per beat) are recorded in `levels-golden.ts`.
 
 ### Pars
 
 LEVELS.md's rule: par is the scripted intended line, at most solver minimum + 2, never below the minimum
 (gold = one great shot, silver = the line, bronze absorbs a duff per ball). Every solver minimum below is
-STRUCTURAL (turn order and the mechanics force it; beam 6 and beam 60 agree and no geometry change within
-the 1960 px overview width can raise it):
+STRUCTURAL (turn order and the mechanics force it; no geometry change within the 1960 px overview width can
+raise it). Re-verified under D11 (plates pressed on contact, 2026-11-02): no World 1 minimum moved, at a hold
+height of 56 or of 72.
 
 | hole | minimum | why it is the floor | scripted | LEVELS.md par | shipped par |
 |---|---|---|---|---|---|
-| 1 | 4 | no ace from either tee, so 2 + 2 (sand landing, hole-out from the sand) | 4 | 6 | **6** (4 ∈ 4..6) |
-| 2 | 5 | red parks, lobs the window, sinks (3); blue rolls through onto the WINDOW plate, sinks (2) | 5 | 7 | **7** (5 ∈ 5..7) |
+| 1 | 4 | no ace from either tee, so 2 + 2 (sand landing, hole-out from the sand) | 4 · sand line 5 | 6 | **6** (4 ∈ 4..6) |
+| 2 | 5 | red parks, lobs the window, sinks (3); blue rolls through onto the WINDOW plate, sinks (2) | 6 | 7 | **7** (5 ∈ 5..7) |
 | 3 | 5 | blue lobs onto DOOR 1 plate, must shoot once while DOOR 2 is shut, rolls in (3); red rolls through DOOR 1, lobs the red field and holes out, which holds DOOR 2 from the cup (2) | 7 | 9 | **8** (D2's −1; 5 is par − 3) |
-| 4 | 5 | red chips onto A, crosses, sinks (3); blue crosses, sinks (2) | 9 · deck 8 | 8 | **7** (5 ∈ 5..7) |
+| 4 | 5 | red chips onto A, crosses, sinks (3); blue crosses, sinks (2). Under D11 both searches meet a 5-shot line with a gimme (6 strokes) first and report 6, because blue's deck rest moved to 1233 (lip to lip); the 5-stroke line of the earlier table still holes out in 5 (62°/72 → 430, 7°/72 → 1187 on the deck, 7°/94 → 1680, 7°/83 SINK, 7°/49 SINK; replayed at 56 and at 72) | 7 · deck line 7 | 8 | **7** (5 ∈ 5..7) |
 
 Worlds 2-3 are calibrated the same way (D10.13: solver minimum ≤ par ≤ minimum + 2, the design's proposal as the
 target, so par = min(proposal, minimum + 2)). Minimum = the better of `coop` (beam 6) and `wide` (beam 60) with
 the slow suite's options (`npm run solve -- <id> --pass coop,wide --maxSeconds 600`); scripted = the golden line.
-These minimums are search results, not proofs of a floor:
+These minimums are search results, not proofs of a floor. Re-verified under D11 (2026-11-02): only Crossfire's
+moved, 6 → 5, because a LOADED red now fires on blue's first touch of FIRE, so blue's lob may run on past the plate
+to the ledge's end and roll from there through the door into the cannon (par 8 → 7). Raising the hold height from 56
+to 72 moved no minimum, line or scripted count:
 
 | hole | minimum (coop / wide) | the solver's line | scripted | LEVELS.md par | shipped par |
 |---|---|---|---|---|---|
@@ -550,10 +681,10 @@ These minimums are search results, not proofs of a floor:
 | 8 | 6 (6 / 6) | blue's spring bounce onto WINDOW; red's window lob through the red wall onto DOOR; blue moves up; both sink | 7 | 8 | **8** (6 ∈ 6..8) |
 | 9 | 6 (6 / 6) | red rolls to 611 (just outside the jaws); blue rolls onto BAIT, CAUGHT; red rolls from 611 through the door straight into the raised spring onto TOP; blue climbs from the channel; both sink from TOP | 7 | 9 | **8** (9 > 6 + 2) |
 | 10 | 5 (5 / 5) | blue rides the spring onto A; red lobs LEFT into the lit cannon onto B (129°/49); blue onto the deck; both sink | 5 · spring route 7 | 7 | **7** (5 ∈ 5..7) |
-| 11 | 6 (6 / 6) | red lobs from its tee into the cold cannon (LOADED); blue lobs LEFT onto FIRE and fires red onto FAR; red sinks; blue rolls through the door into the cannon (BOOM); blue sinks | 8 | 8 | **8** (6 ∈ 6..8) |
+| 11 | 5 (5 / 5) | red lobs from its tee into the cold cannon (51°/83, LOADED); blue lobs LEFT through its field (118°/83): its touch on FIRE fires red onto FAR and it rolls on to the ledge's end; red sinks; blue rolls off the ledge, through the door (the cup holds FAR) into the cannon (BOOM); blue sinks | 8 | 8 | **7** (8 > 5 + 2; was 8 at minimum 6 before D11) |
 | 12 | 5 (5 / 5) | red rests on FIRE; blue lobs LEFT into the lit cannon onto TOP; red lobs LEFT from the FIRE dish into the cannon (TOP keeps it lit); both chip in | fly 5 · climb 5 | 8 | **7** (8 > 5 + 2) |
 
-Course pars: World 1 28, World 2 29, World 3 30.
+Course pars: World 1 28, World 2 29, World 3 29 (30 until D11 lowered Crossfire).
 
 Colour Keys is the one hole where the rule cannot be met inside BUILD_DECISIONS D2's ±1: the real roll
 (twice the old build's) collapses "chip to the green, then putt" into one roll-in from either bowl, and

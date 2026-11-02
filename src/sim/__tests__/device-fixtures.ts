@@ -176,11 +176,15 @@ export function deviceConfig(level: Level, mode: SimMode = 'local', seed = 5): S
 
 /**
  * The device scenario on `machineLevel` (each shot found on a 1-degree x 0.5-power grid of legal aims by playing
- * its beat on the real sim): red stops in the jaws (CAUGHT); blue stops there too, so the scoped reset sends blue back
- * to its tee (BACK +1) and red's turn is skipped; blue rests on FREE (red FREED where it sits); red rolls into
- * the cold breech (LOADED); blue taps along FREE (red's turn skipped again); blue rests on FIRE and red is fired
- * the next tick onto the landing sand; red holes out (gimme), so the cup holds FIRE; blue rolls into the lit
- * breech (fired on entry) and holes out. Ends in levelResults at MACHINE_LOG_TICKS.
+ * its beat on the real sim, and re-verified when plates became pressed by any ball on them, BUILD_DECISIONS D11):
+ * red rolls over FREE (nobody to free yet) and stops in the jaws (CAUGHT); blue's roll to the jaws crosses FREE,
+ * freeing red while it is on the plate and catching it again as it rolls off, then stops in the jaws too, so the
+ * scoped reset sends blue back to its tee (BACK +1) and red's turn is skipped; blue stops on FREE (red FREED where
+ * it sits); red rolls through the FIRE dish (nothing loaded yet) into the cold breech (LOADED); blue taps along
+ * FREE (red's turn skipped again); blue rolls into the FIRE dish and red is fired onto the landing sand the tick
+ * after blue first touches FIRE, while blue is still rolling (blue then rests on FIRE); red holes out (gimme), so
+ * the cup holds FIRE; blue rolls into the lit breech (fired on entry) and holes out. Ends in levelResults at
+ * MACHINE_LOG_TICKS.
  */
 export const MACHINE_LOG: readonly ReplayEntry[] = [
   { tick: 0, cmd: { type: 'continue', playerId: 0 } },

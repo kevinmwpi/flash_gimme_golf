@@ -22,7 +22,7 @@ import {
 } from './devices';
 import { fmtShot } from './game';
 import { replayScripted, scriptedLinesOf, type ScriptedResult } from './lines';
-import { deckLipCheck, fmtLoneDeck, loneDeckCheck, stallPlates, stallTapCheck, LONE_DECK_ROLL_MAX_DEG, type DeckLipResult, type LoneDeckResult, type StallResult } from './plates';
+import { deckLipCheck, fmtLoneDeck, isLoneDeckRoll, loneDeckCheck, stallPlates, stallTapCheck, LONE_DECK_ROLL_MAX_DEG, type DeckLipResult, type LoneDeckResult, type StallResult } from './plates';
 import { replayMatches, searchCoop, searchSolo, secondsSince, type CoopResult, type LineStep, type SearchOptions, type SoloResult } from './search';
 import {
   aceSweep,
@@ -31,6 +31,7 @@ import {
   checkedWallColumns,
   describeOptOut,
   gapCrossSweep,
+  lonePlateBroken,
   lonePlateCheck,
   wallPassSweep,
   type AceResult,
@@ -211,10 +212,22 @@ function gapCriteria(gaps: readonly GapCrossResult[], lone: readonly LonePlateRe
   const falls = gaps.reduce((n, g) => n + g.falls, 0);
   const criteria: Criterion[] = [{ name: 'gap-crossing-zero', pass: crossings === 0, detail: `${crossings}/${shots} crossings with no plate held (${falls} falls)` }];
   if (lone.length > 0) {
+    // D11: the lone ball keeps its own bridge only while it is on the plate, which ends 32+ px short of its lip
+    // (lonePlateCheck): no row may cross, touch the planks or leave the plate with the bridge still up, and every
+    // chasm shot from the plate's centre falls.
+    const broken = lone.filter(lonePlateBroken);
+    const chasm = lone.filter((l) => l.chasmShot);
+    const left = lone.filter((l) => l.leftPlate);
+    const plates = [...new Set(lone.map((l) => l.switchId))].map((id) => `${id} ${lone.filter((l) => l.switchId === id).length}`).join(', ');
+    const fmt = (l: LonePlateResult): string =>
+      `${l.switchId} from ${l.fromX} ${fmtShot(l.shot)} → ${l.restX}${l.fell ? ' fell' : ''}${l.crossed ? ' CROSSED' : ''}${l.touchedBridge ? ' TOUCHED THE PLANKS' : ''} (bridge drops ${l.bridgeDrops})`;
     criteria.push({
       name: 'lone-plate-never-crosses',
-      pass: lone.every((l) => !l.crossed),
-      detail: lone.map((l) => `${l.switchId} ${fmtShot(l.shot)} → ${l.restX}${l.fell ? ' fell' : ''}${l.crossed ? ' CROSSED' : ''} (bridge drops ${l.bridgeDrops})`).join('; '),
+      pass: broken.length === 0 && chasm.length > 0,
+      detail:
+        broken.length === 0
+          ? `${lone.length} shots at the chasm by a lone ball on a bridge plate (${plates}): 0 crossings, 0 touches of the planks, ${left.length} left the plate and every one dropped the bridge, ${chasm.filter((l) => l.fell).length}/${chasm.length} chasm shots fell${chasm[0] !== undefined ? ` (e.g. ${fmt(chasm[0])})` : ''}`
+          : broken.slice(0, 6).map(fmt).join('; '),
     });
   }
   return criteria;
@@ -236,15 +249,18 @@ function scriptedCriteria(level: Level, scripted: readonly ScriptedResult[]): Cr
 
 function stallCriteria(stall: readonly StallResult[]): Criterion[] {
   if (stall.length === 0) return [];
-  const bad = stall.filter((s) => !s.heldBefore || !s.reHeld || s.partnerFell);
+  // D11: the plate stays down through the whole tap (0 releases), not merely re-held once the holder rests again.
+  const bad = stall.filter((s) => !s.heldBefore || !s.reHeld || s.releases > 0 || s.partnerFell);
   return [
     {
       name: 'stall-taps-safe',
       pass: bad.length === 0,
       detail:
         bad.length === 0
-          ? `${stall.length} taps re-held their plate, 0 partner falls, ${stall.filter((s) => s.partnerAt === 'deck').length} with a partner on the deck`
-          : bad.map((s) => `${s.switchId} ${fmtShot(s.tap)} partner@${s.partnerAt}: held before ${s.heldBefore}, re-held ${s.reHeld}, partner fell ${s.partnerFell}, rest x ${s.holderRestX}`).join('; '),
+          ? `${stall.length} taps kept their plate down throughout (0 releases) and ended on it, 0 partner falls, ${stall.filter((s) => s.partnerAt === 'deck').length} with a partner on the deck`
+          : bad
+              .map((s) => `${s.switchId} ${fmtShot(s.tap)} partner@${s.partnerAt}: held before ${s.heldBefore}, re-held ${s.reHeld}, released ${s.releases}x, partner fell ${s.partnerFell}, rest x ${s.holderRestX}`)
+              .join('; '),
     },
   ];
 }
@@ -253,26 +269,35 @@ function deckCriteria(deck: readonly DeckLipResult[]): Criterion[] {
   return deck.map((d) => ({
     name: `deck-lip: ${d.deckId}`,
     pass: d.lipPresses === 0 && d.deckPresses === d.deckSamples && d.deckSamples > 0,
-    detail: `${d.lipPresses}/${d.lipSamples} lip rests press the deck, ${d.deckPresses}/${d.deckSamples} on-deck rests press it`,
+    detail: `${d.lipPresses}/${d.lipSamples} lip rests press the deck, ${d.deckPresses}/${d.deckSamples} on-deck rests press it (1 px inside either lip included)`,
   }));
 }
 
 function loneDeckCriteria(lone: readonly LoneDeckResult[]): Criterion[] {
   if (lone.length === 0) return [];
-  const rolls = lone.filter((l) => l.shot.deg <= LONE_DECK_ROLL_MAX_DEG);
-  const lobs = lone.filter((l) => l.shot.deg > LONE_DECK_ROLL_MAX_DEG);
-  const badRolls = rolls.filter((l) => l.crossed || !l.fell);
+  // D11 (plates.ts loneDeckCheck): the planks stay under a rolling deck ball to either lip; a high lob lifts off.
+  const rolls = lone.filter((l) => isLoneDeckRoll(l.shot));
+  const lobs = lone.filter((l) => !isLoneDeckRoll(l.shot));
+  const rollsFell = rolls.filter((l) => l.fell);
+  const rollsAcross = rolls.filter((l) => l.crossed);
+  const lobsBad = lobs.filter((l) => !l.released || l.onDeck);
   const lobsAcross = lobs.filter((l) => l.crossed);
   return [
     {
-      name: 'deck-lone-roll-falls',
-      pass: badRolls.length === 0 && rolls.length > 0,
-      detail: badRolls.length === 0 ? `${rolls.length} rolls (≤ ${LONE_DECK_ROLL_MAX_DEG}°) by a lone deck ball all dropped into the chasm` : badRolls.map(fmtLoneDeck).join('; '),
+      name: 'deck-lone-roll-keeps-bridge',
+      pass: rollsFell.length === 0 && rollsAcross.length > 0 && rolls.length > 0,
+      detail:
+        rollsFell.length === 0
+          ? `${rolls.length} rolls (within ${LONE_DECK_ROLL_MAX_DEG}° of the horizontal, both ways) by a lone deck ball: 0 fell, ${rollsAcross.length} reached the far side, ${rolls.filter((l) => l.onDeck).length} stopped on the deck, ${rolls.length - rollsAcross.length - rolls.filter((l) => l.onDeck).length} rolled back onto the near lip${rollsAcross[0] !== undefined ? ` (e.g. ${fmtLoneDeck(rollsAcross[0])})` : ''}`
+          : rollsFell.map(fmtLoneDeck).join('; '),
     },
     {
-      name: 'deck-lone-lob-crosses',
-      pass: lobsAcross.length > 0,
-      detail: `${lobsAcross.length}/${lobs.length} lobs by a lone deck ball reached the far side${lobsAcross.length > 0 ? ` (e.g. ${fmtLoneDeck(lobsAcross[0]!)})` : ''}`,
+      name: 'deck-lone-lob-lifts-off',
+      pass: lobsBad.length === 0 && lobsAcross.length > 0,
+      detail:
+        lobsBad.length === 0
+          ? `${lobs.length}/${lobs.length} 45° lobs by a lone deck ball released DECK in flight and none came down on the planks; ${lobsAcross.length} carried to the far side${lobsAcross[0] !== undefined ? ` (e.g. ${fmtLoneDeck(lobsAcross[0])})` : ''}, ${lobs.filter((l) => l.fell).length} fell`
+          : lobsBad.map(fmtLoneDeck).join('; '),
     },
   ];
 }
@@ -282,6 +307,7 @@ function launcherCriteria(report: LauncherReport): Criterion[] {
   const drops = report.rows.reduce((n, r) => n + r.drops, 0);
   const rowText = (r: LauncherReport['rows'][number]): string =>
     `${r.rectId} P${r.player + 1} [${r.held.join(',')}] -> ${r.target} (${r.mode}): ${r.onTarget}/${r.drops}, rest x ${r.restX === null ? '-' : `${Math.round(r.restX[0])}-${Math.round(r.restX[1])}`}, apex y ${r.apexNominal} (worst ${r.apexWorst})${r.misses.length > 0 ? `; e.g. ${r.misses.join(' | ')}` : ''}`;
+  const hopped = report.rows.filter((r) => r.hopReleased > 0);
   return [
     {
       name: 'launchers-cover-every-launcher',
@@ -293,6 +319,20 @@ function launcherCriteria(report: LauncherReport): Criterion[] {
       name: 'launchers-fire-once',
       pass: report.rows.every((r) => r.refires === 0 && r.unfired === 0),
       detail: `${report.rows.reduce((n, r) => n + r.refires, 0)} re-fires, ${report.rows.reduce((n, r) => n + r.unfired, 0)} drops that never launched, longest flight ${Math.max(...report.rows.map((r) => r.longestTicks))} ticks`,
+    },
+    {
+      // D11: a plate goes down on contact and stays down through hops of at most PLATE_HOLD_HEIGHT_PX, so no bounce of a
+      // launcher landing may let its target up while the ball is still over it (no door, trap or cannon flicker through
+      // bounces). Rolling off the plate's end onto its bowl and back is a pass-over, which D11 accepts: counted, not failed.
+      name: 'launchers-hops-hold',
+      pass: hopped.length === 0,
+      detail:
+        hopped.length === 0
+          ? `0 of ${drops} landings let their target plate up during a bounce; ${report.rows.reduce((n, r) => n + r.rolledOff, 0)} rolled off its end onto the bowl and back before resting (${report.rows
+              .filter((r) => r.rolledOff > 0)
+              .map((r) => `${r.rectId} P${r.player + 1} -> ${r.target} (${r.mode}) ${r.rolledOff}`)
+              .join(', ') || 'none'})`
+          : hopped.map((r) => `${r.rectId} P${r.player + 1} -> ${r.target} (${r.mode}): ${r.hopReleased}/${r.drops} landings let it up mid-bounce`).join('; '),
     },
   ];
 }

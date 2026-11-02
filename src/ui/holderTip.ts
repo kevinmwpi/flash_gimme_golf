@@ -2,9 +2,9 @@
 /**
  * The holder tip (BUILD_DECISIONS D2, D10.10, D11: the toast that teaches the stall tap). At the start of a turn
  * the active ball may rest on a plate its partner still needs. Under D11 a pressed plate stays down while a ball
- * over it hops no higher than PLATE_HOLD_HEIGHT_PX (56), so a stall tap (straight up at low power: power 40 rises
- * 55 px) keeps the plate down from the shot to the landing, a deck plate included. The tip names that plate only
- * when staying on it really keeps the partner's way open:
+ * over it hops no higher than PLATE_HOLD_HEIGHT_PX (72), so a stall tap (straight up at low power: up to power 46,
+ * which rises 70 px) keeps the plate down from the shot to the landing, a deck plate included. The tip names that
+ * plate only when staying on it really keeps the partner's way open:
  * - neither ball waits in a device (caught in an armed trap or loaded in a cold cannon): there the WAITING
  *   rule already hands every turn to the free ball, and a release or FIRE plate is the partner's job;
  * - the plate opens a door or raises a bridge: a plate whose only consumers are traps or cannons is never

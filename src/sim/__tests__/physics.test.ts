@@ -301,49 +301,61 @@ describe('physics', () => {
   });
 
   describe('predictShot parity with the real sim', () => {
-    /** Plays `aim` from the intro state with stepSim and returns the active ball's position per tick after the shot. */
-    function realShot(level: Level, aim: Aim, ticks: number): { positions: BallState['pos'][]; events: SimEventType[]; final: SimState } {
+    type RealShot = { positions: BallState['pos'][]; events: SimEventType[]; perTick: SimEventType[][]; final: SimState };
+
+    /** Plays `aim` from the intro state with stepSim and returns the active ball's position (and the events) per tick after the shot. */
+    function realShot(level: Level, aim: Aim, ticks: number): RealShot {
       let state = createSim(fixtureConfig([level])).state;
       state = stepSim(state, [{ type: 'continue', playerId: 0 }]).state;
       const p = state.activePlayer;
       const positions: BallState['pos'][] = [];
-      const events: SimEventType[] = [];
+      const perTick: SimEventType[][] = [];
       let r = stepSim(state, [{ type: 'setAim', playerId: p, ...aim }, { type: 'shoot', playerId: p }]);
       positions.push(r.state.balls[p].pos);
-      events.push(...r.events.map((e) => e.type));
+      perTick.push(r.events.map((e) => e.type));
       for (let i = 1; i < ticks; i += 1) {
         r = stepSim(r.state, []);
         positions.push(r.state.balls[p].pos);
-        events.push(...r.events.map((e) => e.type));
+        perTick.push(r.events.map((e) => e.type));
       }
-      return { positions, events, final: r.state };
+      return { positions, events: perTick.flat(), perTick, final: r.state };
     }
 
-    function expectParity(level: Level, aim: Aim): SimEventType[] {
+    /** Asserts the preview's points equal the real shot's positions tick for tick; returns the preview length and the real shot. */
+    function expectParity(level: Level, aim: Aim): { compared: number; real: RealShot } {
       const intro = createSim(fixtureConfig([level])).state;
       const p = intro.activePlayer;
       const preview = predictShot(level, intro.switches, intro.balls[p], p, aim, [intro.balls[1 - p === 0 ? 0 : 1]], 150);
-      // the real run goes on past the preview's 150 ticks: a chip onto a plate presses it only once it RESTS
+      // the real run goes on past the preview's 150 ticks, until the shot has settled and the turn passed
       const real = realShot(level, aim, 400);
       expect(preview.points.length).toBeGreaterThan(0);
       for (let k = 0; k < preview.points.length; k += 1) {
         expect(preview.points[k], `tick ${k}`).toEqual(real.positions[k]);
       }
       expect(preview.landing).not.toBeNull();
-      return real.events;
+      return { compared: preview.points.length, real };
     }
 
     it('predictShot points equal a real shot positions for 150 ticks exactly on sandSpringBumperLevel', () => {
-      const events = expectParity(sandSpringBumperLevel, { angle: -0.7854, power: 100 });
+      const events = expectParity(sandSpringBumperLevel, { angle: -0.7854, power: 100 }).real.events;
       expect(events).toContain('spring');
-      expect(expectParity(sandSpringBumperLevel, { angle: -0.7854, power: 50 })).toContain('enterSand');
+      expect(expectParity(sandSpringBumperLevel, { angle: -0.7854, power: 50 }).real.events).toContain('enterSand');
     });
 
     it('predictShot points equal a real shot positions on blockerLevel where the shot lands on a plate that opens the blocker', () => {
       const aim: Aim = { angle: -0.7854, power: 40 };
-      const events = expectParity(blockerLevel, aim);
-      expect(events).toContain('switchOn');
-      expect(events).toContain('bridgeToggle');
+      const { compared, real } = expectParity(blockerLevel, aim);
+      expect(real.events).toContain('switchOn');
+      expect(real.events).toContain('bridgeToggle');
+      // D11: the ball presses the plate the tick it first touches it (it lands short and rolls on), long before it
+      // rests and inside the compared ticks, so the parity covers predictShot re-evaluating the switches mid-shot
+      // exactly as stepSim does
+      const pressedAt = real.perTick.findIndex((types) => types.includes('switchOn'));
+      const restAt = real.perTick.findIndex((types) => types.includes('ballRest'));
+      expect(pressedAt).toBeGreaterThan(0);
+      expect(pressedAt).toBeLessThan(compared);
+      expect(real.perTick[pressedAt]).toContain('bridgeToggle');
+      expect(restAt).toBeGreaterThan(pressedAt);
       const preview = predictShot(blockerLevel, { door: false }, createSim(fixtureConfig([blockerLevel])).state.balls[0], 0, aim, [], 400);
       expect(preview.outcome).toBe('rest');
       const rest = preview.points[preview.points.length - 1];

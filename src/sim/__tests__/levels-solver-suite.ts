@@ -36,6 +36,7 @@ import {
   hasWaitingDevices,
   hasWallColumns,
   isCoopLevel,
+  isLoneDeckRoll,
   launchersOf,
   optOutsOf,
   parSlackFor,
@@ -176,13 +177,18 @@ export function solverSuite(world: WorldId): void {
           expect(gaps.reduce((n, g) => n + g.falls, 0)).toBeGreaterThan(0);
         });
 
-        it.runIf(hasBridgedGaps(level))('gaps: a lone ball leaving a bridge plate drops the bridge and never rests beyond the far lip', () => {
+        // D11: the lone ball keeps the bridge only while it is on its plate, which ends 32+ px short of its lip, so the
+        // planks are gone before it reaches the chasm (scripts/solver/sweeps.ts lonePlateCheck).
+        it.runIf(hasBridgedGaps(level))('gaps: a lone ball shooting at the chasm from a bridge plate (near or far) never touches the planks, drops the bridge whenever it leaves the plate and never rests across the chasm; the chasm shots from the plate centre all fall', () => {
           const lone = report.lonePlate!;
-          expect(lone.length).toBeGreaterThan(0);
+          expect(lone.filter((l) => l.chasmShot).length).toBeGreaterThanOrEqual(10);
+          expect(lone.filter((l) => !l.chasmShot).length).toBeGreaterThanOrEqual(4 * 160);
           for (const l of lone) {
-            expect(l.crossed).toBe(false);
-            expect(l.fell).toBe(true);
-            expect(l.bridgeDrops).toBeGreaterThanOrEqual(1);
+            const name = `${l.switchId} from ${l.fromX} ${l.shot.deg}/${l.shot.power}`;
+            expect(l.crossed, name).toBe(false);
+            expect(l.touchedBridge, name).toBe(false);
+            if (l.leftPlate) expect(l.bridgeDrops, name).toBeGreaterThanOrEqual(1);
+            if (l.chasmShot) expect(l.fell, name).toBe(true);
           }
         });
 
@@ -201,41 +207,46 @@ export function solverSuite(world: WorldId): void {
           expect({ ...recordGolden(level, GOLDEN_GRID), order: level.order }).toEqual(committed);
         });
 
-        it.runIf(hasStallPlates(level))('stall: a holder tapping straight up (90/10, 90/15, 80/20, 100/15) lands back on its plate; a partner on a tee, a plate or the deck never falls', () => {
+        it.runIf(hasStallPlates(level))('stall: a holder tapping straight up (90/10, 90/15, 80/20, 100/15) never lets its plate up (D11: 0 releases) and lands back on it; a partner on a tee, a plate or the deck never falls', () => {
           const stall = report.stall!;
           expect(stall.length).toBeGreaterThan(0);
           for (const s of stall) {
-            expect(s.heldBefore, `${s.switchId} partner@${s.partnerAt}`).toBe(true);
-            expect(s.reHeld, `${s.switchId} ${s.tap.deg}/${s.tap.power} partner@${s.partnerAt}`).toBe(true);
-            expect(s.partnerFell, `${s.switchId} ${s.tap.deg}/${s.tap.power} partner@${s.partnerAt}`).toBe(false);
+            const name = `${s.switchId} ${s.tap.deg}/${s.tap.power} partner@${s.partnerAt}`;
+            expect(s.heldBefore, name).toBe(true);
+            expect(s.releases, name).toBe(0);
+            expect(s.reHeld, name).toBe(true);
+            expect(s.partnerFell, name).toBe(false);
           }
           if (hasDeck(level)) expect(stall.filter((s) => s.partnerAt === 'deck').length).toBeGreaterThan(0);
         });
 
-        it.runIf(hasDeck(level))('deck: a ball resting 1-24 px outside either lip never presses DECK; a ball resting anywhere on the inset strip does', () => {
+        it.runIf(hasDeck(level))('deck: a ball resting 1-24 px outside either lip never presses DECK; a ball resting anywhere on the planks does, 1 px inside either lip included (the DECK spans its bridge, D11)', () => {
           const deck = report.deck!;
           expect(deck.length).toBeGreaterThan(0);
           for (const d of deck) {
             expect(d.lipSamples).toBe(48);
             expect(d.lipPresses).toBe(0);
-            expect(d.deckSamples).toBeGreaterThan(0);
+            expect(d.deckSamples).toBeGreaterThan(2);
             expect(d.deckPresses).toBe(d.deckSamples);
           }
         });
 
-        it.runIf(hasDeck(level))(`deck: a lone deck ball (partner on its tee) drops into the chasm on every roll of <= ${LONE_DECK_ROLL_MAX_DEG} deg and crosses only by a lob that carries to the far lip (the watchOut copy)`, () => {
+        it.runIf(hasDeck(level))(`deck: a lone deck ball (partner on its tee) keeps the planks under every roll within ${LONE_DECK_ROLL_MAX_DEG} deg of the horizontal, either way, and reaches the far side rolling; a 45 deg lob lifts off the deck and crosses only by carrying to the far lip (the watchOut copy, D11)`, () => {
           const lone = report.loneDeck!;
-          const rolls = lone.filter((l) => l.shot.deg <= LONE_DECK_ROLL_MAX_DEG);
-          const lobs = lone.filter((l) => l.shot.deg > LONE_DECK_ROLL_MAX_DEG);
-          expect(rolls.length).toBeGreaterThanOrEqual(36);
-          for (const l of rolls) {
-            expect(l.crossed, `${l.fromX} ${l.shot.deg}/${l.shot.power}`).toBe(false);
-            expect(l.fell, `${l.fromX} ${l.shot.deg}/${l.shot.power}`).toBe(true);
+          const rolls = lone.filter((l) => isLoneDeckRoll(l.shot));
+          const lobs = lone.filter((l) => !isLoneDeckRoll(l.shot));
+          expect(rolls.length).toBeGreaterThanOrEqual(72);
+          for (const l of rolls) expect(l.fell, `${l.fromX} ${l.shot.deg}/${l.shot.power}`).toBe(false);
+          expect(rolls.some((l) => l.crossed)).toBe(true);
+          expect(lobs.length).toBeGreaterThan(0);
+          for (const l of lobs) {
+            expect(l.released, `${l.fromX} ${l.shot.deg}/${l.shot.power}`).toBe(true);
+            expect(l.onDeck, `${l.fromX} ${l.shot.deg}/${l.shot.power}`).toBe(false);
           }
           expect(lobs.some((l) => l.crossed)).toBe(true);
         });
 
-        it.runIf(hasLaunchers(level))('launchers: every ride of the intended lines rests on its target plate from every pad x (0.5 px) and every 97/100/103 % launch, fired once (cannons also LOADED)', () => {
+        it.runIf(hasLaunchers(level))('launchers: every ride of the intended lines rests on its target plate from every pad x (0.5 px) and every 97/100/103 % launch, fired once (cannons also LOADED), and no bounce of the landing lets that plate up (D11)', () => {
           const launchers = report.launchers!;
           expect(launchers.uncovered).toEqual([]);
           expect(launchers.unknown).toEqual([]);
@@ -246,6 +257,7 @@ export function solverSuite(world: WorldId): void {
             const name = `${row.rectId} P${row.player + 1} -> ${row.target} (${row.mode})`;
             expect(row.drops, name).toBe(perturbations * (pad.w / LAUNCH_STEP_PX + 1));
             expect(row.onTarget, `${name}: ${row.misses.join(' | ')}`).toBe(row.drops);
+            expect(row.hopReleased, name).toBe(0);
             expect(row.refires, name).toBe(0);
             expect(row.unfired, name).toBe(0);
           }

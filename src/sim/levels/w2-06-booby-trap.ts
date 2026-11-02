@@ -5,8 +5,10 @@
  * BEHIND the tees, with a backboard rising 120 px behind the bowl (the design's backstop that makes the
  * leftward lob fair). A short lob rolls down into the TRAP dish at the perch's foot: the steel jaws
  * (350-450 x 560-640) catch a ball that comes to REST there, its turns go to its partner (the WAITING
- * rule), and it is freed where it sits while a ball rests on FREE (the dish 80-170 px right of the
- * tees) or on FAR (behind the door), or a ball is in the cup. Teaches the TRAP as a hazard that
+ * rule), and it is freed where it sits while a ball is on FREE (the dish 80-170 px right of the
+ * tees) or on FAR (behind the door), or a ball is in the cup. Plates press on contact and come up
+ * the tick they are empty (BUILD_DECISIONS D11): a ball rolling across FREE opens the jaws only
+ * while it passes, so a rescue still means stopping on FREE. Teaches the TRAP as a hazard that
  * punishes a missed precision shot; red shoots first. The cup holds FAR (D2).
  *
  * Intended line (par 6): red lobs LEFT onto the perch (PERCH opens the DOOR) -> blue rolls through the

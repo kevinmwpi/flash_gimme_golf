@@ -4,15 +4,21 @@
  * level rules force, below). Introduces nothing: cannon, spring and bridge combined. Two spires 220 px
  * up face each other over a 720 px chasm (860-1580). Behind the tees a cold CANNON sits in a drum
  * (breech 76-124 at y 600); in front of them a SPRING (442-498) throws a ball onto plate A in the near
- * spire's bowl. A, B (the far spire's bowl) and the DECK (on the bridge, inset 24 px from both lips)
- * each hold the BRIDGE and light the cannon, so one landing on A raises the bridge AND fires a LOADED
- * ball 1,600 px onto B: the cannon never fires without a bridge underneath. Blue shoots first. The cup
- * holds B (D2).
+ * spire's bowl. A, B (the far spire's bowl) and the DECK (on the bridge, lip to lip) each hold the
+ * BRIDGE and light the cannon, so the touch that lands a ball on A raises the bridge AND fires a LOADED
+ * ball 1,600 px onto B: the cannon never fires without a bridge underneath. Plates press on contact and
+ * come up the tick no ball is on them (BUILD_DECISIONS D11). Blue shoots first. The cup holds B (D2).
  *
  * Intended line (par 7): blue chips LEFT into the cold cannon and waits, LOADED -> red rides the spring
  * onto A: the bridge appears, the cannon lights and fires blue onto B -> blue putts out (the cup keeps
  * B held) -> red crosses the bridge from A and putts. Second route: both ride the spring onto A and
- * cross one at a time (World 1's Plate & Bridge pattern; a lone ball on the DECK must fly off it).
+ * cross one at a time (World 1's Plate & Bridge pattern: a lone ball on the DECK keeps the bridge while
+ * it rolls along the planks, so it rolls off; a high lob lifts off the deck and drops the planks).
+ *
+ * D11: the DECK spans its bridge exactly (Appendix A and the first build inset it 24 px from both lips).
+ * With plates pressed by rolling balls, the inset dropped the planks under a lone deck ball rolling for
+ * a lip 22-24 px before it got there (120 of 1,120 rolls fell); lip to lip, 0 of 1,200 fall, and a ball
+ * resting AT a lip still never holds the bridge (it stands on the spire, not the planks).
  *
  * Deviation from Appendix A (BUILD_DECISIONS D10.12): the back bunker there was 1930-1960 (30 px, under
  * the 40 px minimum) and plate B's right edge (1750) sat exactly GIMME_RADIUS + NEAR_CUP_RADIUS = 130 px
@@ -29,7 +35,6 @@ import { SWITCH_COLOUR, compileLevel, terrainPiece } from './authoring';
 
 const GAP_X1 = 860;
 const GAP_X2 = 1580;
-const DECK_INSET = 24;
 const B_FLOOR_X1 = 1630;
 const B_FLOOR_X2 = 1740; // Appendix A: 1750 (see the header)
 
@@ -42,7 +47,7 @@ export const level: Level = compileLevel({
   hint: 'Blue: chip back into the CANNON and wait. Red: ride the SPRING onto A, and the BRIDGE and the cannon both go live.',
   aha: 'My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across, so the cannon never fires without a bridge underneath.',
   watchOut:
-    'A cold CANNON is safe: a ball resting in it just waits, LOADED, and fires the moment a ball rests on A, B or the DECK, which also raises the bridge. Without the cannon, ride the SPRING onto A and cross one at a time. A ball parked on the DECK holds the bridge only while it sits still, so it must fly off it, never roll, or it drops into the chasm (+1).',
+    'A cold CANNON is safe: a ball resting in it just waits, LOADED, and fires the moment a ball touches A, B or the DECK, which also raises the bridge. Without the cannon, ride the SPRING onto A and cross one at a time. A ball on the DECK holds the bridge while it stays on the planks, so roll off it: a high lob lifts off the deck and the planks vanish unless a ball holds A or B (+1 if it drops into the chasm).',
   mechanicsIntroduced: [],
   firstPlayer: 1,
   cupHoldsSwitch: 'b',
@@ -98,7 +103,7 @@ export const level: Level = compileLevel({
   switches: [
     { id: 'a', centerX: 730, w: 120, colour: SWITCH_COLOUR, label: 'A' }, // 670-790 on the bowl floor
     { id: 'b', centerX: (B_FLOOR_X1 + B_FLOOR_X2) / 2, w: B_FLOOR_X2 - B_FLOOR_X1, colour: SWITCH_COLOUR, label: 'B' }, // the whole bowl floor
-    { id: 'deck', centerX: (GAP_X1 + GAP_X2) / 2, w: GAP_X2 - GAP_X1 - 2 * DECK_INSET, colour: SWITCH_COLOUR, label: 'DECK', onRectId: 'bridge' },
+    { id: 'deck', centerX: (GAP_X1 + GAP_X2) / 2, w: GAP_X2 - GAP_X1, colour: SWITCH_COLOUR, label: 'DECK', onRectId: 'bridge' }, // lip to lip (D11)
   ],
   holeX: 1875,
   startXs: [280, 330],
