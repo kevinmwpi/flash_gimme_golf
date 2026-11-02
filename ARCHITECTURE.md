@@ -67,8 +67,9 @@ are derived from position, the rest flag and the switches (`devices.ts`).
 Input is command-based with absolute aim: `setAim{angle,power}`, `shoot`, `continue`, `restartLevel`,
 each stamped with a `playerId`. `allowedCommands(state, seat)` is the single phase x role table;
 the host is seat 0 in every mode and in solo seat 0 owns both slots. Every ball is simulated every
-tick; switches are re-evaluated from resting balls every tick; a turn advances only when all balls are
-settled and no switch changed that tick. Who tees off first is `level.firstPlayer`.
+tick; switches are re-evaluated every tick from the balls on the plates (D11: any ball over a plate on
+contact, rolling or resting, kept pressed through hops up to `PLATE_HOLD_HEIGHT_PX`); a turn advances
+only when all balls are settled and no switch changed that tick. Who tees off first is `level.firstPlayer`.
 
 **Devices and the WAITING rule (BUILD_DECISIONS D10.4-D10.6).** A trap is a rect ARMED while none of
 its release plates is held; a ball that comes to rest inside an armed trap is caught. A cannon breech
@@ -186,7 +187,7 @@ version validation and show a "from an older version" card.
 | `src/sim/__tests__/contract.test.ts` | every contracted export exists with the right type (fails the moment a contract is renamed) |
 | `src/sim/__tests__/replay.test.ts` | `runReplay` is bit-identical across runs and across a split run; golden snapshot; ticks matter |
 | `src/sim/__tests__/turns.test.ts` | the allowed-command table, seats in solo/local, turn delay 27 -> 26, level and campaign transitions |
-| `src/sim/__tests__/switches.test.ts` | held plates, release timing, bridges appearing and vanishing under a parked ball, no wake loops, solo can hold and cross |
+| `src/sim/__tests__/switches.test.ts` | plates pressed on contact by rolling, bouncing or resting balls and held through low hops (D11), release timing, bridges appearing and vanishing under a parked ball, no wake loops, solo can hold and cross |
 | `src/sim/__tests__/physics.test.ts` | no tunnelling at any speed, bounded energy on springs/bumpers, friction, slopes, colour gates, sand, `predictShot` parity with real shots |
 | `src/sim/__tests__/cup.test.ts` | sink vs lip-out by speed, gimme radius inclusive, near-cup callout, swept detection |
 | `src/sim/__tests__/serialize.test.ts` | round-trip idempotence, lossless settled states, size budget, every rejection path |

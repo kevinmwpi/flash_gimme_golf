@@ -203,3 +203,21 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   Colour-field stripes are drawn in the field's own colour; a field with a door or window standing on it hangs its
   label beside the field; the 6-label cap counts labels slid onto the screen; labels keep clear of the HUD-scaled
   top and bottom bands. The canvas reads the same reduced-motion setting as the CSS (`<html data-motion>`).
+
+## D11. Plates are pressed by any ball on them (owner request 2026-11-02; supersedes D2's resting-only plate rule)
+The owner asked why a plate only goes down once the ball has stopped (just before the turn passes) instead of as the
+ball passes over it. The resting-only rule was chosen to stop doors flickering through bounce hops; its cost is that
+a plate reacts late and a ball rolling over a button does nothing, which reads as lag. New rule (`switchPresser`):
+- A plate is PRESSED by any non-sunk ball whose centre x is over it and whose ground is the plate's own surface (a
+  terrain piece, or the deck rect for a deck plate), rolling, bouncing or resting. It goes down on CONTACT (bottom
+  within `SWITCH_CONTACT_TOLERANCE`).
+- Once down it STAYS down while a ball over it is at most `PLATE_HOLD_HEIGHT_PX` (56) above it, so landing bounces and
+  stall taps never flicker the door; it comes UP the tick no ball is on it. No latching: holding a door open for a
+  partner still means staying on the plate.
+- Consequences accepted with it: a ball rolling across a plate opens its door or bridge while it passes (never long
+  enough to let itself through: every plate ends 28-50 px before its own door); a loaded ball fires the moment any
+  ball touches a FIRE plate; a release plate frees a caught ball only while a ball is on it (a rescue must still
+  stay on FREE/TOP to hold at the hand-off); World 1 plays differently (doors react sooner, a holder's stall tap
+  keeps the door open), so its goldens and the D10.3 World 1 equivalence are re-baselined on purpose.
+- Copy says "on" a plate rather than "resting on" where the difference matters (cannons fire on touch; holding still
+  means staying on the plate).

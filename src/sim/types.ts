@@ -180,11 +180,13 @@ export type LevelRect =
 export type LevelRectKind = LevelRect['kind'];
 
 /**
- * Pressure plate. HELD while a RESTING (asleep, not sunk) ball has its centre x inside [x, x+w], its
- * bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY` and, as its ground, a terrain piece (or, for
- * a deck plate, the `onRectId` rect): a ball rolling or bouncing across a plate never presses it, and a
- * caught ball still holds the plate it rests on (a trap seat). Released the very tick the holder moves
- * (no latching). Levels pair switches so the holder can also cross.
+ * Pressure plate (BUILD_DECISIONS D11). PRESSED by any ball that is on it, rolling, bouncing or resting:
+ * the ball's centre x inside [x, x+w], over the plate's own ground (a terrain piece, or for a deck plate
+ * the `onRectId` rect). It goes down on contact (the ball's bottom within SWITCH_CONTACT_TOLERANCE px of
+ * `surfaceY`) and, once down, stays down while a ball over it is at most PLATE_HOLD_HEIGHT_PX above it, so
+ * a landing's bounces and a stall tap never flicker the door. It comes up the tick no ball is on it (no
+ * latching): to hold a door open for a partner, a ball has to stay on the plate. A caught ball still
+ * holds the plate it rests on (a trap seat). Levels pair switches so the holder can also cross.
  */
 export type PressureSwitch = {
   readonly id: string;
@@ -650,6 +652,12 @@ export const FAN_FORCE = 900; // px/s^2 upward (net 280 against gravity)
 export const FAN_MAX_LIFT = 420; // px/s cap on upward speed inside a fan
 
 export const SWITCH_CONTACT_TOLERANCE = 6; // px between ball bottom and plate surface
+/**
+ * A pressed plate stays pressed while a ball over it hops no more than this far above it (D11): it covers
+ * the first hop of a 700 px/s landing (about 48 px at GROUND_RESTITUTION 0.35) and every stall tap, so a
+ * door never flickers through bounces, while a ball that rolls or flies off the plate releases it at once.
+ */
+export const PLATE_HOLD_HEIGHT_PX = 56;
 export const BRIDGE_LIP_TOLERANCE = 3; // px, validity test
 /** Minimum vertical clearance between an overhang's base and the surface below it (2R + 24). */
 export const OVERHANG_MIN_CLEARANCE = 2 * BALL_RADIUS + 24;

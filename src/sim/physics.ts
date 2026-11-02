@@ -73,6 +73,7 @@ import {
   SLOPE_GRAVITY_SCALE,
   SUBSTEP_MAX_MOVE,
   SUNK_BALL_DROP,
+  PLATE_HOLD_HEIGHT_PX,
   SWITCH_CONTACT_TOLERANCE,
   WALL_RESTITUTION,
   quantize2,
@@ -612,13 +613,13 @@ function settle(ball: BallState, ctx: BallContext, out: StepBallOut): number {
 // ---- switches -----------------------------------------------------------------------------------------
 
 /**
- * The slot whose ball holds `sw` right now: a RESTING (asleep) ball with its centre x inside the plate's
- * x-range and its bottom within SWITCH_CONTACT_TOLERANCE of surfaceY, standing over a piece — or over the
- * plate's own rect for a deck plate (LEVELS.md plate rule, BUILD_DECISIONS D2). A plate is held, not
- * pressed: a ball rolling or bouncing across it never presses, so a landing presses exactly once, on its
- * `ballRest` tick, however hard it hits (a grounded-or-height test chattered the door through every
- * bounce hop). Release is immediate the tick the holder starts moving: `shoot` and every wake clear
- * `asleep` before the switches are evaluated.
+ * The slot whose ball presses `sw` right now (BUILD_DECISIONS D11, superseding D2's resting-only rule):
+ * any ball, rolling, bouncing or resting, with its centre x inside the plate's x-range, standing over a
+ * piece — or over the plate's own rect for a deck plate. A plate goes DOWN on contact (the ball's bottom
+ * within SWITCH_CONTACT_TOLERANCE of surfaceY) and, while it is down (`switches[sw.id]`), STAYS down for a
+ * ball over it whose bottom is at most PLATE_HOLD_HEIGHT_PX above it: a landing's bounce hops and a stall
+ * tap never flicker the door (the reason the old rule waited for the ball to rest). It comes UP the tick no
+ * ball is on it, so a ball rolling across a plate presses it only while it passes.
  */
 export function switchPresser(
   level: Level,
@@ -626,11 +627,14 @@ export function switchPresser(
   switches: Readonly<Record<string, boolean>>,
   balls: readonly Readonly<BallState>[],
 ): PlayerId | null {
+  const reach = switches[sw.id] === true ? PLATE_HOLD_HEIGHT_PX : SWITCH_CONTACT_TOLERANCE;
   for (const i of SLOTS) {
     const ball = balls[i];
-    if (ball === undefined || ball.sunk || !ball.asleep) continue;
+    if (ball === undefined || ball.sunk) continue;
     if (ball.pos.x < sw.x || ball.pos.x > sw.x + sw.w) continue;
-    if (Math.abs(ball.pos.y + BALL_RADIUS - sw.surfaceY) > SWITCH_CONTACT_TOLERANCE) continue;
+    // > 0: the ball's bottom is above the plate; below -tolerance it has sunk into a dish beside it
+    const above = sw.surfaceY - (ball.pos.y + BALL_RADIUS);
+    if (above < -SWITCH_CONTACT_TOLERANCE || above > reach) continue;
     const g = groundAt(level, switches, ball.pos, i);
     if (g === null) continue;
     if (sw.onRectId === undefined) {
