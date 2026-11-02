@@ -1,4 +1,4 @@
-# Flash Golf — status and next steps (2026-11-01)
+# Flash Golf — status and next steps (2026-11-02)
 
 ## State
 
@@ -23,6 +23,22 @@ baseline), the levels, then view, UI, audio and solver groups in parallel, then 
 (sim/levels, net/audio/tooling, visual/UX) where every claim was re-checked by a skeptic before a fixer touched it.
 Verification found and closed three real defects in the approved geometry or engine: the Bait strip softlock, the
 Crossfire flat softlock and a door-ejection freeze (Colour Lift, and latently World 1's Two Doors).
+
+**Plates pressed on contact (BUILD_DECISIONS D11, 2026-11-02; on branch `claude/festive-clarke-3iqu1k`, not yet
+merged or deployed).** The owner asked why a plate only went down once the ball had stopped. Now any ball on a plate
+presses it, rolling, bouncing or resting; it stays down through bounce hops up to `PLATE_HOLD_HEIGHT_PX` (72) and comes
+up the tick no ball is on it. Words, chimes and door slides still wait for a lasting hold (`src/view/plates.ts`), so a
+ball rolling across a plate reads as a quiet press, not a callout. Consequences: a loaded cannon fires on a partner's
+first touch of FIRE; the L4 and L10 decks span their bridges lip to lip; Crossfire's par 8 -> 7 (World 3 course par
+29); the goldens keep their shots and strokes (final ticks 2-3 sooner).
+
+| D11 check | Result |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm test` | clean; 41 files, 716 tests |
+| `npm run test:levels` | 161 passed, 70 gated skips, 0 failed; every golden re-records exactly as committed |
+| Solver, all 12 holes | 222 of 222 criteria (the lone-plate, stall, deck and launcher checks restated for D11) |
+| Self-bypass hunt | a lone ball shot across every plate at what it drives: 265,965 shots, 0 got through |
+| Hop scan at 72 | 320,164 flights over all 26 plates: no landing lets its plate up mid-bounce (4 at the first value, 56) |
 
 ## Known issues and watch items
 
@@ -51,13 +67,23 @@ Crossfire flat softlock and a door-ejection freeze (Colour Lift, and latently Wo
 10. Older polish items still open: the floors sit about 100 px lower than the mockup, so the bottom HUD band covers
    some dirt; the power meter and AIMING chip stay up in flight; on a portrait phone the title's server pill
    overlaps the logo; `public/og.png` is a placeholder and the iOS icons have transparent corners.
+11. **Plates in passing (D11).** Ask playtesters whether a door that opens as a ball rolls over its plate and shuts
+   behind it reads as feedback or as a bug, and whether a cannon firing on a partner's touch (L7, L10-L12) reads as
+   cause and effect. A ball rocking in a plate's dish presses it 2-4 times in 77 % of landings; the canvas shows each
+   press (cap, lamp, door) but no words or slides until the ball rests.
+12. **Crossfire par.** D11 lowered its solver minimum 6 -> 5, so D10.13's rule set par 7; the design's intended line
+   still takes 8, one over par. Revisit with playtest data, not reasoning.
+13. **Tooling.** The co-op search returns the first line it finds at the shallowest depth, not the fewest strokes, so
+   Plate & Bridge reports 6 although a 5-stroke line replays. The hold height's thinnest margin is 0.6 px (a lob from
+   the top of L6's backboard onto FREE hops 71.4 px); a new hole with a plate under much higher ground should re-run
+   the hop scan (BUILD_DECISIONS D11).
 
 ## Next (CLAUDE.md §5, Phase 3)
 
 - The exit test: 5+ pairs of **strangers** land on the URL, send a room code, play all 12 holes without confusion
   and finish thinking "that was fun". Reuse the Phase 2 kit (`design/playtest/phase-2/`) with a fresh tracker;
   add the watch items above as observer questions (skipped turns read as the device, not a bug; pairs who refuse
-  the bait; first-time reads of the cannon).
+  the bait; first-time reads of the cannon; plates reacting in passing).
 - Gamepad menu navigation and a consistency check of the scrappy art across all 12 holes.
 
 ## Open owner decisions
