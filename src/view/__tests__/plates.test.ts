@@ -18,7 +18,7 @@ import type { Aim, BallState, Level, PlayerCommand, PlayerId, SimEvent, SimState
 import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, BALL_RADIUS, DT, REST_TICKS, SWITCH_CONTACT_TOLERANCE, quantize4 } from '../../sim/types';
 import { holdsOf, waitingChipOf } from '../GameCanvas';
 import { FRESH_PRESS_TICKS, WORD_STANDS_TICKS, createPlateTracker, type PlateMoment } from '../plates';
-import { CALLOUT_TTL, PLATE_CLICK_SEC, applySimEvents, createViewState, updateView, type ViewState } from '../view';
+import { CALLOUT_TTL, PLATE_CLICK_SEC, applySimEvents, catchUpPlates, createViewState, updateView, type ViewState } from '../view';
 
 type Tick = { readonly state: SimState; readonly events: readonly SimEvent[] };
 
@@ -672,43 +672,175 @@ describe('a tracker re-based at any tick says what a tracker that saw every even
     });
   }
 
+  /** Where `got` first differs from `want`, as a line for the failure message; null when they are the same. */
+  function firstDifference(t0: number, got: readonly PlateMoment[], want: readonly PlateMoment[]): string | null {
+    for (let i = 0; i < Math.max(got.length, want.length); i += 1) {
+      if (JSON.stringify(got[i]) !== JSON.stringify(want[i])) return `sync@${t0}: got ${JSON.stringify(got[i])} want ${JSON.stringify(want[i])}`;
+    }
+    return null;
+  }
+
   /**
-   * Re-bases a fresh tracker on the state at every tick t0 of a golden line, told that it already includes the events
-   * of the last `window` ticks (an online frame re-syncs from the snapshot its drained events reach), feeds it those
-   * and every later event, and lists where its moments differ from those of a tracker that saw every event.
+   * Re-bases a fresh tracker on the state at every tick t0 of a golden line, feeds it every later event, and lists where
+   * its moments differ from those of a tracker that saw every event.
    */
-  function reBasedMismatches(g: GoldenLine, window: number): string[] {
+  function reBasedMismatches(g: GoldenLine): string[] {
     const { level, states, events } = goldenRun(g);
     const full = createPlateTracker();
     const fullAt = events.map((evs) => evs.flatMap((e) => full.feed(e)));
     const mismatches: string[] = [];
-    for (let t0 = window; t0 < g.finalTick; t0 += 1) {
+    for (let t0 = 0; t0 < g.finalTick; t0 += 1) {
       const s0 = states[t0] as SimState;
-      const from = t0 - window + 1;
       const synced = createPlateTracker();
-      synced.sync(level, s0.switches, s0.balls, events.slice(from, t0 + 1).flat());
-      const got = events.slice(from).flatMap((evs) => evs.flatMap((e) => synced.feed(e)));
-      const want = asReBased(fullAt.slice(from).flat(), level, states[from - 1] as SimState);
-      let at = -1;
-      for (let i = 0; i < Math.max(got.length, want.length) && at < 0; i += 1) if (JSON.stringify(got[i]) !== JSON.stringify(want[i])) at = i;
-      if (at >= 0) mismatches.push(`sync@${t0}: got ${JSON.stringify(got[at])} want ${JSON.stringify(want[at])}`);
+      synced.sync(level, s0.switches, s0.balls);
+      const got = events.slice(t0 + 1).flatMap((evs) => evs.flatMap((e) => synced.feed(e)));
+      const diff = firstDifference(t0, got, asReBased(fullAt.slice(t0 + 1).flat(), level, s0));
+      if (diff !== null) mismatches.push(diff);
+    }
+    return mismatches;
+  }
+
+  /**
+   * Re-bases a fresh tracker on the state at every tick t0 (a sync's own state: the events fed after it are exactly the
+   * later ones), feeds it the next `batch` ticks of events at once, as an online frame drains them (feedAll), then
+   * every later tick as a frame of its own, and lists where its moments differ from those of a tracker that saw every
+   * tick as a frame of its own.
+   */
+  function batchedMismatches(g: GoldenLine, batch: number): string[] {
+    const { level, states, events } = goldenRun(g);
+    const full = createPlateTracker();
+    const fullAt = events.map((evs) => full.feedAll(evs).flat());
+    const mismatches: string[] = [];
+    for (let t0 = 0; t0 < g.finalTick; t0 += 1) {
+      const s0 = states[t0] as SimState;
+      const synced = createPlateTracker();
+      synced.sync(level, s0.switches, s0.balls);
+      const first = synced.feedAll(events.slice(t0 + 1, t0 + 1 + batch).flat()).flat();
+      const got = [...first, ...events.slice(t0 + 1 + batch).flatMap((evs) => synced.feedAll(evs).flat())];
+      const diff = firstDifference(t0, got, asReBased(fullAt.slice(t0 + 1).flat(), level, s0));
+      if (diff !== null) mismatches.push(diff);
     }
     return mismatches;
   }
 
   it.each(GOLDEN_LINES.map((g) => [g.levelId, g] as const))('%s: a fresh tracker re-based at every tick of the golden line says every later moment as one that saw every event', (_id, g) => {
-    const mismatches = reBasedMismatches(g, 0);
+    const mismatches = reBasedMismatches(g);
     expect(mismatches.length, mismatches.slice(0, 5).join('\n')).toBe(0);
   });
 
+  // Rewritten in round 3 of the D11 review. This pinned the round-2 rewind: a tracker re-based on a state that already
+  // included the last 30 ticks of events, told so (`sync(..., already)`), still said their moments. GameCanvas no
+  // longer re-bases on such a state: a sync re-bases on the state the sync carries (GameClient.takeStreamBreak), and
+  // the events after it never repeat one it includes (the server's re-sent ones are dropped, client.test.ts), while a
+  // hidden tab's dropped batches are fed in order instead of re-basing. The rewind and its stall-tap repeats are gone,
+  // so the same 30-tick window is now asserted as it reaches the trackers: all at once, in the frame after the sync.
   it.each(GOLDEN_LINES.map((g) => [g.levelId, g] as const))(
-    '%s: re-based at every tick from a state that already includes the last 30 ticks of events (an online frame draining its 500 ms replay window), it says their moments too',
+    "%s: re-based at every tick on a sync's own state, then fed the next 30 ticks of events at once (an online frame draining its 500 ms replay window), it says every moment as one that saw every tick",
     (_id, g) => {
       expect(30 * DT * 1000).toBeGreaterThanOrEqual(EVENT_REPLAY_WINDOW_MS);
-      const mismatches = reBasedMismatches(g, 30);
+      const mismatches = batchedMismatches(g, 30);
       expect(mismatches.length, mismatches.slice(0, 5).join('\n')).toBe(0);
     },
   );
+});
+
+describe('a view that takes in events it never shows (catchUpPlates: a hidden tab, D11)', () => {
+  /** Plays `ticks` into the view as frames, and returns the callouts born meanwhile. */
+  function shown(view: ViewState, from: SimState, ticks: readonly Tick[]): string[] {
+    const born: string[] = [];
+    let lastId = Math.max(0, ...view.callouts.map((c) => c.id));
+    let prev = from;
+    for (const t of ticks) {
+      applySimEvents(view, t.events, t.state);
+      for (const c of view.callouts) if (c.id > lastId) born.push(c.text);
+      lastId = Math.max(lastId, ...view.callouts.map((c) => c.id));
+      updateView(view, prev, t.state, 1, DT);
+      prev = t.state;
+    }
+    return born;
+  }
+
+  it('shows nothing for them (no word, spark, sticker pulse or cap click), yet knows what they did: the hold it took in ends with DOOR SHUT', () => {
+    // red lobs onto DOOR and settles there, every tick of it dropped
+    const start = crafted(twoDoors, twoDoors.starts[0], twoDoors.starts[1], RED);
+    const lob = shot(start, AIM(42, 80));
+    const landed = lob[lob.length - 1]?.state ?? start;
+    expect(landed.switches.door).toBe(true);
+    const view = createViewState(twoDoors, start);
+    view.reducedMotion = false;
+    catchUpPlates(view, lob.flatMap((t) => t.events));
+    expect({ callouts: view.callouts, particles: view.particles.length, pulses: [...view.stickerPulse.keys()], clicks: [...view.plateClicks.keys()] }).toEqual({
+      callouts: [],
+      particles: 0,
+      pulses: [],
+      clicks: [],
+    });
+    // red, to shoot again, leaves DOOR for good, shown: the hold ends and the door is said shut
+    const leave = shot({ ...landed, activePlayer: RED, turnDelayTicks: 0, phase: 'aiming' }, AIM(150, 60));
+    expect(ofType(leave, 'switchOn').filter((e) => e.switchId === 'door')).toEqual([]);
+    expect(shown(view, landed, leave)).toEqual(['DOOR SHUT']);
+  });
+
+  it('only words leave: a SHUT on screen goes with the landing that takes it back, and a HELD and an OPEN go when the hold they name ends', () => {
+    const start = crafted(twoDoors, plateSpot(twoDoors, 'door'), twoDoors.starts[1], RED);
+    // red hops off DOOR (90/50) and lands back on it: DOOR SHUT shown as it rises, the landing taken in unseen
+    const hop = shot(start, AIM(90, 50));
+    const off = hop.findIndex((t) => t.events.some((e) => e.type === 'switchOff' && e.switchId === 'door'));
+    const on = hop.findIndex((t, i) => i > off && t.events.some((e) => e.type === 'switchOn' && e.switchId === 'door'));
+    expect(on - off).toBeGreaterThan(30);
+    const view = createViewState(twoDoors, start);
+    expect(shown(view, start, hop.slice(0, off + 1))).toEqual(['DOOR SHUT']);
+    catchUpPlates(view, hop.slice(off + 1, on + 1).flatMap((t) => t.events));
+    expect(view.callouts.map((c) => c.text)).toEqual([]);
+    // red settles, shown: DOOR HELD and DOOR OPEN; the tab hides with them on screen, and red's turn comes round
+    const rested = hop.findIndex((t) => t.events.some((e) => e.type === 'ballRest' && e.playerId === RED));
+    expect(rested).toBeGreaterThan(on);
+    expect(shown(view, hop[on]?.state ?? start, hop.slice(on + 1, rested + 1))).toEqual(['DOOR HELD', 'DOOR OPEN']);
+    catchUpPlates(view, hop.slice(rested + 1).flatMap((t) => t.events));
+    expect(view.callouts.map((c) => c.text)).toEqual(['DOOR HELD', 'DOOR OPEN']);
+    // red leaves for good, unseen: both words go, and nothing comes
+    const settled = hop[hop.length - 1]?.state ?? start;
+    const leave = shot({ ...settled, activePlayer: RED, turnDelayTicks: 0, phase: 'aiming' }, AIM(150, 60));
+    catchUpPlates(view, leave.flatMap((t) => t.events));
+    expect(view.callouts.map((c) => c.text)).toEqual([]);
+  });
+
+  it('a word goes once what it names moves again, even past WORD_STANDS_TICKS (no take-back then): hidden, the view clock stops and the word is still up', () => {
+    const doorTop = { x: (twoDoors.switches.find((s) => s.id === 'door')?.x ?? 0) + 50, y: twoDoors.switches.find((s) => s.id === 'door')?.surfaceY ?? 0 };
+    const start = crafted(twoDoors, plateSpot(twoDoors, 'door'), twoDoors.starts[1], RED);
+    const view = createViewState(twoDoors, start);
+    // red leaves DOOR: DOOR SHUT, shown; the tab hides with it up
+    const left = { ...start, switches: { ...start.switches, door: false } };
+    applySimEvents(view, [{ type: 'switchOff', tick: 100, switchId: 'door', pos: doorTop }, { type: 'bridgeToggle', tick: 100, rectId: 'door-gate', kind: 'blocker', active: true, switchId: 'door' }], left);
+    expect(view.callouts.map((c) => c.text)).toEqual(['DOOR SHUT']);
+    // well past the word's stand, a ball rolls onto DOOR and the door opens (dropped): no take-back is made, the word goes
+    const late = 100 + WORD_STANDS_TICKS + 30;
+    const reopen: SimEvent[] = [
+      { type: 'switchOn', tick: late, switchId: 'door', byPlayer: BLUE, pos: doorTop },
+      { type: 'bridgeToggle', tick: late, rectId: 'door-gate', kind: 'blocker', active: false, switchId: 'door' },
+    ];
+    const probe = createPlateTracker(() => twoDoors);
+    probe.sync(twoDoors, left.switches, left.balls);
+    probe.feedAll([{ type: 'bridgeToggle', tick: 100, rectId: 'door-gate', kind: 'blocker', active: true, switchId: 'door' }]);
+    expect(probe.feedAll(reopen).flat().map((m) => m.kind)).toEqual(['press']);
+    catchUpPlates(view, reopen);
+    expect(view.callouts.map((c) => c.text)).toEqual([]);
+
+    // the jaws alike: red waits in the snare freed by blue on FREE; blue leaves, SNAP! shown; much later a ball rolls
+    // across FREE and lets red go for a moment (dropped): the SNAP! goes
+    const snare = rectOf(boobyTrap, 'snare');
+    const seat = { x: snare.x + snare.w / 2, y: snare.y + snare.h - BALL_RADIUS };
+    const freed = crafted(boobyTrap, seat, plateSpot(boobyTrap, 'free'), BLUE);
+    const trapView = createViewState(boobyTrap, freed);
+    const freeTop = { x: (boobyTrap.switches.find((s) => s.id === 'free')?.x ?? 0) + 40, y: boobyTrap.switches.find((s) => s.id === 'free')?.surfaceY ?? 0 };
+    applySimEvents(trapView, [{ type: 'switchOff', tick: 100, switchId: 'free', pos: freeTop }, { type: 'trapCaught', tick: 100, playerId: RED, pos: seat, rectId: 'snare' }], { ...freed, switches: { ...freed.switches, free: false } });
+    expect(trapView.callouts.map((c) => c.text)).toEqual(['SNAP!']);
+    catchUpPlates(trapView, [
+      { type: 'switchOn', tick: late, switchId: 'free', byPlayer: BLUE, pos: freeTop },
+      { type: 'trapFreed', tick: late, playerId: RED, pos: seat, rectId: 'snare' },
+    ]);
+    expect(trapView.callouts.map((c) => c.text)).toEqual([]);
+  });
 });
 
 describe('the press reads as a click, the chip as a hold', () => {

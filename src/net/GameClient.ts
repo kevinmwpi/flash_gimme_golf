@@ -79,8 +79,11 @@ export type GameClientOptions = {
 export type ServerErrorListener = (code: ErrorCode, message: string) => void;
 
 type RingEntry = { state: SimState; serverTime: number; tick: number; discontinuity: boolean };
-type EventBatch = { serverTime: number; events: SimEvent[] };
+/** A snapshot's events, with the state that includes them (a dropped batch's state is a place to start over from). */
+type EventBatch = { serverTime: number; events: SimEvent[]; state: SimState };
 type Session = { code: string; token: string; seat: PlayerId };
+/** What the event stream did that drainEvents does not show (takeStreamBreak). */
+export type StreamBreak = { synced: SimState | null; dropped: SimEvent[] };
 
 export const RECONNECT_STORAGE_KEY = 'fg.reconnect';
 export const RECONNECT_RETRY_MS = 2000;
@@ -103,10 +106,15 @@ const CLOSE_NORMAL = 1000;
 const CLOSE_LINK_DEAD = 4000;
 /**
  * Event batches older than this (behind render time) are history, not news: a tab that was hidden
- * re-syncs from the next snapshot (UX.md §11) instead of replaying every buffered hit and toast.
- * Wide enough that an ordinary frame hitch loses nothing.
+ * does not replay every buffered hit and toast (UX.md §11); their events are only handed over for
+ * bookkeeping (takeStreamBreak). Wide enough that an ordinary frame hitch loses nothing.
  */
 export const EVENT_REPLAY_WINDOW_MS = 500;
+/**
+ * At most this many dropped events wait for takeStreamBreak (some 25 minutes of play; a hole makes about 150 a
+ * minute). Past it the stream starts over from the state of the batch that overflowed, as after a sync.
+ */
+export const MAX_DROPPED_EVENTS = 4096;
 
 function browserSocket(url: string): SocketHandle {
   const ws = new WebSocket(url);
@@ -206,8 +214,12 @@ export class GameClient {
 
   private readonly ring: RingEntry[] = [];
   private readonly eventQueue: EventBatch[] = [];
-  /** Counts the breaks in the event stream: every sync, every batch dropped as stale. */
-  private streamBreaks = 0;
+  /** The state the event stream last started over from (a sync), until takeStreamBreak hands it over. */
+  private syncedState: SimState | null = null;
+  /** The last sync's tick: the server re-sends the events it stepped up to it with its next snapshot (already in the state). */
+  private syncedTick = Number.NEGATIVE_INFINITY;
+  /** Events of batches dropped as stale since then (a hidden tab), in order, until takeStreamBreak hands them over. */
+  private readonly droppedEvents: SimEvent[] = [];
   private lastBaseTime = Number.NEGATIVE_INFINITY;
   private clockOffset: number | null = null;
   private rtt = 0;
@@ -460,10 +472,13 @@ export class GameClient {
     this.config = config;
     this.ring.length = 0;
     this.eventQueue.length = 0;
-    this.streamBreaks += 1;
+    this.droppedEvents.length = 0;
+    this.syncedState = null;
     this.lastBaseTime = Number.NEGATIVE_INFINITY;
     const state = this.decode(sync.snap, config);
     if (state === null) return false;
+    this.syncedState = state;
+    this.syncedTick = state.tick;
     this.observeServerTime(sync.serverTime, now);
     this.ring.push({ state, serverTime: sync.serverTime, tick: sync.tick, discontinuity: true });
     return true;
@@ -478,29 +493,40 @@ export class GameClient {
     const last = this.ring[this.ring.length - 1];
     if (last !== undefined && msg.serverTime <= last.serverTime) {
       if (msg.tick > last.tick) this.ring[this.ring.length - 1] = { ...last, state, tick: msg.tick };
-      this.queueEvents(msg.serverTime, msg.events, now);
+      this.queueEvents(msg.serverTime, msg.events, state, now);
       return;
     }
     const gap = last === undefined ? Number.POSITIVE_INFINITY : msg.serverTime - last.serverTime;
     const discontinuity = gap > SNAPSHOT_GAP_DISCONTINUITY_MS || msg.immediate || msg.events.some((e) => IMMEDIATE_SNAPSHOT_EVENTS.includes(e.type));
     this.ring.push({ state, serverTime: msg.serverTime, tick: msg.tick, discontinuity });
     if (this.ring.length > SNAPSHOT_RING_SIZE) this.ring.splice(0, this.ring.length - SNAPSHOT_RING_SIZE);
-    this.queueEvents(msg.serverTime, msg.events, now);
+    this.queueEvents(msg.serverTime, msg.events, state, now);
   }
 
-  /** Buffers a snapshot's events and forgets batches no frame will ever want (the RAF loop stops while hidden; messages do not). */
-  private queueEvents(serverTime: number, events: SimEvent[], now: number): void {
-    if (events.length > 0) this.eventQueue.push({ serverTime, events });
+  /**
+   * Buffers a snapshot's events and forgets batches no frame will ever want (the RAF loop stops while hidden; messages
+   * do not). The first snapshot after a sync also carries the events the server stepped since its last broadcast to
+   * this seat (createSim's at a start, the last ticks before a rejoin's pause): the sync's state has them, so they go.
+   */
+  private queueEvents(serverTime: number, events: SimEvent[], state: SimState, now: number): void {
+    const after = events.filter((e) => e.tick > this.syncedTick);
+    if (after.length > 0) this.eventQueue.push({ serverTime, events: after, state });
     this.dropStaleEvents(this.renderTime(now));
   }
 
+  /** Batches past the replay window are not replayed, but their events are kept, in order, for takeStreamBreak. */
   private dropStaleEvents(renderTimeMs: number): void {
     const cutoff = renderTimeMs - EVENT_REPLAY_WINDOW_MS;
-    let stale = 0;
-    while (stale < this.eventQueue.length && (this.eventQueue[stale] as EventBatch).serverTime < cutoff) stale += 1;
-    if (stale === 0) return;
-    this.eventQueue.splice(0, stale);
-    this.streamBreaks += 1;
+    while (this.eventQueue.length > 0 && (this.eventQueue[0] as EventBatch).serverTime < cutoff) {
+      const batch = this.eventQueue.shift() as EventBatch;
+      if (this.droppedEvents.length + batch.events.length > MAX_DROPPED_EVENTS) {
+        // hidden too long to hand every event over: start over from the state this batch reaches, as after a sync
+        this.droppedEvents.length = 0;
+        this.syncedState = batch.state;
+        continue;
+      }
+      for (const e of batch.events) this.droppedEvents.push(e);
+    }
   }
 
   private decode(snap: unknown, config: SimConfig): SimState | null {
@@ -671,17 +697,23 @@ export class GameClient {
   }
 
   /**
-   * Moves whenever events stop telling the whole story: a sync (start, rejoin, playAgain) clears the queue and starts
-   * over from the state it carries, and a hidden tab drops batches past EVENT_REPLAY_WINDOW_MS. A renderer that keeps
-   * state built from events (the D11 plate trackers) re-syncs it from the rendered state when this changes.
+   * What the event stream did since the last call that drainEvents does not show, for a renderer that keeps state
+   * built from events (the D11 plate trackers); call it after the frame's drainEvents. `synced`: the state of a sync
+   * (start, rejoin, playAgain) the stream started over from, if one came, which includes every event the server sends
+   * up to its tick; `dropped`: the events of the batches dropped as stale since then (a hidden tab), in order. A
+   * renderer that re-bases on `synced`, then takes in `dropped`, then the drained events, has had every event after
+   * that state once, in order. (A tab hidden past MAX_DROPPED_EVENTS starts over from the state of the batch that
+   * overflowed, handed over as `synced`.)
    */
-  eventStreamEpoch(): number {
-    return this.streamBreaks;
+  takeStreamBreak(): StreamBreak {
+    const taken: StreamBreak = { synced: this.syncedState, dropped: this.droppedEvents.splice(0) };
+    this.syncedState = null;
+    return taken;
   }
 
   /**
    * Events of every buffered snapshot whose serverTime <= renderTimeMs (in order; each at most once).
-   * Batches more than EVENT_REPLAY_WINDOW_MS behind render time are dropped, not replayed.
+   * Batches more than EVENT_REPLAY_WINDOW_MS behind render time are dropped, not replayed (takeStreamBreak has them).
    */
   drainEvents(renderTimeMs: number): SimEvent[] {
     this.dropStaleEvents(renderTimeMs);

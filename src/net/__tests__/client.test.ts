@@ -10,6 +10,7 @@ import {
   GameClient,
   LINK_DEAD_MS,
   LINK_STALE_MS,
+  MAX_DROPPED_EVENTS,
   PING_INTERVAL_MS,
   RECONNECT_RETRY_MS,
   RECONNECT_STORAGE_KEY,
@@ -584,25 +585,80 @@ describe('GameClient interpolation', () => {
     expect(r.client.interpolated(1125)?.state.balls[0].pos.x).toBe(900);
   });
 
-  it('eventStreamEpoch() moves when the event stream breaks (each sync, each batch dropped as stale), never for a batch drained in time', () => {
+  // Rewritten in round 3 of the D11 review: this pinned eventStreamEpoch(), a counter of syncs AND stale drops that told
+  // the canvas to re-base its plate trackers from the drawn state. A hidden tab's drops are no longer a break: their
+  // events are handed over (takeStreamBreak) and fed in order, so the same moments are asserted with the events
+  // themselves; a sync still starts the stream over, now with the state it carries.
+  it('takeStreamBreak() hands over each sync once, then the events of every batch dropped as stale after it, in order; never a batch drained in time', () => {
     const r = rig();
     const s = playingHost(r, 900);
-    const started = r.client.eventStreamEpoch();
     const a = baseState();
+    // the start: the stream starts over from the state its sync carries, handed over once
+    expect(r.client.takeStreamBreak()).toEqual({ synced: expect.objectContaining({ tick: a.tick, levelId: a.levelId }), dropped: [] });
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [] });
     const playStart: SimEvent = { type: 'playStart', levelId: LEVEL_1, tick: 1 };
     deliver(r, s, { ...a, tick: 1 }, 1000, { events: [playStart] });
     expect(r.client.drainEvents(r.client.renderTime(1100))).toEqual([playStart]);
-    expect(r.client.eventStreamEpoch()).toBe(started);
-    // a hidden tab: the next batch is never drained, and falls out of the replay window when a later snapshot lands
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [] });
+    // a hidden tab: the next two batches are never drained, and fall out of the replay window when a later snapshot lands
     const hit: SimEvent = { type: 'ballHit', playerId: 1, pos: { x: 0, y: 0 }, angle: -1, power: 50, speed: 325, tick: 4 };
+    const rest: SimEvent = { type: 'ballRest', playerId: 1, pos: { x: 10, y: 0 }, onPermanentGround: true, tick: 6 };
     deliver(r, s, { ...a, tick: 4 }, 1050, { events: [hit] });
-    expect(r.client.eventStreamEpoch()).toBe(started);
-    deliver(r, s, { ...a, tick: 7 }, 1050 + CLIENT_RENDER_DELAY_MS + EVENT_REPLAY_WINDOW_MS + 1);
+    deliver(r, s, { ...a, tick: 6 }, 1060, { events: [rest] });
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [] });
+    deliver(r, s, { ...a, tick: 7 }, 1060 + CLIENT_RENDER_DELAY_MS + EVENT_REPLAY_WINDOW_MS + 1);
     expect(r.client.drainEvents(r.client.renderTime(r.clock.now))).toEqual([]);
-    expect(r.client.eventStreamEpoch()).toBe(started + 1);
-    // a sync (a rejoin's joined{sync}, a playAgain's start) restarts the stream from the state it carries
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [hit, rest] });
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [] });
+    // a sync (a rejoin's joined{sync}, a playAgain's start) restarts the stream from the state it carries: what was
+    // dropped before it goes with the old stream
+    deliver(r, s, { ...a, tick: 9 }, 1200, { events: [{ ...hit, tick: 9 }] });
+    deliver(r, s, { ...a, tick: 10 }, 1200 + CLIENT_RENDER_DELAY_MS + EVENT_REPLAY_WINDOW_MS + 1);
     s.receive({ type: 'start', sync: sync(a, 3000) });
-    expect(r.client.eventStreamEpoch()).toBe(started + 2);
+    expect(r.client.takeStreamBreak()).toEqual({ synced: expect.objectContaining({ tick: a.tick }), dropped: [] });
+  });
+
+  it("the events the server re-sends with its first snapshot after a sync, up to the sync's own tick, are in the sync's state: never drained, never handed over", () => {
+    const r = rig();
+    const s = playingHost(r, 900);
+    const a = baseState();
+    const onDoor = (tick: number): SimEvent => ({ type: 'switchOn', switchId: 'door', byPlayer: 0, pos: { x: 0, y: 0 }, tick });
+    const restAt = (tick: number): SimEvent => ({ type: 'ballRest', playerId: 0, pos: { x: 0, y: 0 }, onPermanentGround: true, tick });
+    // the socket drops at tick 12: the server had stepped ticks 11 and 12 past its last broadcast to this seat when it
+    // paused the room, and the rejoin's sync is the state at 12
+    s.drop();
+    const retry = r.socket();
+    retry.open();
+    retry.receive({ type: 'welcome', protocol: PROTOCOL_VERSION, serverTime: r.clock.now });
+    retry.receive({ type: 'joined', code: CODE, playerId: 0, reconnectToken: TOKEN, peerConnected: true, lobby: LOBBY, sync: sync({ ...a, tick: 12 }, 2000) });
+    expect(r.client.takeStreamBreak()).toEqual({ synced: expect.objectContaining({ tick: 12 }), dropped: [] });
+    deliver(r, retry, { ...a, tick: 15 }, 2050, { events: [onDoor(11), restAt(12), restAt(14)] });
+    expect(r.client.drainEvents(r.client.renderTime(2200))).toEqual([restAt(14)]);
+    // and a hidden tab drops the same way: only what came after the sync
+    deliver(r, retry, { ...a, tick: 18 }, 2300, { events: [onDoor(17)] });
+    deliver(r, retry, { ...a, tick: 30 }, 2300 + CLIENT_RENDER_DELAY_MS + EVENT_REPLAY_WINDOW_MS + 1);
+    expect(r.client.drainEvents(r.client.renderTime(r.clock.now))).toEqual([]);
+    expect(r.client.takeStreamBreak()).toEqual({ synced: null, dropped: [onDoor(17)] });
+  });
+
+  it('a tab hidden past MAX_DROPPED_EVENTS starts over from the state of the batch that overflowed, handed over as a sync, then the events after it', () => {
+    const r = rig();
+    const s = playingHost(r, 900);
+    expect(r.client.takeStreamBreak().synced).not.toBeNull();
+    const a = baseState();
+    const hitAt = (tick: number): SimEvent => ({ type: 'ballHit', playerId: 1, pos: { x: 0, y: 0 }, angle: -1, power: 50, speed: 325, tick });
+    // 20 Hz snapshots, each with one event, and no frame rendered: the batches past the window pile up as dropped
+    const n = MAX_DROPPED_EVENTS + 20;
+    for (let i = 0; i < n; i += 1) deliver(r, s, { ...a, tick: i + 1 }, 1000 + i * 50, { events: [hitAt(i + 1)] });
+    const renderTime = r.client.renderTime(r.clock.now);
+    const kept = r.client.drainEvents(renderTime);
+    const taken = r.client.takeStreamBreak();
+    // the batch of tick MAX_DROPPED_EVENTS + 1 overflowed: its state (which has its event) is where the stream restarts
+    expect(taken.synced?.tick).toBe(MAX_DROPPED_EVENTS + 1);
+    expect(taken.dropped.length).toBeGreaterThan(0);
+    // every event after that state, once, in order: dropped, drained, then the batches still ahead of render time
+    const ahead = r.client.drainEvents(renderTime + CLIENT_RENDER_DELAY_MS);
+    expect([...taken.dropped, ...kept, ...ahead].map((e) => e.tick)).toEqual(Array.from({ length: n - MAX_DROPPED_EVENTS - 1 }, (_, i) => MAX_DROPPED_EVENTS + 2 + i));
   });
 
   it('a SerializeError from decodeSnapshot => error{BAD_SNAPSHOT, recoverable:false}, socket closed, never throws', () => {

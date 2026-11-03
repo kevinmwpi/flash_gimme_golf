@@ -11,12 +11,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EVENT_REPLAY_WINDOW_MS, GameClient, type SocketHandle } from '../../net/GameClient';
 import { CLIENT_RENDER_DELAY_MS, PROTOCOL_VERSION, type ServerMessage } from '../../net/protocol';
 import { GOLDEN_LINES } from '../../sim/__tests__/levels-golden';
+import { waitingOf } from '../../sim/devices';
 import { WORLD1_IDS } from '../../sim/levels/index';
 import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
+import { level as plateAndBridge } from '../../sim/levels/w1-04-plate-and-bridge';
+import { level as boobyTrap } from '../../sim/levels/w2-06-booby-trap';
+import { evaluateSwitches } from '../../sim/physics';
 import { decodeShareLink, encodeShareLink, encodeSnapshot } from '../../sim/serialize';
 import { createSim, isShotReady, stepSim } from '../../sim/sim';
-import type { PlayerCommand, SimConfig, SimEvent, SimState } from '../../sim/types';
-import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, DT, quantize4 } from '../../sim/types';
+import type { BallState, Level, PlayerCommand, PlayerId, SimConfig, SimEvent, SimState, Vec } from '../../sim/types';
+import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
 import { createAudio, type AudioSystem } from '../audio';
 import GameCanvas, { type GameCanvasProps, type LocalSession, type OnlineSessionView } from '../GameCanvas';
 import type { RenderScene } from '../render/index';
@@ -96,20 +100,33 @@ class StubAudioContext {
 /** The lasting plate cues (D11): HELD confirms and falling confirms by plate, door / bridge slides by rect. */
 type Heard = { confirms: string[]; falls: string[]; slides: string[] };
 
-function listeningAudio(): { audio: AudioSystem; heard: Heard } {
+/**
+ * Every plate cue audio voices (clicks, ticks, confirms, slides, snaps, latches, chimes), as `<tick>:<cue>:<key>`, the
+ * tick being the frame's (`at.tick`, set by the page loop).
+ */
+type Cues = { readonly list: string[]; readonly at: { tick: number } };
+
+function listeningAudio(): { audio: AudioSystem; heard: Heard; cues: Cues } {
   const audio = createAudio({ seed: 1 });
   audio.unlock();
   const heard: Heard = { confirms: [], falls: [], slides: [] };
+  const cues: Cues = { list: [], at: { tick: -1 } };
+  const cue = (what: string, key: unknown): void => void cues.list.push(`${cues.at.tick}:${what}:${String(key)}`);
   vi.spyOn(audio.sfx, 'switchOn').mockImplementation((o) => {
     if (o?.click === false) heard.confirms.push(String(o.playerId));
+    cue(o?.click === false ? 'confirm' : o?.volume !== undefined ? 'soft-click' : 'click', o?.playerId);
   });
   vi.spyOn(audio.sfx, 'switchOff').mockImplementation((o) => {
     if (o?.chime !== false) heard.falls.push(String(o?.playerId));
+    cue(o?.chime === false ? 'tick' : 'falling-confirm', o?.playerId);
   });
   vi.spyOn(audio.sfx, 'bridgeToggle').mockImplementation((active, o) => {
     heard.slides.push(`${String(o?.playerId)}:${active === true ? 'active' : 'inactive'}`);
+    cue(`slide-${active === true ? 'active' : 'inactive'}`, o?.playerId);
   });
-  return { audio, heard };
+  vi.spyOn(audio.sfx, 'trapCaught').mockImplementation((o) => cue(o?.chime === false ? 'quiet-snap' : 'snap', o?.playerId));
+  vi.spyOn(audio.sfx, 'trapFreed').mockImplementation((o) => cue(o?.chime === false ? 'quiet-latch' : o?.click === false ? 'free-chime' : 'free', o?.playerId));
+  return { audio, heard, cues };
 }
 
 // ---- real-sim runs, every tick's state and events kept (what a server sends) ----
@@ -121,9 +138,12 @@ const aimOf = (deg: number, power: number): { angle: number; power: number } => 
   power,
 });
 
-function recorder(config: SimConfig) {
-  const first = createSim(config);
-  const run: Run = { config, states: [first.state], events: [first.events] };
+/** From createSim, or from `from` (a state set up by hand, as the room's state a page joins). */
+function recorder(config: SimConfig, from?: SimState) {
+  const first = from === undefined ? createSim(config) : { state: from, events: [] };
+  const run: Run = { config, states: [], events: [] };
+  run.states[first.state.tick] = first.state;
+  run.events[first.state.tick] = [...first.events];
   let s = first.state;
   const step = (cmds: readonly PlayerCommand[] = []): void => {
     const r = stepSim(s, cmds);
@@ -214,19 +234,27 @@ afterEach(() => {
 type Page = {
   /** Every plate and way word the view said (HELD, OPEN, SHUT, GONE), once each, in order. */
   readonly words: string[];
+  /** Every plate word the view said, jaws words too (SNAP!, FREE!), as `<tick>:<word>` with the tick of its frame. */
+  readonly timeline: string[];
   /** The levelStart events the page was handed. */
   readonly levelStarts: string[];
   readonly external: { current: PlayerCommand[] };
   state(): SimState | null;
-  frame(now: number): void;
+  /** The callouts on screen in the frame just rendered. */
+  alive(): string[];
+  frame(now: number, tick?: number): void;
   unmount(): void;
 };
+
+/** A plate word: a plate's HELD, a door's or bridge's OPEN / SHUT / GONE, a trap's SNAP! / FREE!. */
+const PLATE_WORD = / (HELD|OPEN|SHUT|GONE)$|^(SNAP|FREE)!$/;
 
 function mount(session: LocalSession | OnlineSessionView, audio: AudioSystem): Page {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   const words: string[] = [];
+  const timeline: string[] = [];
   const levelStarts: string[] = [];
   const said = new Set<number>();
   const external: { current: PlayerCommand[] } = { current: [] };
@@ -247,10 +275,12 @@ function mount(session: LocalSession | OnlineSessionView, audio: AudioSystem): P
   act(() => root.render(React.createElement(GameCanvas, props)));
   return {
     words,
+    timeline,
     levelStarts,
     external,
     state: () => stateRef.current,
-    frame(now) {
+    alive: () => (seen.scene?.view.callouts ?? []).map((c) => c.text),
+    frame(now, tick = -1) {
       clock = now;
       const pending = raf;
       raf = [];
@@ -259,6 +289,7 @@ function mount(session: LocalSession | OnlineSessionView, audio: AudioSystem): P
         if (said.has(c.id)) continue;
         said.add(c.id);
         if (/ (HELD|OPEN|SHUT|GONE)$/.test(c.text)) words.push(c.text);
+        if (PLATE_WORD.test(c.text)) timeline.push(`${tick}:${c.text}`);
       }
     },
     unmount: () => act(() => root.unmount()),
@@ -285,11 +316,19 @@ class FakeSocket implements SocketHandle {
 }
 
 /**
- * Blue's page joins the running room at `from` (the `joined{sync}` a reload's rejoin gets: no events with it) and
- * mounts; the server then sends a snapshot every tick to `to`, with that tick's events. While `hidden(tick)` the tab
- * renders nothing (snapshots still arrive), as a background tab does.
+ * Blue's page (or `seat`'s) joins the running room at `from` (the `joined{sync}` a reload's rejoin gets: no events with
+ * it) and mounts; the server then sends a snapshot every tick to `to`, with that tick's events. While `hidden(tick)` the
+ * tab renders nothing (snapshots still arrive), as a background tab does, and the browser tells the page when it is
+ * visible again (`visibilitychange`). `cues` and `alive` (the callouts on screen at each rendered tick) are kept by tick.
  */
-function onlinePage(run: Run, from: number, to: number, hidden: (tick: number) => boolean = () => false): Page & { heard: Heard } {
+function onlinePage(
+  run: Run,
+  from: number,
+  to: number,
+  hidden: (tick: number) => boolean = () => false,
+  seat: PlayerId = 1,
+  beforeMount: (client: GameClient) => void = () => {},
+): Page & { heard: Heard; cues: string[]; aliveAt: Map<number, string[]> } {
   const t0 = 50_000;
   clock = t0;
   let socket: FakeSocket | null = null;
@@ -307,23 +346,34 @@ function onlinePage(run: Run, from: number, to: number, hidden: (tick: number) =
   s.receive({ type: 'welcome', protocol: PROTOCOL_VERSION, serverTime: clock });
   const lobby = { levelId: run.config.levelIds[0] ?? '', players: [true, true] as [boolean, boolean], names: ['Red', 'Blue'] as [string, string] };
   const sync = { config: run.config, tick: from, snap: encodeSnapshot(run.states[from] as SimState), serverTime: clock };
-  s.receive({ type: 'joined', code: CODE, playerId: 1, reconnectToken: 'b'.repeat(32), peerConnected: true, lobby, sync });
+  s.receive({ type: 'joined', code: CODE, playerId: seat, reconnectToken: 'b'.repeat(32), peerConnected: true, lobby, sync });
   const config = client.getConfig();
   if (config === null || client.getStatus().kind !== 'playing') throw new Error('the page did not join the running game');
-  const { audio, heard } = listeningAudio();
-  const page = mount({ kind: 'online', client, config, seat: 1 }, audio);
+  const { audio, heard, cues } = listeningAudio();
+  beforeMount(client);
+  const page = mount({ kind: 'online', client, config, seat }, audio);
+  const aliveAt = new Map<number, string[]>();
   // the render delay plus a margin, so the last events are drained
   const tail = Math.ceil(CLIENT_RENDER_DELAY_MS / TICK_MS) + 30;
+  let away = false;
   for (let t = from + 1; t <= to + tail; t += 1) {
     const now = t0 + (t - from) * TICK_MS;
     clock = now;
     if (t <= to) s.receive({ type: 'snapshot', tick: t, serverTime: now, snap: encodeSnapshot(run.states[t] as SimState), events: run.events[t] ?? [], immediate: false });
-    if (!hidden(t)) page.frame(now);
+    if (hidden(t)) {
+      away = true;
+      continue;
+    }
+    if (away) document.dispatchEvent(new Event('visibilitychange'));
+    away = false;
+    cues.at.tick = t;
+    page.frame(now, t);
+    aliveAt.set(t, page.alive());
   }
   page.unmount();
   client.leave();
   audio.dispose();
-  return { ...page, heard };
+  return { ...page, heard, cues: cues.list, aliveAt };
 }
 
 /** Red settles on DOOR, then leaves it for good: what any page on Two Doors must say and play for that. */
@@ -347,6 +397,15 @@ describe('the plate trackers follow the hole an online page renders (D11)', () =
     const campaign = twoDoorsRoom();
     const page = onlinePage(campaign.run, campaign.holding2, campaign.end);
     expect(page.levelStarts).toEqual([WORLD1_IDS[0]]);
+    expect(page.words).toEqual(['DOOR SHUT']);
+    expect(page.heard).toEqual({ confirms: [], falls: ['door'], slides: ['door-gate:active'] });
+  });
+
+  it("a loop that finds the sync already taken (by a loop before it) re-bases on the state it draws, and is as right: DOOR SHUT and its sounds as red leaves", () => {
+    const campaign = twoDoorsRoom();
+    const page = onlinePage(campaign.run, campaign.holding2, campaign.end, () => false, 1, (client) => {
+      expect(client.takeStreamBreak().synced).not.toBeNull();
+    });
     expect(page.words).toEqual(['DOOR SHUT']);
     expect(page.heard).toEqual({ confirms: [], falls: ['door'], slides: ['door-gate:active'] });
   });
@@ -500,4 +559,150 @@ describe("a `?state=` link resumed with red holding DOOR: audio's tracker knows 
     resumed.audio.dispose();
     fromTee.audio.dispose();
   });
+});
+
+// ---- a hidden tab: the batches it dropped as stale reach both trackers in order, without being shown or played ----
+
+const RED: PlayerId = 0;
+const BLUE: PlayerId = 1;
+/** How far behind a frame its render time is, and how far behind that its replay window reaches (one snapshot a tick). */
+const RENDER_DELAY_TICKS = Math.ceil(CLIENT_RENDER_DELAY_MS / TICK_MS);
+const REPLAY_TICKS = Math.ceil(EVENT_REPLAY_WINDOW_MS / TICK_MS);
+const tickOf = (entry: string): number => Number(entry.split(':')[0]);
+const resting = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+
+function plateSpot(level: Level, id: string): Vec {
+  const sw = level.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error(`${level.id} has no plate ${id}`);
+  return { x: sw.x + sw.w / 2, y: sw.surfaceY - BALL_RADIUS };
+}
+
+type HolderShot = { run: Run; from: number; hit: number; rest: number; end: number; holder: PlayerId; partner: PlayerId };
+
+/**
+ * An online room on `level` past its intro card: the holder rests on `plate` (red; or blue, when red waits in `trap`
+ * let go by blue's press), the partner on its tee (or in the trap). 20 ticks in, the holder shoots; the run ends a
+ * second after the next shot could be taken. `from` is the tick a page joins at (the room's state as set up).
+ */
+function holderShot(level: Level, plate: string, trap: string | undefined, deg: number, power: number): HolderShot {
+  const config: SimConfig = { playerCount: 2, levelIds: [level.id], seed: 7, mode: 'online' };
+  const intro = stepSim(createSim(config).state, [{ type: 'continue', playerId: RED }]).state;
+  const rect = trap === undefined ? undefined : level.rects.find((r) => r.id === trap);
+  const seat = rect === undefined ? undefined : { x: rect.x + rect.w / 2, y: rect.y + rect.h - BALL_RADIUS };
+  const holder = seat === undefined ? RED : BLUE;
+  const balls: [BallState, BallState] = seat === undefined ? [resting(plateSpot(level, plate)), resting(level.starts[1])] : [resting(seat), resting(plateSpot(level, plate))];
+  const up = Object.fromEntries(level.switches.map((s) => [s.id, false]));
+  const switches = evaluateSwitches(level, evaluateSwitches(level, up, balls), balls);
+  const s0: SimState = { ...intro, balls, switches, activePlayer: holder, turnDelayTicks: 0, phase: 'aiming' };
+  expect(s0.switches[plate]).toBe(true);
+  if (seat !== undefined) expect(waitingOf(level, s0.switches, s0.balls[RED])).toBeNull();
+  const rec = recorder(config, s0);
+  for (let i = 0; i < 20; i += 1) rec.step();
+  rec.shoot(deg, power);
+  for (let i = 0; i < 60; i += 1) rec.step();
+  const all = rec.run.events.flatMap((evs) => evs ?? []);
+  const hit = all.find((e) => e.type === 'ballHit' && e.playerId === holder)?.tick ?? -1;
+  const rest = all.find((e) => e.type === 'ballRest' && e.playerId === holder && e.tick > hit)?.tick ?? -1;
+  expect(hit).toBeGreaterThan(s0.tick);
+  expect(rest).toBeGreaterThan(hit);
+  return { run: rec.run, from: s0.tick, hit, rest, end: rec.now().tick, holder, partner: holder === RED ? BLUE : RED };
+}
+
+describe("a hidden tab takes in the batches it dropped without showing or playing them, and keeps every later word right (D11)", () => {
+  const STALLS: Array<[string, Level, string, string | undefined, number, number]> = [
+    ['L2, red resting on DOOR, stall tap 90/15', twoDoors, 'door', undefined, 90, 15],
+    ['L2, red resting on DOOR, stall tap 90/46', twoDoors, 'door', undefined, 90, 46],
+    ['L4, red resting on A, stall tap 90/15', plateAndBridge, 'near', undefined, 90, 15],
+    ['L6, blue resting on FREE with red let go in the snare, tap 80/20', boobyTrap, 'free', 'snare', 80, 20],
+  ];
+
+  it.each(STALLS)("%s: the partner's page, hidden across the tap and back before, as or after the holder settles, repeats no word and no sound", (_case, level, plate, trap, deg, power) => {
+    const shot = holderShot(level, plate, trap, deg, power);
+    // the tap never lets the plate up, so nothing lasting happens: a page that sees all of it says and plays nothing
+    expect(shot.run.events.flatMap((evs) => evs ?? []).filter((e) => (e.type === 'switchOn' || e.type === 'switchOff') && e.switchId === plate)).toEqual([]);
+    const control = onlinePage(shot.run, shot.from, shot.end, () => false, shot.partner);
+    expect({ words: control.timeline, cues: control.cues }).toEqual({ words: [], cues: [] });
+    // back before the rest is drained, with the rest among the events of the return frame, and after its batch is stale
+    const backs = [shot.rest - 4, shot.rest + 4, shot.rest + 10, shot.rest + 20, shot.rest + 30, shot.rest + 44];
+    const drainedOnReturn = (back: number): boolean => shot.rest >= back - RENDER_DELAY_TICKS - REPLAY_TICKS && shot.rest <= back - RENDER_DELAY_TICKS;
+    expect(backs.filter(drainedOnReturn)).toHaveLength(3);
+    for (const back of backs) {
+      const page = onlinePage(shot.run, shot.from, shot.end, (t) => t > shot.hit - 5 && t < back, shot.partner);
+      expect({ back, words: page.timeline, cues: page.cues }).toEqual({ back, words: [], cues: [] });
+    }
+  });
+
+  /** Two Doors online, red's line (TWO_DOORS_WORDS): the ticks of red's rest on DOOR, red's leaving shot and DOOR's release. */
+  let room: { campaign: ReturnType<typeof campaignToTwoDoors>; landed: number; leaveHit: number; off: number } | null = null;
+  const twoDoorsLeave = (): NonNullable<typeof room> => {
+    if (room !== null) return room;
+    const campaign = campaignToTwoDoors();
+    const evs = campaign.run.events.map((list, tick) => ({ tick, list: list ?? [] }));
+    const landed = evs.find((t) => t.tick > campaign.teeOff2 && t.list.some((e) => e.type === 'ballRest' && e.playerId === RED))?.tick ?? -1;
+    const leaveHit = [...evs].reverse().find((t) => t.list.some((e) => e.type === 'ballHit' && e.playerId === RED))?.tick ?? -1;
+    const off = evs.find((t) => t.tick > leaveHit && t.list.some((e) => e.type === 'switchOff' && e.switchId === 'door'))?.tick ?? -1;
+    expect(campaign.holding2).toBeGreaterThan(landed);
+    expect(off).toBeGreaterThan(leaveHit);
+    room = { campaign, landed, leaveHit, off };
+    return room;
+  };
+
+  it('a holder leaving for good while the tab is hidden, the batch with its release and DOOR SHUT dropped as stale: no SHUT on return, and nothing played', () => {
+    const { campaign, leaveHit, off } = twoDoorsLeave();
+    const hideFrom = leaveHit - 5;
+    const back = off + RENDER_DELAY_TICKS + REPLAY_TICKS + 10;
+    // the release is older than the replay window of the frame the tab comes back on
+    expect(off).toBeLessThan(back - RENDER_DELAY_TICKS - REPLAY_TICKS);
+    const page = onlinePage(campaign.run, campaign.results1, campaign.end, (t) => t >= hideFrom && t < back);
+    // red's landing was seen and heard; nothing of its leaving is, on return or after
+    expect(page.words).toEqual(['DOOR HELD', 'DOOR OPEN']);
+    expect(page.heard).toEqual({ confirms: ['door'], falls: [], slides: ['door-gate:inactive'] });
+    expect(page.cues.filter((c) => tickOf(c) >= hideFrom)).toEqual([]);
+    for (const [tick, alive] of page.aliveAt) if (tick >= back) expect(alive.filter((w) => w.startsWith('DOOR')), `t${tick}`).toEqual([]);
+  });
+
+  it('a tab hidden just after DOOR HELD and DOOR OPEN, across blue\'s turn and red leaving DOOR for good: those words are gone on return, and no SHUT comes', () => {
+    const { campaign, off } = twoDoorsLeave();
+    const control = onlinePage(campaign.run, campaign.results1, campaign.end);
+    const shownAt = tickOf(control.timeline.find((w) => w.endsWith(':DOOR OPEN')) ?? '');
+    const hideFrom = shownAt + 2;
+    const back = off + RENDER_DELAY_TICKS + REPLAY_TICKS + 10;
+    const page = onlinePage(campaign.run, campaign.results1, campaign.end, (t) => t >= hideFrom && t < back);
+    // the words were still on screen as the tab hid (the view's clock stops while it is hidden)
+    expect(page.aliveAt.get(hideFrom - 1)).toEqual(expect.arrayContaining(['DOOR HELD', 'DOOR OPEN']));
+    // on return the door is shut and red is gone: neither word stands any more, and no word or sound comes for it
+    for (const [tick, alive] of page.aliveAt) if (tick >= back) expect(alive.filter((w) => w.startsWith('DOOR')), `t${tick}`).toEqual([]);
+    expect(page.words).toEqual(['DOOR HELD', 'DOOR OPEN']);
+    expect(page.cues.filter((c) => tickOf(c) >= hideFrom)).toEqual([]);
+  });
+
+  it.each([
+    ['L2: red hops off DOOR (DOOR SHUT as it rises) and lands back on it', twoDoors, 'door', undefined, 'DOOR SHUT'],
+    ['L6: blue hops off FREE (SNAP! as the snare re-arms around red) and lands back on it', boobyTrap, 'free', 'snare', 'SNAP!'],
+  ] as Array<[string, Level, string, string | undefined, string]>)(
+    '%s while the tab is hidden: the word on screen as it hid, taken back by the dropped landing, is gone on return',
+    (_case, level, plate, trap, word) => {
+      const shot = holderShot(level, plate, trap, 90, 50);
+      const all = shot.run.events.flatMap((evs) => evs ?? []);
+      const off = all.find((e) => e.type === 'switchOff' && e.switchId === plate)?.tick ?? -1;
+      const on = all.find((e) => e.type === 'switchOn' && e.switchId === plate && e.tick > off)?.tick ?? -1;
+      // a long hop: the holder is off the plate for over half a second, and settles on it later
+      expect(on - off).toBeGreaterThan(30);
+      expect(shot.rest).toBeGreaterThan(on);
+      const control = onlinePage(shot.run, shot.from, shot.end, () => false, shot.partner);
+      const shownAt = tickOf(control.timeline.find((w) => w.endsWith(`:${word}`)) ?? '');
+      // hidden from the frame after the word appears; back once the landing's batch is just past the replay window, and
+      // before the holder's rest is drained
+      const hideFrom = shownAt + 1;
+      const back = on + RENDER_DELAY_TICKS + REPLAY_TICKS + 2;
+      expect(on).toBeLessThan(back - RENDER_DELAY_TICKS - REPLAY_TICKS);
+      expect(shot.rest).toBeGreaterThan(back - RENDER_DELAY_TICKS);
+      const page = onlinePage(shot.run, shot.from, shot.end, (t) => t >= hideFrom && t < back, shot.partner);
+      expect(page.aliveAt.get(hideFrom - 1)).toContain(word);
+      expect(page.aliveAt.get(back)).not.toContain(word);
+      // the holder then settles: every word and sound as the page that saw it all (the rest's HELD, OPEN / FREE!)
+      expect(page.timeline).toEqual(control.timeline);
+      expect(page.heard).toEqual(control.heard);
+    },
+  );
 });

@@ -803,11 +803,10 @@ export function missRingsProgress(view: ViewState): number | null {
  * Hard reset for levelStart / levelRestart: balls snap, golfers pop to their tees. The camera opens
  * in overview only for an intro; a restart or a resumed `?state=` link that is already in play follows.
  */
-function resetForLevel(view: ViewState, state: SimState, levelId: string): void {
+function resetForLevel(view: ViewState, state: SimState): void {
   resetAnims(view);
-  // the hole the event names; the state's plates only when the state is already on that hole
-  const known = state.levelId === levelId;
-  view.plates.sync(levelFor(view, levelId), known ? state.switches : {}, known ? state.balls : []);
+  // the plate tracker starts the hole over on the levelStart itself (applySimEvents feeds it, as audio's), from no
+  // plate down: every hole starts so, and a state the events did not bring is re-based by the caller (GameCanvas)
   view.plateClicks.clear();
   view.switchAnims.clear();
   view.rectAnims.clear();
@@ -868,7 +867,7 @@ function applyEvent(view: ViewState, e: SimEvent, state: SimState): void {
     case 'levelStart':
     case 'levelRestart':
       if (e.type === 'levelRestart') view.flash = FLASH_DURATION * 2;
-      resetForLevel(view, state, e.levelId);
+      resetForLevel(view, state);
       break;
     case 'playStart':
       view.cameraMode = 'follow';
@@ -1174,15 +1173,68 @@ function applyPlateMoment(view: ViewState, m: PlateMoment): void {
 }
 
 /**
- * Apply a tick's events (particles, shake, callouts, trails, pad/switch/bridge anims, golfer walk), then the plate
- * moments each one causes (D11). A levelStart re-syncs the plate tracker from `state` in resetForLevel instead.
+ * Apply a frame's events, whole ticks (particles, shake, callouts, trails, pad/switch/bridge anims, golfer walk), each
+ * followed by the plate moments it causes (D11). The plate tracker reads them from the events alone, exactly as
+ * audio's does (PlateTracker.feedAll), so the words and the sounds always tell the same story.
  */
 export function applySimEvents(view: ViewState, events: readonly SimEvent[], state: SimState): void {
-  for (const e of events) {
+  const moments = view.plates.feedAll(events);
+  events.forEach((e, i) => {
     applyEvent(view, e, state);
-    if (e.type === 'levelStart') continue;
-    for (const m of view.plates.feed(e, state.switches)) applyPlateMoment(view, m);
+    for (const m of moments[i] ?? []) applyPlateMoment(view, m);
+  });
+}
+
+/**
+ * The word a plate moment the page never showed leaves standing no longer (its callout subject), or null: the one a
+ * take-back takes back, the one a newer word about the same plate, way or ball replaces, a plate's HELD once the plate
+ * is up, and a ball's SNAP! once its jaws open, even only for now. Shown in time, a word is long gone by then (a HELD
+ * by its plate's release, a turn coming between; a SNAP! past WORD_STANDS_TICKS); across a hidden stretch the view's
+ * clock stops, and it is not.
+ */
+function supersededBy(m: PlateMoment): string | null {
+  switch (m.kind) {
+    case 'held':
+    case 'release':
+      return switchStickerKey(m.switchId);
+    case 'way':
+    case 'unsay':
+      return rectStickerKey(m.rectId);
+    case 'unsnap':
+      return jawSubject(m.playerId);
+    case 'jaws':
+      return m.lasting || !m.caught ? jawSubject(m.playerId) : null;
+    case 'press':
+      return null;
   }
+}
+
+/**
+ * Events the page will never present (GameClient.takeStreamBreak: a hidden tab's batches dropped as stale): the plate
+ * tracker is fed them in order, so it stays exact (D11), but nothing is shown, no word, spark or sticker pulse. Only
+ * words leave: a word taken back (UNSAY, UNSNAP), a word a newer moment about the same plate, way or ball replaces, a
+ * plate's HELD once the plate is up, a ball's SNAP! once its jaws open and a door's or bridge's SHUT / GONE once it
+ * leaves that rest again (however long after the word: the view's clock stops while the tab is hidden), and every
+ * plate word once a new hole starts. So no word still on screen from before the tab was hidden contradicts what
+ * happened meanwhile.
+ */
+export function catchUpPlates(view: ViewState, events: readonly SimEvent[]): void {
+  const moments = view.plates.feedAll(events);
+  const drop = (subject: string): void => {
+    view.callouts = view.callouts.filter((c) => c.subject !== subject);
+  };
+  events.forEach((e, i) => {
+    // plate words (the only callouts with a subject) belong to their hole
+    if (e.type === 'levelStart') view.callouts = view.callouts.filter((c) => c.subject === undefined);
+    if (e.type === 'bridgeToggle') {
+      const rect = rectById(view.level, e.rectId);
+      if (rect !== undefined && e.active !== isRectActive(rect, {})) drop(rectStickerKey(rect.id));
+    }
+    for (const m of moments[i] ?? []) {
+      const subject = supersededBy(m);
+      if (subject !== null) drop(subject);
+    }
+  });
 }
 
 // ---- per-frame update -------------------------------------------------------------------------

@@ -205,11 +205,18 @@ export type AudioSystem = {
   handleEvents(events: readonly SimEvent[], nowMs: number, delaySec?: number): void;
   /**
    * Re-bases the plate tracker (D11, plates.ts) on a state the events did not bring: a `?state=` resume (one synthetic
-   * levelStart), an online page that joined mid-campaign or dropped a levelStart. GameCanvas calls it with the state it
-   * renders, as it syncs the view's tracker, so the two keep agreeing on which plates are held. `already`: the events
-   * that state includes which handleEvents gets next (PlateTracker.sync).
+   * levelStart), an online start, rejoin or playAgain, a hole reached without its levelStart. GameCanvas calls it with
+   * the state it re-bases the view's tracker on, so the two keep agreeing on which plates are held, and then hands
+   * both only the events after that state.
    */
-  syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[], already?: readonly SimEvent[]): void;
+  syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void;
+  /**
+   * Events the page will never present (a hidden tab's batches dropped as stale, GameClient.takeStreamBreak): the
+   * plate tracker is fed them in order, so it stays exact, and nothing starts for them (no click, confirm, chime,
+   * latch, snap or slide, no world bed). A take-back among them still fades the slide or snap it names, if that is
+   * still sounding; a word among them, never voiced, is the one a later take-back names.
+   */
+  catchUpPlates(events: readonly SimEvent[]): void;
   /** volume = power01 for 'hit', strength01 for bounce*, else a 0..1 multiplier. */
   play(name: SfxName, volume?: number): void;
   setMuted(muted: boolean): void;
@@ -1917,11 +1924,10 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   function handleEvents(events: readonly SimEvent[], nowMsArg: number, delaySec = 0): void {
     void nowMsArg;
     if (events.length === 0) return;
-    // bed and plate tracking run before the ready() gate, so a locked context never desyncs them
-    const moments = events.map((ev) => {
-      trackBed(ev);
-      return plates.feed(ev);
-    });
+    // bed and plate tracking run before the ready() gate, so a locked context never desyncs them; the plate tracker
+    // reads whole ticks exactly as the view's does (PlateTracker.feedAll)
+    for (const ev of events) trackBed(ev);
+    const moments = plates.feedAll(events);
     if (ctx === null || !ready()) return;
     const first = events[0];
     if (first === undefined) return;
@@ -1934,8 +1940,39 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     });
   }
 
-  function syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[], already?: readonly SimEvent[]): void {
-    plates.sync(level, switches, balls, already);
+  function syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void {
+    plates.sync(level, switches, balls);
+  }
+
+  function catchUpPlates(events: readonly SimEvent[]): void {
+    const at = ctx?.currentTime ?? 0;
+    for (const moments of plates.feedAll(events)) {
+      for (const m of moments) {
+        switch (m.kind) {
+          case 'unsay': {
+            const slide = slides.get(m.rectId);
+            slides.delete(m.rectId);
+            if (slide !== undefined) fadeOut(slide, at);
+            break;
+          }
+          case 'unsnap': {
+            const snap = snaps.get(m.playerId);
+            snaps.delete(m.playerId);
+            if (snap !== undefined) fadeOut(snap, at);
+            break;
+          }
+          // a word said here has no voice: a later take-back names it, not an older slide or snap
+          case 'way':
+            slides.delete(m.rectId);
+            break;
+          case 'jaws':
+            if (m.caught && m.lasting) snaps.delete(m.playerId);
+            break;
+          default:
+            break;
+        }
+      }
+    }
   }
 
   function dispose(): void {
@@ -1957,6 +1994,7 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     unlock,
     handleEvents,
     syncPlates,
+    catchUpPlates,
     play,
     setMuted,
     isMuted: () => settings.muted,

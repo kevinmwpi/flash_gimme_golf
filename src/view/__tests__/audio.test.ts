@@ -715,6 +715,81 @@ describe('audio with a stubbed AudioContext', () => {
     expect(catches[0]?.out?.gain.ramps).toEqual([]);
   });
 
+  it("D11: a hidden tab's dropped events start no sound (catchUpPlates), and a take-back among them still fades the closing slide it names while it sounds", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    // red's off-vertical tap (107/40): it leaves the plate's dish for a few ticks and lands back on DOOR
+    let r = stepSim(start, [
+      { type: 'setAim', playerId: 0, angle: quantize4((-107 * Math.PI) / 180), power: 40 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const ticks = [r];
+    for (let i = 0; i < 2000 && (r.state.phase === 'flying' || r.state.turnDelayTicks > 0); i += 1) {
+      r = stepSim(r.state, []);
+      ticks.push(r);
+    }
+    const offAt = ticks.findIndex((t) => t.events.some((e) => e.type === 'switchOff' && e.switchId === 'door'));
+    const onAt = ticks.findIndex((t, i) => i > offAt && t.events.some((e) => e.type === 'switchOn' && e.switchId === 'door'));
+    expect(onAt - offAt).toBeGreaterThan(0);
+    expect(onAt - offAt).toBeLessThan(10);
+    // heard in time up to the hold's end: its closing slide
+    for (const t of ticks.slice(0, offAt + 1)) {
+      context().currentTime += DT;
+      audio.handleEvents(t.events, 0);
+    }
+    expect(slides.map((s) => s.active)).toEqual([true]);
+    // the tab hides: the ticks up to the landing are dropped and taken in at once, the slide still sounding
+    context().currentTime += (onAt - offAt) * DT;
+    const at = context().currentTime;
+    const dropped = ticks.slice(offAt + 1, onAt + 1).flatMap((t) => t.events);
+    let oscillators = -1;
+    const voices = voicesDuring(() => {
+      oscillators = oscillatorsDuring(() => audio.catchUpPlates(dropped));
+    });
+    expect({ voices, oscillators }).toEqual({ voices: 0, oscillators: 0 });
+    const fade = slides[0]?.out?.gain.ramps.at(-1);
+    expect(fade?.[0]).toBe(0);
+    expect(fade?.[1]).toBeGreaterThanOrEqual(at);
+    expect(fade?.[1]).toBeLessThan(at + 0.05);
+    // red then settles on DOOR, heard in time: the opening slide, as for a page that heard it all
+    for (const t of ticks.slice(onAt + 1)) {
+      context().currentTime += DT;
+      audio.handleEvents(t.events, 0);
+    }
+    expect(slides.map((s) => s.active)).toEqual([true, false]);
+  });
+
+  it('D11: a hold taken in silently (catchUpPlates: the lob onto DOOR and its rest) plays nothing, and its holder leaving later is heard as a hold ending', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const s = onHole(twoDoors, audio);
+    settleVoices();
+    // red lobs onto DOOR and settles there (the plates-sync line, 42/80), every tick of it dropped by a hidden tab
+    let r = stepSim(s, [
+      { type: 'setAim', playerId: 0, angle: quantize4((-42 * Math.PI) / 180), power: 80 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const dropped = [...r.events];
+    for (let i = 0; i < 2000 && r.state.phase === 'flying'; i += 1) {
+      r = stepSim(r.state, []);
+      dropped.push(...r.events);
+    }
+    expect(r.state.switches.door).toBe(true);
+    expect(dropped.some((e) => e.type === 'ballRest' && e.playerId === 0)).toBe(true);
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    expect(voicesDuring(() => audio.catchUpPlates(dropped))).toBe(0);
+    // red leaves DOOR for good, heard in time: the falling confirm and the closing slide, nothing else
+    audio.handleEvents([{ type: 'switchOff', tick: r.state.tick + 300, switchId: 'door', pos: top }, doorToggle(r.state.tick + 300, true)], 0);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slide.mock.calls).toEqual([[true, expect.objectContaining({ playerId: 'door-gate' })]]);
+  });
+
   it('syncPlates: a state resumed with red holding DOOR (one synthetic levelStart), then red leaves: the falling confirm and the closing slide', () => {
     const audio = createAudio({ seed: 1 });
     audio.unlock();

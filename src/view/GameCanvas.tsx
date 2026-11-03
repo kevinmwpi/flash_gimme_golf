@@ -23,6 +23,7 @@ import { controllingSeat, createInputSystem, type InputSystem, type MissKind, ty
 import { renderFrame } from './render/index';
 import {
   applySimEvents,
+  catchUpPlates,
   createMotionPreference,
   createViewState,
   pulseMissRings,
@@ -362,20 +363,28 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   let transformScale = fitCanvas(wrapper, canvas);
   /** The hole both plate trackers (view.plates, audio's) stand on: a levelStart moves them, and so does syncPlates. */
   let platesOn: string | null = null;
-  /** The client's event-stream epoch the plate trackers were last synced at (online; -1: not yet). */
-  let syncedEpoch = -1;
+  /** Online: the plate trackers have been re-based on the room's state since the loop began. */
+  let based = false;
 
   /**
    * BUILD_DECISIONS D11: the plate trackers judge every press against what they were fed, so a state that did not come
    * through its own levelStart and events re-bases both of them, the view's and audio's alike: its plates down, the
-   * holds of its balls (and the cup), its doors and bridges as those holds drive them (plates.ts sync). `already`: the
-   * events this state includes that are emitted next, so the trackers start from before them and say their words.
+   * holds of its balls (and the cup), its doors and bridges as those holds drive them (plates.ts sync). Every event fed
+   * after it is a later one.
    */
-  const syncPlates = (state: SimState, already: readonly SimEvent[] = []): void => {
+  const syncPlates = (state: SimState): void => {
     const on = levelOf(state);
-    view.plates.sync(on, state.switches, state.balls, already);
-    latest.current.audio.syncPlates(on, state.switches, state.balls, already);
+    view.plates.sync(on, state.switches, state.balls);
+    latest.current.audio.syncPlates(on, state.switches, state.balls);
     platesOn = state.levelId;
+  };
+
+  /** Events this page will never present (a hidden tab's dropped batches): both plate trackers take them in silently. */
+  const catchUp = (events: readonly SimEvent[]): void => {
+    if (events.length === 0) return;
+    catchUpPlates(view, events);
+    latest.current.audio.catchUpPlates(events);
+    for (const e of events) if (e.type === 'levelStart') platesOn = e.levelId;
   };
 
   const emit = (events: readonly SimEvent[], now: number): void => {
@@ -386,8 +395,8 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     for (const e of events) if (e.type === 'levelStart') platesOn = e.levelId;
   };
   emit(initial.events, last);
-  // a `?state=` link opens with one synthetic levelStart, which resets audio's tracker to no plate down: both start
-  // from the state instead (online, the first frame re-bases them on the room's state)
+  // a `?state=` link opens with one synthetic levelStart, which resets both trackers to no plate down: both start from
+  // the state instead (online, the first frame re-bases them on the room's state)
   syncPlates(initial.state);
 
   /** Local modes: fixed 60 Hz steps; the first step of a frame drains the persistent queue. */
@@ -419,16 +428,21 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     prev = interp.prev;
     sim = interp.state;
     if (interp.snap) for (const rb of view.renderBalls) rb.snapNextFrame = true;
-    const events = client.drainEvents(client.renderTime(now));
-    // the first frame, a sync (a rejoin, playAgain) or batches dropped (a hidden tab's, or this drain's): the events no
-    // longer add up to what is drawn, so the plate trackers start over from the snapshot this frame's events reach,
-    // told that it includes them. Never on a mere `snap`: that comes with every shot and turn, and a re-sync then would
-    // forget the hold of a holder that shoots.
-    const epoch = client.eventStreamEpoch();
-    if (epoch !== syncedEpoch) {
-      syncedEpoch = epoch;
-      syncPlates(interp.prev, events);
-    }
+    let events = client.drainEvents(client.renderTime(now));
+    // D11: the plate trackers have every event once, in order. A sync (the start or rejoin this loop opened on, a
+    // later rejoin, playAgain) re-bases them on the state it carries, which the events after it never repeat; the
+    // batches a hidden tab dropped as stale reach them silently (take-backs only); then this frame's events. Never a
+    // re-base on a mere `snap`: that comes with every shot and turn, and would forget the hold of a holder that shoots.
+    const { synced, dropped } = client.takeStreamBreak();
+    if (synced !== null) {
+      syncPlates(synced);
+      catchUp(dropped);
+    } else if (!based) {
+      // no sync left to start from (another loop took it): the drawn state, which already has what is drained
+      syncPlates(interp.prev);
+      events = [];
+    } else catchUp(dropped);
+    based = true;
     emit(events, now);
     return interp.alpha;
   };
