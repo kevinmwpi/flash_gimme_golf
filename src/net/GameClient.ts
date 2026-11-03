@@ -206,6 +206,8 @@ export class GameClient {
 
   private readonly ring: RingEntry[] = [];
   private readonly eventQueue: EventBatch[] = [];
+  /** Counts the breaks in the event stream: every sync, every batch dropped as stale. */
+  private streamBreaks = 0;
   private lastBaseTime = Number.NEGATIVE_INFINITY;
   private clockOffset: number | null = null;
   private rtt = 0;
@@ -458,6 +460,7 @@ export class GameClient {
     this.config = config;
     this.ring.length = 0;
     this.eventQueue.length = 0;
+    this.streamBreaks += 1;
     this.lastBaseTime = Number.NEGATIVE_INFINITY;
     const state = this.decode(sync.snap, config);
     if (state === null) return false;
@@ -495,7 +498,9 @@ export class GameClient {
     const cutoff = renderTimeMs - EVENT_REPLAY_WINDOW_MS;
     let stale = 0;
     while (stale < this.eventQueue.length && (this.eventQueue[stale] as EventBatch).serverTime < cutoff) stale += 1;
-    if (stale > 0) this.eventQueue.splice(0, stale);
+    if (stale === 0) return;
+    this.eventQueue.splice(0, stale);
+    this.streamBreaks += 1;
   }
 
   private decode(snap: unknown, config: SimConfig): SimState | null {
@@ -663,6 +668,15 @@ export class GameClient {
     }
     this.lastBaseTime = base.serverTime;
     return crossed;
+  }
+
+  /**
+   * Moves whenever events stop telling the whole story: a sync (start, rejoin, playAgain) clears the queue and starts
+   * over from the state it carries, and a hidden tab drops batches past EVENT_REPLAY_WINDOW_MS. A renderer that keeps
+   * state built from events (the D11 plate trackers) re-syncs it from the rendered state when this changes.
+   */
+  eventStreamEpoch(): number {
+    return this.streamBreaks;
   }
 
   /**

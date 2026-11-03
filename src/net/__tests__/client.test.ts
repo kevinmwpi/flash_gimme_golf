@@ -584,6 +584,27 @@ describe('GameClient interpolation', () => {
     expect(r.client.interpolated(1125)?.state.balls[0].pos.x).toBe(900);
   });
 
+  it('eventStreamEpoch() moves when the event stream breaks (each sync, each batch dropped as stale), never for a batch drained in time', () => {
+    const r = rig();
+    const s = playingHost(r, 900);
+    const started = r.client.eventStreamEpoch();
+    const a = baseState();
+    const playStart: SimEvent = { type: 'playStart', levelId: LEVEL_1, tick: 1 };
+    deliver(r, s, { ...a, tick: 1 }, 1000, { events: [playStart] });
+    expect(r.client.drainEvents(r.client.renderTime(1100))).toEqual([playStart]);
+    expect(r.client.eventStreamEpoch()).toBe(started);
+    // a hidden tab: the next batch is never drained, and falls out of the replay window when a later snapshot lands
+    const hit: SimEvent = { type: 'ballHit', playerId: 1, pos: { x: 0, y: 0 }, angle: -1, power: 50, speed: 325, tick: 4 };
+    deliver(r, s, { ...a, tick: 4 }, 1050, { events: [hit] });
+    expect(r.client.eventStreamEpoch()).toBe(started);
+    deliver(r, s, { ...a, tick: 7 }, 1050 + CLIENT_RENDER_DELAY_MS + EVENT_REPLAY_WINDOW_MS + 1);
+    expect(r.client.drainEvents(r.client.renderTime(r.clock.now))).toEqual([]);
+    expect(r.client.eventStreamEpoch()).toBe(started + 1);
+    // a sync (a rejoin's joined{sync}, a playAgain's start) restarts the stream from the state it carries
+    s.receive({ type: 'start', sync: sync(a, 3000) });
+    expect(r.client.eventStreamEpoch()).toBe(started + 2);
+  });
+
   it('a SerializeError from decodeSnapshot => error{BAD_SNAPSHOT, recoverable:false}, socket closed, never throws', () => {
     const r = rig();
     const s = playingHost(r, 1000);

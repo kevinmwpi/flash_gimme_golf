@@ -5,12 +5,14 @@
 import { describe, expect, it } from 'vitest';
 import { waitingOf } from '../../sim/devices';
 import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
+import { level as plateAndBridge } from '../../sim/levels/w1-04-plate-and-bridge';
 import { level as boobyTrap } from '../../sim/levels/w2-06-booby-trap';
 import { level as loadAndFire } from '../../sim/levels/w2-07-load-and-fire';
 import { evaluateSwitches } from '../../sim/physics';
 import { createSim, stepSim } from '../../sim/sim';
+import { isRectActive } from '../../sim/terrain';
 import type { Aim, BallState, Level, PlayerId, SimEvent, SimState, Vec } from '../../sim/types';
-import { AIM_ANGLE_MAX, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
+import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
 import { holdsOf, waitingChipOf } from '../GameCanvas';
 import { FRESH_PRESS_TICKS, createPlateTracker, type PlateMoment } from '../plates';
 import { PLATE_CLICK_SEC, applySimEvents, createViewState, updateView, type ViewState } from '../view';
@@ -37,14 +39,20 @@ function rectOf(level: Level, id: string): Level['rects'][number] {
   return r;
 }
 
-/** The hole past its intro card with both balls resting where given (switches as they imply) and `active` to shoot. */
-function crafted(level: Level, red: Vec, blue: Vec, active: PlayerId): SimState {
+/**
+ * The hole past its intro card with both balls resting where given (switches as they imply) and `active` to shoot.
+ * `seed` presses plates before the balls are read: a deck plate can only be found down while its bridge stands.
+ */
+function crafted(level: Level, red: Vec, blue: Vec, active: PlayerId, seed: Record<string, boolean> = {}): SimState {
   const intro = stepSim(createSim({ playerCount: 2, levelIds: [level.id], seed: 7, mode: 'local' }).state, [{ type: 'continue', playerId: RED }]).state;
   const balls: [BallState, BallState] = [rest(red), rest(blue)];
-  const up = Object.fromEntries(level.switches.map((s) => [s.id, false]));
+  const up = { ...Object.fromEntries(level.switches.map((s) => [s.id, false])), ...seed };
   const switches = evaluateSwitches(level, evaluateSwitches(level, up, balls), balls);
   return { ...intro, balls, switches, activePlayer: active, turnDelayTicks: 0, phase: 'aiming' };
 }
+
+/** A shot `deg` degrees up from flat right (90 = straight up, 180 = flat left) at `power`, as a player can aim it. */
+const AIM = (deg: number, power: number): Aim => ({ angle: quantize4(Math.min(AIM_ANGLE_MAX, Math.max(AIM_ANGLE_MIN, (-deg * Math.PI) / 180))), power });
 
 /** The active ball's shot, every tick until the next shot could be taken. */
 function shot(state: SimState, aim: Aim): Tick[] {
@@ -159,13 +167,15 @@ describe('a stall tap on a held plate (real sim)', () => {
     expect(bursts).toEqual([]);
   });
 
-  it('too hard a tap lifts off: DOOR SHUT as it rises, DOOR HELD and DOOR OPEN when it settles, never SHUT and OPEN at once', () => {
+  it('too hard a tap lifts off: DOOR SHUT as it rises, taken back as it lands on the plate again, DOOR HELD and DOOR OPEN when it settles, never SHUT and OPEN at once', () => {
     const ticks = shot(start, STALL(50));
     const moments = trackerMoments(start, twoDoors, ticks);
-    expect(moments.map((m) => m.kind)).toEqual(['release', 'way', 'press', 'held', 'way']);
+    expect(moments.map((m) => m.kind)).toEqual(['release', 'way', 'press', 'unsay', 'held', 'way']);
     expect(moments[0]).toMatchObject({ kind: 'release', ended: true });
     expect(moments[1]).toMatchObject({ kind: 'way', rectId: 'door-gate', active: true });
     expect(moments[2]).toMatchObject({ kind: 'press', fresh: false });
+    // the landing presses DOOR again and the door opens on that tick: DOOR SHUT no longer stands
+    expect(moments[3]).toEqual({ kind: 'unsay', rectId: 'door-gate', rectKind: 'blocker', switchId: 'door', tick: moments[2]?.tick });
     const { born, alive } = viewOf(start, twoDoors, ticks);
     expect(born.map((s) => s.text)).toEqual(['DOOR SHUT', 'DOOR HELD', 'DOOR OPEN']);
     expect(alive.some((texts) => texts.includes('DOOR SHUT') && texts.includes('DOOR OPEN'))).toBe(false);
@@ -195,6 +205,99 @@ describe('Load & Fire: the partner rolls across FIRE (real sim)', () => {
     const farPlate = loadAndFire.switches.find((s) => s.id === 'fire-far');
     expect(redRest !== undefined && farPlate !== undefined && redRest.pos.x >= farPlate.x && redRest.pos.x <= farPlate.x + farPlate.w).toBe(true);
     expect(born.filter((s) => s.text === 'FIRE HELD')).toEqual([{ tick: redRest?.tick, text: 'FIRE HELD' }]);
+  });
+});
+
+describe('a way word never contradicts the way it names (D11, real sim)', () => {
+  type Rect = Level['rects'][number];
+  /** What a live way callout claims: the rect its subject names (`rect:<id>`) and whether it calls the way passable. */
+  function claimOf(level: Level, c: { readonly text: string; readonly subject?: string | undefined }): { rect: Rect; open: boolean } | null {
+    const rect = level.rects.find((r) => c.subject === `rect:${r.id}`);
+    if (rect === undefined) return null;
+    if (/ (SHUT|GONE)$/.test(c.text)) return { rect, open: false };
+    return / OPEN$/.test(c.text) ? { rect, open: true } : null;
+  }
+  /** A door or window lets a ball through while inactive, a bridge while active. */
+  const passable = (rect: Rect, switches: Readonly<Record<string, boolean>>): boolean => (rect.kind === 'bridge' ? isRectActive(rect, switches) : !isRectActive(rect, switches));
+
+  /** Plays the ticks into a view one per frame (a local game at 60 Hz) and lists each frame a live way word contradicts its way. */
+  function contradictions(start: SimState, level: Level, ticks: readonly Tick[]): string[] {
+    const view = createViewState(level, start);
+    const out: string[] = [];
+    let prev = start;
+    for (const t of ticks) {
+      applySimEvents(view, t.events, t.state);
+      updateView(view, prev, t.state, 1, DT);
+      for (const c of view.callouts) {
+        const claim = claimOf(level, c);
+        if (claim !== null && claim.open !== passable(claim.rect, t.state.switches)) out.push(`t${t.state.tick} ${c.text}`);
+      }
+      prev = t.state;
+    }
+    return out;
+  }
+
+  // red rests on DOOR (its hold keeps the door open) and taps; the review's cases, the build's STALL(50) among them
+  const holder = crafted(twoDoors, plateSpot(twoDoors, 'door'), twoDoors.starts[1], RED);
+
+  it.each([
+    ['the stall tap 90/50', 90, 50],
+    ['an off-vertical tap 107/40', 107, 40],
+    ['a tap 100/45', 100, 45],
+    ['a tap 75/35', 75, 35],
+  ])('%s lifts the holder off DOOR and lands it back on the plate: DOOR SHUT goes the tick the door opens again', (_case, deg, power) => {
+    const ticks = shot(holder, AIM(deg, power));
+    const off = ofType(ticks, 'switchOff').find((e) => e.switchId === 'door');
+    const on = ofType(ticks, 'switchOn').find((e) => e.switchId === 'door');
+    const restTick = ofType(ticks, 'ballRest').find((e) => e.playerId === RED)?.tick;
+    // the hold ended as red rose, a press that did not last opened the door again, and red settled on the plate
+    expect(off).toBeDefined();
+    expect(on?.tick).toBeGreaterThan(off?.tick ?? Infinity);
+    expect(ticks[ticks.length - 1]?.state.switches.door).toBe(true);
+    expect(contradictions(holder, twoDoors, ticks)).toEqual([]);
+    expect(viewOf(holder, twoDoors, ticks).born).toEqual([
+      { tick: off?.tick, text: 'DOOR SHUT' },
+      { tick: restTick, text: 'DOOR HELD' },
+      { tick: restTick, text: 'DOOR OPEN' },
+    ]);
+  });
+
+  it('L4: a lone deck ball lobs off its deck (BRIDGE GONE) onto FAR, which brings the planks back while it rolls there: the word goes with them', () => {
+    const deck = plateSpot(plateAndBridge, 'deck');
+    const start = crafted(plateAndBridge, { x: 960, y: deck.y }, plateAndBridge.starts[1], RED, { deck: true });
+    expect(start.switches.deck).toBe(true);
+    const ticks = shot(start, AIM(40, 70));
+    const far = ofType(ticks, 'switchOn').find((e) => e.switchId === 'far');
+    const deckOff = ofType(ticks, 'switchOff').find((e) => e.switchId === 'deck');
+    expect(far?.tick).toBeGreaterThan(deckOff?.tick ?? Infinity);
+    expect(contradictions(start, plateAndBridge, ticks)).toEqual([]);
+    expect(viewOf(start, plateAndBridge, ticks).born).toEqual([{ tick: deckOff?.tick, text: 'BRIDGE GONE' }]);
+  });
+
+  it('a holder that leaves DOOR for good: DOOR SHUT the tick the plate comes up, and it stands, the door staying shut', () => {
+    const ticks = shot(holder, AIM(150, 60));
+    const off = ofType(ticks, 'switchOff').find((e) => e.switchId === 'door');
+    expect(ofType(ticks, 'switchOn').filter((e) => e.switchId === 'door')).toEqual([]);
+    expect(trackerMoments(holder, twoDoors, ticks).map((m) => m.kind)).toEqual(['release', 'way']);
+    expect(contradictions(holder, twoDoors, ticks)).toEqual([]);
+    const { born, alive } = viewOf(holder, twoDoors, ticks);
+    expect(born).toEqual([{ tick: off?.tick, text: 'DOOR SHUT' }]);
+    // alive from the lift until it fades out (CALLOUT_TTL 1.1 s), never taken back
+    const from = ticks.findIndex((t) => t.state.tick === off?.tick);
+    expect(alive.slice(from, from + 60).every((texts) => texts.includes('DOOR SHUT'))).toBe(true);
+  });
+
+  it('a ball lobbed onto DOOR from its tee settles there: DOOR HELD and DOOR OPEN at the rest, nothing to take back', () => {
+    const start = crafted(twoDoors, twoDoors.starts[0], twoDoors.starts[1], RED);
+    const ticks = shot(start, AIM(42, 80));
+    const restTick = ofType(ticks, 'ballRest').find((e) => e.playerId === RED)?.tick;
+    expect(ticks[ticks.length - 1]?.state.switches.door).toBe(true);
+    expect(trackerMoments(start, twoDoors, ticks).some((m) => m.kind === 'unsay')).toBe(false);
+    expect(contradictions(start, twoDoors, ticks)).toEqual([]);
+    expect(viewOf(start, twoDoors, ticks).born).toEqual([
+      { tick: restTick, text: 'DOOR HELD' },
+      { tick: restTick, text: 'DOOR OPEN' },
+    ]);
   });
 });
 

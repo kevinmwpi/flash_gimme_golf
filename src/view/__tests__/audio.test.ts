@@ -6,8 +6,9 @@ import { campaignFrom, levelsOfWorld, WORLD1_IDS, WORLD_IDS } from '../../sim/le
 import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
 import { level as skyBridge } from '../../sim/levels/w3-10-sky-bridge';
 import { level as grandMachine } from '../../sim/levels/w3-12-grand-machine';
+import { evaluateSwitches } from '../../sim/physics';
 import { createSim, isShotReady, stepSim } from '../../sim/sim';
-import { AIM_ANGLE_MAX, BALL_RADIUS, DT } from '../../sim/types';
+import { AIM_ANGLE_MAX, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
 import type { BallState, Level, LevelRectKind, PlayerId, SimConfig, SimEvent, SimEventType, SimState, Vec, WorldId } from '../../sim/types';
 import { createAudio, MUSIC_TRACKS, type AudioSystem, type Sfx, type SfxName } from '../audio';
 
@@ -32,12 +33,15 @@ class FakeParam {
   static holdsBeforeFirstEvent = 0;
   value = 0;
   readonly set: number[] = [];
+  /** [value, time] of each linear ramp (a voice cut short ramps its output gain to 0). */
+  readonly ramps: Array<[number, number]> = [];
   private times: number[] = [];
   setValueAtTime(v: number, t: number): void {
     this.set.push(v);
     this.times.push(t);
   }
-  linearRampToValueAtTime(_v: number, t: number): void {
+  linearRampToValueAtTime(v: number, t: number): void {
+    this.ramps.push([v, t]);
     this.times.push(t);
   }
   exponentialRampToValueAtTime(_v: number, t: number): void {
@@ -90,6 +94,7 @@ class FakeNode {
 class FakeAudioContext {
   static oscillators = 0;
   static created: FakeNode[] = [];
+  static gains: FakeNode[] = [];
   static sentinels: FakeNode[] = [];
   static noiseSamples: Float32Array[] = [];
   static last: FakeAudioContext | null = null;
@@ -105,7 +110,9 @@ class FakeAudioContext {
     return Promise.resolve();
   }
   createGain(): FakeNode {
-    return new FakeNode();
+    const node = new FakeNode();
+    FakeAudioContext.gains.push(node);
+    return node;
   }
   createOscillator(): FakeNode {
     FakeAudioContext.oscillators += 1;
@@ -145,6 +152,7 @@ class ThrowingAudioContext {
 function installFakeContext(): void {
   FakeAudioContext.oscillators = 0;
   FakeAudioContext.created = [];
+  FakeAudioContext.gains = [];
   FakeAudioContext.sentinels = [];
   FakeAudioContext.noiseSamples = [];
   FakeAudioContext.last = null;
@@ -550,6 +558,111 @@ describe('audio with a stubbed AudioContext', () => {
     expect(press.mock.calls.filter(([o]) => o?.click === false)).toHaveLength(1);
     expect(lift.mock.calls.every(([o]) => o?.chime === false)).toBe(true);
     expect(lift).toHaveBeenCalledTimes(presses - 1);
+  });
+
+  /** Red settled on Two Doors' DOOR plate, red to shoot; the audio heard the hole start and red come to rest there. */
+  function redHoldingDoor(audio: AudioSystem): SimState {
+    const s = onHole(twoDoors, audio);
+    const door = plateOf(twoDoors, 'door');
+    const spot = { x: door.x + door.w / 2, y: door.surfaceY - BALL_RADIUS };
+    const red: BallState = { ...s.balls[0], pos: spot, vel: { x: 0, y: 0 }, asleep: true, grounded: true, restTicks: REST_TICKS, lastRest: spot };
+    const balls: [BallState, BallState] = [red, s.balls[1]];
+    const switches = evaluateSwitches(twoDoors, evaluateSwitches(twoDoors, s.switches, balls), balls);
+    expect(switches.door).toBe(true);
+    const arrival: SimEvent[] = [
+      { type: 'switchOn', tick: s.tick, switchId: 'door', byPlayer: 0, pos: { x: spot.x, y: door.surfaceY } },
+      doorToggle(s.tick, false),
+      { type: 'ballRest', tick: s.tick, playerId: 0, pos: spot, onPermanentGround: true },
+    ];
+    audio.handleEvents(arrival, 0);
+    return { ...s, balls, switches, activePlayer: 0, turnDelayTicks: 0, phase: 'aiming' };
+  }
+
+  /** Red's shot `deg` degrees up from flat right at `power`, heard tick by tick as GameCanvas plays it (1/60 s apart). */
+  function heardShot(audio: AudioSystem, start: SimState, deg: number, power: number): SimEvent[] {
+    let r = stepSim(start, [
+      { type: 'setAim', playerId: 0, angle: quantize4((-deg * Math.PI) / 180), power },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const events = [...r.events];
+    audio.handleEvents(r.events, 0);
+    for (let i = 0; i < 2000 && (r.state.phase === 'flying' || r.state.turnDelayTicks > 0); i += 1) {
+      context().currentTime += DT;
+      r = stepSim(r.state, []);
+      events.push(...r.events);
+      audio.handleEvents(r.events, 0);
+    }
+    return events;
+  }
+
+  /** Each door / bridge slide as it is voiced: shut (active) or open, its voice's output gain, the audio time. */
+  function recordSlides(audio: AudioSystem): Array<{ active: boolean; out: FakeNode | undefined; at: number }> {
+    const slides: Array<{ active: boolean; out: FakeNode | undefined; at: number }> = [];
+    const voice = audio.sfx.bridgeToggle;
+    vi.spyOn(audio.sfx, 'bridgeToggle').mockImplementation((active, o) => {
+      const before = FakeAudioContext.gains.length;
+      voice(active, o);
+      // a voice's first node is its output gain (voiceOut), the one a cut fades
+      slides.push({ active: active === true, out: FakeAudioContext.gains[before], at: context().currentTime });
+    });
+    return slides;
+  }
+
+  it("D11: a hold that ends as its holder hops off and lands back on the plate: the door's closing slide is faded out the tick the door opens again", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    // an off-vertical tap: red leaves the plate's dish for three ticks and lands back on DOOR
+    const events = heardShot(audio, start, 107, 40);
+    const off = events.find((e) => e.type === 'switchOff' && e.switchId === 'door');
+    const on = events.find((e) => e.type === 'switchOn' && e.switchId === 'door');
+    const lifted = (on?.tick ?? 0) - (off?.tick ?? 0);
+    expect(lifted).toBeGreaterThan(0);
+    expect(lifted).toBeLessThan(10);
+    // the hold ended: the falling confirm and the shut slide; red then settles on DOOR again: the opening slide
+    expect(lift.mock.calls[0]?.[0]?.chime).toBeUndefined();
+    expect(slides.map((s) => s.active)).toEqual([true, false]);
+    const [shut, open] = slides;
+    // the door opened again before the shut slide was over: it fades out from that tick
+    const reopenedAt = (shut?.at ?? 0) + lifted * DT;
+    const fade = shut?.out?.gain.ramps.at(-1);
+    expect(fade?.[0]).toBe(0);
+    expect(fade?.[1]).toBeGreaterThan(reopenedAt);
+    expect(fade?.[1]).toBeLessThan(reopenedAt + 0.05);
+    expect(open?.out?.gain.ramps).toEqual([]);
+  });
+
+  it('D11: a holder that leaves its plate for good keeps the falling confirm and the whole closing slide', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const events = heardShot(audio, start, 150, 60);
+    expect(events.filter((e) => e.type === 'switchOn' && e.switchId === 'door')).toEqual([]);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slides.map((s) => s.active)).toEqual([true]);
+    expect(slides[0]?.out?.gain.ramps).toEqual([]);
+  });
+
+  it('syncPlates: a state resumed with red holding DOOR (one synthetic levelStart), then red leaves: the falling confirm and the closing slide', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    const onDoor = { x: top.x, y: top.y - BALL_RADIUS };
+    const resting = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+    audio.handleEvents([levelStartOf(twoDoors.id, 400)], 0);
+    audio.syncPlates(twoDoors, { door: true, window: false }, [resting(onDoor), resting(twoDoors.starts[1])]);
+    audio.handleEvents([{ type: 'switchOff', tick: 500, switchId: 'door', pos: top }, doorToggle(500, true)], 0);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slide.mock.calls).toEqual([[true, expect.objectContaining({ playerId: 'door-gate' })]]);
   });
 
   it('setFan(false) stops the loop even while the context is suspended (leaving a game, NEXT_STEPS #6)', async () => {

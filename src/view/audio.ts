@@ -9,7 +9,7 @@
  * drives wait until the press lasts (plates.ts), so a ball rolling across or rocking in a plate's dish never rattles.
  */
 import { hasLevel, levelById } from '../sim/levels';
-import type { BounceSurface, LevelRectKind, Medal, PlayerId, SimEvent, WorldId } from '../sim/types';
+import type { BallState, BounceSurface, Level, LevelRectKind, Medal, PlayerId, SimEvent, WorldId } from '../sim/types';
 import { DT, MAX_POWER } from '../sim/types';
 import { createPlateTracker, type PlateMoment } from './plates';
 
@@ -203,6 +203,12 @@ export type AudioSystem = {
    *  bounces 45 ms per ball; `levelStart` picks the hole's world bed. `delaySec` defers scheduling (0 in both
    *  modes, D3). */
   handleEvents(events: readonly SimEvent[], nowMs: number, delaySec?: number): void;
+  /**
+   * Re-bases the plate tracker (D11, plates.ts) on a state the events did not bring: a `?state=` resume (one synthetic
+   * levelStart), an online page that joined mid-campaign or dropped a levelStart. GameCanvas calls it with the state it
+   * renders, as it syncs the view's tracker, so the two keep agreeing on which plates are held.
+   */
+  syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void;
   /** volume = power01 for 'hit', strength01 for bounce*, else a 0..1 multiplier. */
   play(name: SfxName, volume?: number): void;
   setMuted(muted: boolean): void;
@@ -259,6 +265,8 @@ const SLIDE_KINDS: ReadonlySet<LevelRectKind> = new Set<LevelRectKind>(['bridge'
  * press lasting; those clicks sound at this volume, so the same landing never rattles at full level.
  */
 const PLATE_FLICK_VOLUME = 0.6;
+/** A door's or bridge's slide whose change a press undid (plates.ts UNSAY) fades out over this long: no click. */
+const SLIDE_CUT_SEC = 0.03;
 
 type Poly = { max: number; minMs: number };
 type PolyName =
@@ -567,6 +575,10 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   const lastGimmeAt: [number, number] = [-Infinity, -Infinity];
   /** Which plate presses last (D11), fed every event like the view's own tracker: clicks vs confirms and slides. */
   const plates = createPlateTracker();
+  /** rectId -> the slide its last way moment made: a SHUT / GONE taken back (UNSAY) fades it out where it stands. */
+  const slides = new Map<string, Voice>();
+  /** The voice the last admitted sfx opened (`begin`), read by `voiceOf`. */
+  let opened: Voice | null = null;
   /** Scheduled time of the last trapReturn: the hand-off cues after it wait TRAP_RETURN_LEAD_SEC (across frames). */
   let lastReturnAt = -Infinity;
   const readyCbs: Array<() => void> = [];
@@ -764,7 +776,25 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     const at = o.at ?? g.ctx.currentTime;
     const key = o.playerId !== undefined ? `${name}:${o.playerId}` : name;
     if (!admit(name, key, at)) return null;
-    return { at, out: voiceOut(name, at, len, o.volume, g.sfxBus) };
+    opened = { at, out: voiceOut(name, at, len, o.volume, g.sfxBus) };
+    return opened;
+  }
+
+  /** The voice `cue` opened, or null when it was refused (retrigger window, polyphony, a context not running). */
+  function voiceOf(cue: () => void): Voice | null {
+    opened = null;
+    cue();
+    return opened;
+  }
+
+  /** Fades a voice out from `at` (now at the earliest) over SLIDE_CUT_SEC; one booked ahead never sounds. */
+  function fadeOut(v: Voice, at: number): void {
+    const g = graph();
+    if (g === null) return;
+    const t = Math.max(at, g.ctx.currentTime);
+    // the voice's output gain is never automated (voiceOut sets its value), so its value is the level to fade from
+    v.out.gain.setValueAtTime(v.out.gain.value, t);
+    v.out.gain.linearRampToValueAtTime(0, t + SLIDE_CUT_SEC);
   }
 
   // ---------- synthesis primitives ----------
@@ -1825,7 +1855,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   /**
    * BUILD_DECISIONS D11 (plates.ts): every press clicks (softer when the same landing rocks back onto the plate), the
    * HELD confirm and a door's or bridge's slide wait until the press lasts, and a ball passing over lets the plate up
-   * with a bare tick; the falling confirm and the closing slide sound when a hold ends.
+   * with a bare tick; the falling confirm and the closing slide sound when a hold ends, and a closing slide whose
+   * change a press undoes (the holder's hop landing back on its plate) fades out where it stands.
    */
   function routeMoment(m: PlateMoment, at: number, batch: Batch): void {
     switch (m.kind) {
@@ -1838,9 +1869,19 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
       case 'held':
         sfx.switchOn({ at, playerId: m.switchId, click: false });
         break;
-      case 'way':
-        if (SLIDE_KINDS.has(m.rectKind)) sfx.bridgeToggle(m.active, { at, playerId: m.rectId });
+      case 'way': {
+        if (!SLIDE_KINDS.has(m.rectKind)) break;
+        const slide = voiceOf(() => sfx.bridgeToggle(m.active, { at, playerId: m.rectId }));
+        if (slide === null) slides.delete(m.rectId);
+        else slides.set(m.rectId, slide);
         break;
+      }
+      case 'unsay': {
+        const slide = slides.get(m.rectId);
+        slides.delete(m.rectId);
+        if (slide !== undefined) fadeOut(slide, at);
+        break;
+      }
       case 'jaws':
         // a catch snaps and clinks; a free latches and chimes, except when the cup frees it (the hole-out's own chime
         // carries that moment); jaws a rescuer only rolls across snap or latch quietly, and a free that comes to last
@@ -1879,6 +1920,10 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     });
   }
 
+  function syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void {
+    plates.sync(level, switches, balls);
+  }
+
   function dispose(): void {
     music.halt(0.2);
     if (fan.running) fan.stop();
@@ -1897,6 +1942,7 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   return {
     unlock,
     handleEvents,
+    syncPlates,
     play,
     setMuted,
     isMuted: () => settings.muted,

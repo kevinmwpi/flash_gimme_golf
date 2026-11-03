@@ -1121,7 +1121,8 @@ function wayCallout(view: ViewState, m: Extract<PlateMoment, { kind: 'way' }>): 
  * BUILD_DECISIONS D11 (plates.ts): every press clicks the cap fully down; a FRESH press also kicks ink streaks and
  * pops the plate's sticker (a ball rocking in the dish re-presses without them); `<PLATE> HELD` and the door or
  * bridge words wait until the press lasts, and so do SNAP! and FREE! for the trap a release plate drives. A ball
- * rolling across a plate gets the click (and the jaws or the door move) and nothing it would contradict.
+ * rolling across a plate gets the click (and the jaws or the door move) and nothing it would contradict, and a
+ * SHUT / GONE that a press undoes before it lasts leaves the screen on that tick.
  */
 function applyPlateMoment(view: ViewState, m: PlateMoment): void {
   const level = view.level;
@@ -1148,6 +1149,10 @@ function applyPlateMoment(view: ViewState, m: PlateMoment): void {
     }
     case 'way':
       wayCallout(view, m);
+      break;
+    case 'unsay':
+      // the door or bridge moved again before the change lasted: its SHUT / GONE goes with it, never over an open way
+      view.callouts = view.callouts.filter((c) => c.subject !== rectStickerKey(m.rectId));
       break;
     case 'jaws':
       if (!m.lasting) break;

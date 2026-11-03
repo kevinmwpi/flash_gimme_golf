@@ -17,12 +17,20 @@
  * - a switch-driven door, window, bridge or fan announces a WAY change only when it lasts: it leaves its rest state
  *   (the state with no plate down) together with a HELD plate that drives it, and returns to it at once when a
  *   change announced that way is undone. A pass-over announces nothing; the door's own animation shows it;
+ * - a word never contradicts the way it names: when a press that does not last moves a way off the rest state just
+ *   announced (the holder's hop landing back on its plate, a lob off a deck touching another plate that drives the
+ *   bridge), that word is taken back (UNSAY) on the same tick, and the way's next lasting change (HELD and OPEN once
+ *   a ball settles on the plate) is announced as usual. Measured on near-vertical taps by a holder on every door,
+ *   window and bridge plate and on lobs off both decks: 876 of 1,319 SHUT / GONE words were undone, a median 40
+ *   ticks (p75 58) after them, so holding SHUT back until a release had lasted would make it a second late;
  * - a trap's JAWS on a ball last the same way: a ball coming to rest in armed jaws is caught for good, but a free
  *   lasts only while a HELD release plate (or the cup) keeps the trap open. A rescuer rolling across FREE, or rocking
  *   in its dish, frees and re-catches its partner two or three times before settling; those flicks are not lasting,
  *   and the free is announced (`late`) when the rescuer settles on the plate.
  * Events only, so audio (which never sees SimState) can run it; the view passes the live switch mask to confirm a
- * hold, which also heals a tracker that missed events (an online client drops events past its replay window).
+ * hold, which also heals a tracker that missed events (an online client drops events past its replay window). A
+ * state the events did not bring (a `?state=` link, an online rejoin or sync, a dropped levelStart) re-bases both
+ * trackers through `sync` (GameCanvas: view.plates and AudioSystem.syncPlates, with the state it draws).
  */
 import { hasLevel, levelById } from '../sim/levels/index';
 import { isRectActive, rectSwitchIds } from '../sim/terrain';
@@ -38,6 +46,8 @@ export type PlateMoment =
   | { readonly kind: 'held'; readonly switchId: string; readonly pos: Vec; readonly tick: number }
   /** A door, window, bridge or fan changed for good (`active` as in `bridgeToggle`): opened with a HELD plate, or back to rest. */
   | { readonly kind: 'way'; readonly rectId: string; readonly rectKind: LevelRectKind; readonly active: boolean; readonly switchId: string; readonly tick: number }
+  /** The way's back-to-rest word no longer stands: a press that does not last moved it again (`switchId` drove that toggle). */
+  | { readonly kind: 'unsay'; readonly rectId: string; readonly rectKind: LevelRectKind; readonly switchId: string; readonly tick: number }
   /**
    * A trap's jaws on a ball (`trapCaught` / `trapFreed`, or a free announced `late`). `lasting`: a catch, a catch
    * after a free that lasted, or a free a HELD release plate (or the cup) keeps open. A `late` free carries no
@@ -98,6 +108,8 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
   const upAt = new Map<string, number>();
   /** rectId -> the state last announced (a WAY moment); absent = its rest state. */
   const announced = new Map<string, boolean>();
+  /** Ways whose back-to-rest word (SHUT, GONE) is the last thing said about them and still stands. */
+  const standing = new Set<string>();
   const sunk: [boolean, boolean] = [false, false];
   /** Balls put down at rest this tick (rests and respawns): a press in the same tick by one of them is a hold at once. */
   let settled: { tick: number; spots: Vec[] } = { tick: -1, spots: [] };
@@ -122,6 +134,8 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
       const active = isRectActive(rect, now);
       if (active === announcedState(rect)) continue;
       announced.set(rect.id, active);
+      // a held plate presses the way, so this is never its rest state
+      standing.delete(rect.id);
       out.push({ kind: 'way', rectId: rect.id, rectKind: rect.kind, active, switchId: sw.id, tick });
     }
     for (const [playerId, loose] of looseIn) {
@@ -158,6 +172,7 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
     held.clear();
     upAt.clear();
     announced.clear();
+    standing.clear();
     sunk[0] = false;
     sunk[1] = false;
     settled = { tick: -1, spots: [] };
@@ -206,10 +221,17 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
           out.push({ kind: 'release', switchId: e.switchId, pos: e.pos, tick: e.tick, ended: held.delete(e.switchId) });
           break;
         case 'bridgeToggle': {
-          // only the way back to rest is announced here, and only when the opposite was announced; the rest waits for a hold
+          // only the way back to rest is announced here, and only when the opposite was announced; the rest waits for a
+          // hold. A move off a rest word that stands takes the word back: a press that does not last made it
           const rect = level?.rects.find((r) => r.id === e.rectId);
-          if (rect === undefined || !isWay(rect) || e.active !== restState(rect) || announcedState(rect) === e.active) break;
+          if (rect === undefined || !isWay(rect)) break;
+          if (e.active !== restState(rect)) {
+            if (standing.delete(rect.id)) out.push({ kind: 'unsay', rectId: rect.id, rectKind: rect.kind, switchId: e.switchId, tick: e.tick });
+            break;
+          }
+          if (announcedState(rect) === e.active) break;
           announced.set(rect.id, e.active);
+          standing.add(rect.id);
           out.push({ kind: 'way', rectId: rect.id, rectKind: rect.kind, active: e.active, switchId: e.switchId, tick: e.tick });
           break;
         }
