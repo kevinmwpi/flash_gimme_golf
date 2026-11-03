@@ -200,10 +200,12 @@ found a softlock (D10.12). Three holes change:
   (World 1's `switchId` is equivalent).
 - **Copy.** Hints are the design's "In-game hint" verbatim and `aha` its "Aha"; `watchOut` is player-facing
   "Stuck?" copy written from "Watch for in playtests" and the hole's recovery rules, without solver numbers.
-  One exception since D11 (plates press on contact): L7's hint said the cannon "fires only while a ball RESTS on a
+  Two exceptions since D11 (plates press on contact): L7's hint said the cannon "fires only while a ball RESTS on a
   FIRE plate", which is no longer true, so it reads "fires the moment a ball touches a FIRE plate. Whoever lands
   across stays on the far FIRE plate to fire the other." (its `aha` and `watchOut` follow; the L10 `watchOut`
-  teaches the lip-to-lip deck).
+  teaches the lip-to-lip deck). L10's aha ended "so the cannon never fires without a bridge underneath", which a
+  shot that only skims across A breaks (D11, below), so it now says the ball that fired the cannon stays on A
+  until its partner lands, and its `watchOut` says the same.
 - **Pars** started from the design's proposals (7 / 7 / 8 / 8 and 9 / 7 / 8 / 8); the solver's calibration (D10.13)
   lowered Booby Trap, Bait and Grand Machine by one each, and the D11 re-verification lowered Crossfire by one
   more, so they ship at 7 / 6 / 8 / 8 and 8 / 7 / 7 / 7 ("Pars" at the end).
@@ -248,6 +250,27 @@ at a hold height of 56 and again at 72 (solver results in "Final table" below). 
   0 of 24,138 landings let it up mid-bounce, at 56 and at 72); 2,069 of them (L5 TOP, L7 far FIRE, L8 WINDOW,
   L11 FAR) roll off the plate's end onto the bowl's ramp and back before resting, so the plate is up for a few
   ticks: a pass-over, which D11 accepts.
+- **L10: a skim across A can drop the fired partner (accepted, review of 2026-11-02).** A LOADED ball fires the
+  tick any ball touches a FIRE plate, and on Sky Bridge the plates that fire the cannon (A, B, DECK) are also all
+  that holds the bridge. The fired ball comes down on the planks about 126–128 ticks (2.1 s) after the fire, at x
+  1060–1080, and holds the DECK itself from then on; until then the ball that fired it has to stay on A (or B). A
+  firm flat shot that skims across A's (or B's) sand bowl touches the plate for 1–5 ticks, fires the partner,
+  raises the bridge and rolls off; the planks are gone long before the partner gets there, so it falls (+1, back
+  to its safe spot, usually its tee). Before D11 the partner fired only once the shooter rested on the plate, so
+  the same shots left it LOADED, or fired it safely when the shooter came back to rest on A. Measured at a hold
+  height of 72 (the review's sweeps, re-run on this code): red's first shot from the tee after blue loads (1–89°,
+  power 10–100 in steps of 2: 4,094 shots) fires blue 2,579 times and drops it 0 times, because the spring ride
+  and every landing in A's bowl from the tee flat end on A, rocking included. From the spire-top spots 616, 620
+  and 630 (left of A's bowl) and 830, 845 and 859 (right of it), on 1–179° × the same powers (8,234 shots per
+  spot), 47–52 of the 2,789–4,003 partner-firing shots per spot drop blue, all at power 72 or more within 12° of
+  flat; on the human grid (5–90° step 5 × power 20–100 step 10, both ways) 1–3 of 105–148. From the left spots
+  red falls into the chasm as well in 41–45 of them; from the right ones it never does (it drops off the spire
+  and the SPRING usually throws it back onto A). The B-side spots need a contrived order (red already across,
+  then blue loads). No softlock and no desync, only the +1. D11 keeps the touch rule rather than firing L10's
+  cannon only on a lasting press, so the copy changed instead: the L10 aha, watchOut and file header no longer
+  promise a bridge under the fired ball and say the ball that fires the cannon stays on A (or B) until its
+  partner lands. `levels.test.ts` plays the safe opening (blue LOADED; red's spring ride onto A fires it, A never
+  comes up, red rests on A and blue lands across) and checks the copy.
 - **Pars and copy.** Crossfire's minimum fell from 6 to 5, so its par from 8 to 7 ("Pars"). Copy says "on" a
   plate where "resting on" became wrong: the L2 hint and aha, the L4 hint, aha and watchOut, the L7 hint, aha and
   watchOut (the cannon fires on a touch), the L10 watchOut.
@@ -373,10 +396,15 @@ Cannon drum 41–160 (top 580) around the breech 76–124 at y 600 (launch (520,
 plate A 670–790 in the sand bowl 640–820. Chasm 860–1580 under the BRIDGE at y 400 (held by `a`, `b` OR `deck`;
 DECK 860–1580, lip to lip since D11). Spire B: plate B 1630–1740 in the sand bowl 1600–1770, green 1830–1960 at
 y 390, cup 1875, back bunker 1920–1960. Line: blue chips LEFT into the cold cannon and waits, LOADED → red rides
-the spring onto A: the touch raises the bridge, lights the cannon and fires blue onto B → blue putts → red
-crosses from A and putts. Second route: both ride the spring onto A and cross one at a time. Watch-outs:
-whether A, the bridge and BOOM read as one cause and effect; trusting the wait in a cold cannon; a lone DECK
-ball rolls off (a high lob lifts off the deck and drops the planks).
+the spring onto A: the touch raises the bridge, lights the cannon and fires blue onto B, and red stays on A until
+blue lands → blue putts → red crosses from A and putts. Second route: both ride the spring onto A and cross one
+at a time. Watch-outs: whether A, the bridge and BOOM read as one cause and effect; trusting the wait in a cold
+cannon; a lone DECK ball rolls off (a high lob lifts off the deck and drops the planks); the ball that fires the
+cannon stays on A (or B) until the fired ball lands, because the bridge lasts only while a ball is on A, B or
+the DECK. Since D11 a firm flat shot that skims across A's bowl fires blue and rolls off, and blue drops into the
+chasm (+1): 0 of 2,579 partner-firing first shots from the tee flat do it (the spring ride and every bowl landing
+end on A), 47–52 of 2,789–4,003 from each spire-top spot beside the bowl, all at power 72 or more within 12° of
+flat (1–3 of 105–148 on the human grid); D11 accepts it ("D11" above).
 
 ### 11 · Crossfire (par 7, red first, cup holds `far`)
 

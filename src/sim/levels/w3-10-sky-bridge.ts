@@ -6,14 +6,21 @@
  * (breech 76-124 at y 600); in front of them a SPRING (442-498) throws a ball onto plate A in the near
  * spire's bowl. A, B (the far spire's bowl) and the DECK (on the bridge, lip to lip) each hold the
  * BRIDGE and light the cannon, so the touch that lands a ball on A raises the bridge AND fires a LOADED
- * ball 1,600 px onto B: the cannon never fires without a bridge underneath. Plates press on contact and
- * come up the tick no ball is on them (BUILD_DECISIONS D11). Blue shoots first. The cup holds B (D2).
+ * ball 1,600 px onto B. Plates press on contact and come up the tick no ball is on them (BUILD_DECISIONS
+ * D11), so the bridge lasts only while a ball is on A, B or the DECK: the ball that fires the cannon must
+ * stay on A (or B) until the fired ball is down on the planks, about 126-128 ticks after the fire at x
+ * 1060-1080 (from then on it holds the DECK itself). The spring ride and every bowl landing from the tee
+ * flat end on A. A firm flat shot that only skims across A's (or B's) sand bowl fires the partner and
+ * rolls off, and the planks are gone before the partner reaches them: it falls (+1, back to its safe
+ * spot, usually its tee), a consequence D11 accepts (levels README, D11). Blue shoots first. The cup
+ * holds B (D2).
  *
  * Intended line (par 7): blue chips LEFT into the cold cannon and waits, LOADED -> red rides the spring
- * onto A: the bridge appears, the cannon lights and fires blue onto B -> blue putts out (the cup keeps
- * B held) -> red crosses the bridge from A and putts. Second route: both ride the spring onto A and
- * cross one at a time (World 1's Plate & Bridge pattern: a lone ball on the DECK keeps the bridge while
- * it rolls along the planks, so it rolls off; a high lob lifts off the deck and drops the planks).
+ * onto A: the bridge appears, the cannon lights and fires blue onto B while red stays on A -> blue putts
+ * out (the cup keeps B held) -> red crosses the bridge from A and putts. Second route: both ride the
+ * spring onto A and cross one at a time (World 1's Plate & Bridge pattern: a lone ball on the DECK keeps
+ * the bridge while it rolls along the planks, so it rolls off; a high lob lifts off the deck and drops
+ * the planks).
  *
  * D11: the DECK spans its bridge exactly (Appendix A and the first build inset it 24 px from both lips).
  * With plates pressed by rolling balls, the inset dropped the planks under a lone deck ball rolling for
@@ -45,9 +52,9 @@ export const level: Level = compileLevel({
   order: 10,
   par: 7,
   hint: 'Blue: chip back into the CANNON and wait. Red: ride the SPRING onto A, and the BRIDGE and the cannon both go live.',
-  aha: 'My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across, so the cannon never fires without a bridge underneath.',
+  aha: 'My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across. Then I stay on A until my partner lands, because the bridge lasts only while a ball is on A, B or the DECK.',
   watchOut:
-    'A cold CANNON is safe: a ball resting in it just waits, LOADED, and fires the moment a ball touches A, B or the DECK, which also raises the bridge. Without the cannon, ride the SPRING onto A and cross one at a time. A ball on the DECK holds the bridge while it stays on the planks, so roll off it: a high lob lifts off the deck and the planks vanish unless a ball holds A or B (+1 if it drops into the chasm).',
+    'A ball in the cold CANNON waits, LOADED, until a ball touches A, B or the DECK. The bridge lasts only while a ball is on one of them, so whoever fires the cannon stays on A (or B) until the partner lands, or the partner drops into the chasm (+1). Without the cannon, ride the SPRING onto A and cross one at a time, rolling off the DECK: a high lob lifts off it and the planks vanish.',
   mechanicsIntroduced: [],
   firstPlayer: 1,
   cupHoldsSwitch: 'b',

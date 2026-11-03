@@ -283,7 +283,7 @@ Each level's **Axes** line reads: Geometric distance / verticality / cup width Â
 
 **In-game hint.** "Blue: chip back into the CANNON and wait. Red: ride the SPRING onto A, and the BRIDGE and the cannon both go live."
 
-**Aha.** My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across, so the cannon never fires without a bridge underneath.
+**Aha.** My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across, so the cannon never fires without a bridge underneath. (Since BUILD_DECISIONS D11, plates pressed on contact, the bridge stays under the fired ball only while the ball that fired it stays on A: a firm shot that skims across A fires the partner and rolls off, and the partner falls (+1), so the shipped aha says to stay on A until the partner lands.)
 
 **Watch for in playtests.** Whether A, bridge and BOOM read as one cause and effect (the camera must follow blue); whether players trust waiting in the cold cannon.
 

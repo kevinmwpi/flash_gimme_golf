@@ -2,7 +2,8 @@
 // ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, 420 px walls, 720 px
 // chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign, traps and cannons,
 // at most one introduced mechanic, rect and switch ids disjoint, the overview rule) + D11 (plates pressed by
-// any ball on them: decks lip to lip, every plate a tick's travel short of what it drives).
+// any ball on them: decks lip to lip, every plate a tick's travel short of what it drives, the ball that fires
+// L10's cannon stays on A while the bridge carries its partner).
 // Level ids are derived from the file names and the level names, so this file holds no level-id literal;
 // the goldens it replays (levels-golden.ts) and the solver's tables are keyed by level id (D10.1). The levels
 // README is binding for the level docs, so the files, constants and solver passes it names are checked to exist.
@@ -609,6 +610,50 @@ describe('levels', () => {
       '10:b->bridge:50',
       '12:door->door-gate:40',
     ]);
+  });
+
+  it('D11: the L10 golden opening is safe: red rides the SPRING onto A, which fires the LOADED blue, and stays on A until blue has landed across', () => {
+    // A, B and the DECK fire the cannon AND are all that holds the bridge; the fired ball comes down on the planks about
+    // 126-128 ticks after the fire and holds the DECK itself from then on. A firm flat shot that only skims across A fires
+    // blue and rolls off, and the planks are gone before blue gets there (accepted under D11, levels README). The
+    // spring ride ends on A, so A stays down and the bridge stays up under blue. The shots are the golden line's.
+    const golden = GOLDEN_LINES.find((g) => g.levelId === L10.id);
+    const [chip, ride] = (golden?.log ?? []).flatMap((e) => (e.cmd.type === 'setAim' ? [{ deg: (-e.cmd.angle * 180) / Math.PI, power: e.cmd.power }] : []));
+    const plateA = L10.switches.find((s) => s.id === 'a');
+    const gap = L10.terrain.gaps[0];
+    if (chip === undefined || ride === undefined || plateA === undefined || gap === undefined) throw new Error('L10 lost its golden opening, plate A or its chasm');
+    const load = solver.takeShot(solver.newGame(L10), chip);
+    if (load === null) throw new Error('the sim refused the golden chip into the cannon');
+    expect(load.summary.shooter).toBe(1);
+    expect(load.summary.waiting).toBe('loaded');
+    expect(solver.heldList(load.summary.switches)).toEqual([]); // the cannon is cold
+    expect(load.game.state.activePlayer).toBe(0);
+    const fire = solver.takeShot(load.game, ride);
+    if (fire === null) throw new Error('the sim refused the golden spring ride');
+    const s = fire.summary;
+    expect(s.partnerFired).toBe(true);
+    // red rests on A, and A never came up during the shot, so the bridge never dropped under blue
+    expect(s.fell).toBe(false);
+    expect(s.restX).toBeGreaterThanOrEqual(plateA.x);
+    expect(s.restX).toBeLessThanOrEqual(plateA.x + plateA.w);
+    expect(s.switches.a).toBe(true);
+    expect(fire.events.filter((e) => e.type === 'switchOff' && e.switchId === 'a')).toEqual([]);
+    expect(s.bridgeDrops).toBe(0);
+    // blue landed across, at rest on B or the DECK, and nobody paid a fall
+    const blue = fire.game.state.balls[1];
+    expect(s.partnerFell).toBe(false);
+    expect(blue.asleep).toBe(true);
+    expect(blue.pos.x).toBeGreaterThan(gap.x1);
+    expect(s.switches.b === true || s.switches.deck === true).toBe(true);
+    expect(fire.game.state.players.map((p) => p.strokes)).toEqual([1, 1]);
+  });
+
+  it('D11: the L10 copy promises no bridge under the fired ball; the Stuck? tip tells whoever fires the cannon to stay on A (or B) until the partner lands', () => {
+    // A touch fires the LOADED ball, but the bridge lasts only while a ball is on A, B or the DECK (the test above).
+    for (const copy of [L10.aha, L10.watchOut]) expect(copy).not.toMatch(/never fires without a bridge|cannon is safe/i);
+    expect(L10.watchOut).toMatch(/bridge lasts only while a ball is on/);
+    expect(L10.watchOut).toMatch(/whoever fires the cannon stays on A \(or B\) until the partner lands/);
+    expect(L10.aha).toMatch(/I stay on A until my partner lands/);
   });
 
   it('tees sit on the fairway >= MIN_TEE_SEPARATION apart and compiled positions are 2-dp exact', () => {
