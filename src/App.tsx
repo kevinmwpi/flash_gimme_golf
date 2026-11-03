@@ -538,8 +538,9 @@ function GameScreen(props: GameScreenProps): React.JSX.Element {
           setHintForced(false);
           holderTipShown.current = null;
           if (online && seat !== null && e.levelIndex > 0 && !e.restarted && !localContinue.current) pushToast(COPY.toast.movedOn(otherPlayer(seat)));
-          // The session's own start (index 0, no restart) reaches an online client late, with the first snapshot
-          // after the event-less start sync: it must not forget a Tee off pressed before it arrived.
+          // The session's own start (index 0, no restart) is not delivered online: the server re-sends it with the
+          // first snapshot after the event-less start sync and GameClient drops events at or before the sync's tick.
+          // Should one arrive anyway, it must not forget a Tee off pressed before it.
           if (e.levelIndex > 0 || e.restarted) localContinue.current = false;
           break;
         }

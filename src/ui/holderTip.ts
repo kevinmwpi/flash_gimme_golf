@@ -1,22 +1,23 @@
 // OWNER: ui
 /**
- * The holder tip (BUILD_DECISIONS D2, D10.10: the toast that teaches the stall tap). At the start of a turn
- * the active ball may rest on a plate its partner still needs. The tip names that plate only when a stall
- * tap really keeps the partner's way open:
+ * The holder tip (BUILD_DECISIONS D2, D10.10, D11: the toast that teaches the stall tap). At the start of a turn
+ * the active ball may rest on a plate its partner still needs. Under D11 a pressed plate stays down while a ball
+ * over it hops no higher than PLATE_HOLD_HEIGHT_PX (72), so a stall tap (straight up at low power: up to power 46,
+ * which rises 70 px) keeps the plate down from the shot to the landing, a deck plate included. The tip names that
+ * plate only when staying on it really keeps the partner's way open:
  * - neither ball waits in a device (caught in an armed trap or loaded in a cold cannon): there the WAITING
  *   rule already hands every turn to the free ball, and a release or FIRE plate is the partner's job;
  * - the plate opens a door or raises a bridge: a plate whose only consumers are traps or cannons is never
- *   named (a trap blocks no way, it only holds a ball that rests in it, and a loaded ball fires whenever a
- *   FIRE plate is held again, so staying on one never keeps anything open);
- * - the plate is not wired to the cup (sinking holds it too) and is not a deck plate (a deck lets go
- *   the tick its ball moves, so a tap drops the bridge under the tapper);
+ *   named (a trap blocks no way, it only holds a ball that rests in it, and a loaded ball fires the moment a
+ *   ball touches a FIRE plate, so staying on one never keeps anything open);
+ * - the plate is not wired to the cup (sinking holds it too);
  * - the partner rests on no plate that drives the same door or bridge, this one included (the
  *   partner keeps the way open, so the holder may go);
  * - the door or bridge still stands between the partner and the cup: a door whose middle is not
- *   behind the partner (a closing door pushes a ball out through the nearer face), or a bridge that
- *   starts ahead of the partner. A partner already on the planks (the lip strips beside the deck)
- *   falls whatever the holder does; staying would still be the holder's best move there, but a tip
- *   followed by the partner's fall reads as wrong advice, so it stays silent on purpose;
+ *   behind the partner (a closing door pushes a ball out through the nearer face), a bridge that
+ *   starts ahead of the partner, or a bridge the partner rests on with no plate of its own under it
+ *   (a deck plate there holds it, see above): it drops under the partner the moment its plates come up,
+ *   and a stall tap keeps them down;
  * - the partner cannot pass that wall through a field of its own colour from where it rests.
  * Who rests where, and whether a device holds it there, comes from SimEvents (advanceSpots), never from
  * switchOn.byPlayer, which names only the first ball on a plate. An unknown spot means no tip.
@@ -94,7 +95,7 @@ function withSpot(spots: Spots, slot: PlayerId, spot: BallSpot): Spots {
   return slot === 0 ? [spot, spots[1]] : [spots[0], spot];
 }
 
-/** physics switchPresser's press zone (without its ground-source check). */
+/** physics switchPresser's contact zone (without its ground-source check): a resting ball there presses the plate. */
 function restsOn(spot: BallSpot, sw: PressureSwitch): boolean {
   return (
     !spot.sunk &&
@@ -102,6 +103,11 @@ function restsOn(spot: BallSpot, sw: PressureSwitch): boolean {
     spot.pos.x <= sw.x + sw.w &&
     Math.abs(spot.pos.y + BALL_RADIUS - sw.surfaceY) <= SWITCH_CONTACT_TOLERANCE
   );
+}
+
+/** A ball resting on a bridge's top (its planks or its deck plate). */
+function restsOnBridge(spot: BallSpot, rect: LevelRect): boolean {
+  return rect.kind === 'bridge' && spot.pos.x >= rect.x && spot.pos.x <= rect.x + rect.w && Math.abs(spot.pos.y + BALL_RADIUS - rect.y) <= SWITCH_CONTACT_TOLERANCE;
 }
 
 /** Same rule as sim/terrain `rectSwitchIds` (switchIds overrides switchId), which ui may not import. */
@@ -115,13 +121,15 @@ function opensAWay(rect: LevelRect): boolean {
   return rect.kind === 'blocker' || rect.kind === 'bridge';
 }
 
-/** Does `rect` still stand between a partner at x `px` and the cup at x `cx`? */
-function stillAhead(rect: LevelRect, px: number, cx: number): boolean {
+/** Does the partner resting at `spot` still need `rect` to reach the cup at x `cx`: ahead of it, or the bridge under it? */
+function stillAhead(rect: LevelRect, spot: BallSpot, cx: number): boolean {
+  const px = spot.pos.x;
   const right = cx >= px;
   if (rect.kind === 'blocker') {
     const mid = rect.x + rect.w / 2;
     return right ? mid >= px && rect.x <= cx : mid <= px && rect.x + rect.w >= cx;
   }
+  if (restsOnBridge(spot, rect)) return true;
   return right ? rect.x > px && rect.x <= cx : rect.x + rect.w < px && rect.x + rect.w >= cx;
 }
 
@@ -140,13 +148,13 @@ export function holderTipSwitch(level: Level, spots: Spots, holder: PlayerId): s
   const theirs = spots[partner];
   if (mine === null || theirs === null || mine.sunk || theirs.sunk || mine.waiting || theirs.waiting) return null;
   for (const sw of level.switches) {
-    if (sw.id === level.cupHoldsSwitch || sw.onRectId !== undefined || !restsOn(mine, sw)) continue;
+    if (sw.id === level.cupHoldsSwitch || !restsOn(mine, sw)) continue;
     const partnerNeedsIt = level.rects.some((rect) => {
       const drivers = driversOf(rect);
       if (!opensAWay(rect) || !drivers.includes(sw.id)) return false;
       if (level.switches.some((other) => drivers.includes(other.id) && restsOn(theirs, other))) return false;
       if (ownFieldPasses(level, rect, partner, theirs.pos.x, level.hole.x)) return false;
-      return stillAhead(rect, theirs.pos.x, level.hole.x);
+      return stillAhead(rect, theirs, level.hole.x);
     });
     if (partnerNeedsIt) return sw.id;
   }

@@ -1,7 +1,9 @@
 // OWNER: levels
-// ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, deck inset, 420 px
-// walls, 720 px chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign,
-// traps and cannons, at most one introduced mechanic, rect and switch ids disjoint, the overview rule).
+// ARCH.md §4 levels row + BUILD_DECISIONS D1/D2 (firstPlayer, labels, cupHoldsSwitch, 420 px walls, 720 px
+// chasm) + D10 (twelve holes in three worlds, global hole numbers, one world per campaign, traps and cannons,
+// at most one introduced mechanic, rect and switch ids disjoint, the overview rule) + D11 (plates pressed by
+// any ball on them: decks lip to lip, every plate a tick's travel short of what it drives, the ball that fires
+// L10's cannon stays on A while the bridge carries its partner).
 // Level ids are derived from the file names and the level names, so this file holds no level-id literal;
 // the goldens it replays (levels-golden.ts) and the solver's tables are keyed by level id (D10.1). The levels
 // README is binding for the level docs, so the files, constants and solver passes it names are checked to exist.
@@ -34,13 +36,12 @@ import { createSim, runReplay, stepSim } from '../sim';
 import { rectContains, rectSwitchIds, surfaceYAt, surfaceYOnPiece } from '../terrain';
 import * as simTypes from '../types';
 import type { BallState, BlockerRect, CannonRect, ColourGateRect, Level, LevelRect, PlayerCommand, SimConfig, SimEvent, TrapRect, Vec } from '../types';
-import { BALL_RADIUS, GIMME_RADIUS, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, REST_TICKS, VIEWPORT_H } from '../types';
+import { BALL_RADIUS, DT, GIMME_RADIUS, GRAVITY, MAX_BALL_SPEED, MIN_TEE_SEPARATION, NEAR_CUP_RADIUS, PLAYER_GATE_COLOUR, REST_TICKS, VIEWPORT_H } from '../types';
 import { GOLDEN_LINES, goldenConfig } from './levels-golden';
 
 /** The wall height LEVELS.md verified against the 6.5 shot speed (vacuum apex 341 + radius 12 + margin). */
 const WALL_CLEARANCE_PX = 420;
 const CHASM_PX = 720;
-const DECK_INSET_PX = 24;
 
 const LEVELS_DIR = fileURLToPath(new URL('../levels/', import.meta.url));
 
@@ -156,7 +157,7 @@ describe('registry', () => {
     expect(campaignFrom(L7.id)).toEqual([L7.id, L8.id]);
     expect(campaignFrom(L9.id)).toEqual([L9.id, L10.id, L11.id, L12.id]);
     expect(campaignFrom(L12.id)).toEqual([L12.id]);
-    expect(WORLDS.map((w) => coursePar(WORLD_IDS[w]))).toEqual([28, 29, 30]);
+    expect(WORLDS.map((w) => coursePar(WORLD_IDS[w]))).toEqual([28, 29, 29]);
     expect(coursePar([L2.id, L4.id])).toBe(14);
     expect(WORLDS.map(worldTitle)).toEqual(['World 1 — Teach', 'World 2 — Lift & Lock', 'World 3 — Sky Machines']);
   });
@@ -170,8 +171,8 @@ describe('levels', () => {
     }
   });
 
-  it('pars are 6 / 7 / 8 / 7, 7 / 6 / 8 / 8, 8 / 7 / 8 / 7 (World 1 re-derived against the real sim; worlds 2-3 calibrated by the solver, D10.13); every par >= 3; wind 0; height 720', () => {
-    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7, 7, 6, 8, 8, 8, 7, 8, 7]);
+  it('pars are 6 / 7 / 8 / 7, 7 / 6 / 8 / 8, 8 / 7 / 7 / 7 (World 1 re-derived against the real sim; worlds 2-3 calibrated by the solver, D10.13; Crossfire 8 -> 7 under D11); every par >= 3; wind 0; height 720', () => {
+    expect(LEVELS.map((l) => l.par)).toEqual([6, 7, 8, 7, 7, 6, 8, 8, 8, 7, 7, 7]);
     for (const level of LEVELS) {
       expect(level.par).toBeGreaterThanOrEqual(3);
       expect(level.wind).toBe(0);
@@ -528,7 +529,7 @@ describe('levels', () => {
     }
   });
 
-  it('the L4 and L10 bridges span their 720 px gap at the lip height, held by A, B or the DECK; each DECK plate is inset 24 px on its bridge', () => {
+  it('the L4 and L10 bridges span their 720 px gap at the lip height, held by A, B or the DECK; each DECK plate spans its bridge lip to lip (D11)', () => {
     for (const [level, plates, top] of [
       [L4, ['near', 'far', 'deck'], 620],
       [L10, ['a', 'b', 'deck'], 400],
@@ -543,14 +544,116 @@ describe('levels', () => {
       expect(bridge?.y).toBe(top);
       expect(bridge?.switchIds).toEqual(plates);
       expect(bridge?.switchId).toBeUndefined();
+      // D11: a rolling deck ball keeps the bridge only while it is over the plate, so the plate runs to both lips (a
+      // 24 px inset dropped the planks under it short of the lip); a ball resting AT a lip stands on the terrain and
+      // still never presses it (switchPresser's ground-source rule, the solver's deck-lip check).
       const deck = level.switches.find((s) => s.id === 'deck');
       expect(deck?.onRectId).toBe('bridge');
-      expect(deck?.x).toBe(gap.x1 + DECK_INSET_PX);
-      expect(deck!.x + deck!.w).toBe(gap.x2 - DECK_INSET_PX);
+      expect(deck?.x).toBe(gap.x1);
+      expect(deck!.x + deck!.w).toBe(gap.x2);
       expect(deck?.surfaceY).toBe(bridge?.y);
       for (const sw of level.switches) if (sw.onRectId === undefined) expect(sw.surfaceY).toBe(fairwayY(level, sw.x + sw.w / 2));
     }
     expect(L4.terrain.gaps).toEqual([{ x1: 520, x2: 1240 }]);
+  });
+
+  it('D11: a lone ball on the L4 / L10 DECK keeps the planks under it while it rolls, off either end, and a high lob lifts off and drops them', () => {
+    // {deck} held, the partner on its tee: nothing else holds the bridge. Rolling, the ball presses the deck until its
+    // centre is over a lip (the slow suite's deck-lone-roll-keeps-bridge sweeps 72 rolls and 9 lobs per deck).
+    for (const level of [L4, L10]) {
+      const bridge = level.rects.find((r) => r.id === 'bridge');
+      const gap = level.terrain.gaps[0];
+      if (bridge === undefined || gap === undefined) throw new Error(`${level.id} lost its bridge`);
+      const base = solver.newGame(level);
+      const shoot = (deg: number, power: number): solver.ShotOutcome => {
+        const balls = solver.inSlotOrder(1, solver.craftedBall(level, 1, { x: bridge.x + bridge.w / 2, y: bridge.y - BALL_RADIUS }), solver.craftedBall(level, 0, level.starts[0]));
+        const state = { ...base.state, balls, switches: { ...solver.allOff(level), deck: true }, activePlayer: 1 as const, turnDelayTicks: 0, phase: 'aiming' as const };
+        const r = solver.takeShot({ config: base.config, state, log: [] }, { deg, power });
+        if (r === null) throw new Error(`${level.id}: the sim refused ${deg}/${power}`);
+        return r;
+      };
+      const across = shoot(3, 80).summary;
+      expect(across.fell, level.id).toBe(false);
+      expect(across.restX, level.id).toBeGreaterThan(gap.x2);
+      const back = shoot(177, 80).summary;
+      expect(back.fell, level.id).toBe(false);
+      expect(back.restX, level.id).toBeLessThan(gap.x1);
+      const lob = shoot(45, 80);
+      expect(lob.events.some((e) => e.type === 'switchOff' && e.switchId === 'deck'), level.id).toBe(true);
+      expect(lob.summary.restX > gap.x1 && lob.summary.restX < gap.x2 && !lob.summary.fell, level.id).toBe(false);
+    }
+  });
+
+  it('D11: every plate ends more than one tick of travel plus a ball radius short of each door, window, bridge or breech it drives, so a ball pressing it on the way never passes that rect in the tick it stays open', () => {
+    // A plate a ball rolls or flies across comes up at the end of the tick the ball leaves it, and what it drives
+    // changes from the next tick: meanwhile the ball's leading edge advances at most (MAX_BALL_SPEED + GRAVITY * DT) * DT
+    // + BALL_RADIUS = 30.5 px past the plate's end. Traps are left out: they hold a resting ball, nothing passes them.
+    const reach = (MAX_BALL_SPEED + GRAVITY * DT) * DT + BALL_RADIUS;
+    const tight: string[] = [];
+    for (const level of LEVELS) {
+      for (const sw of level.switches.filter((s) => s.onRectId === undefined)) {
+        for (const rect of level.rects.filter((r) => r.kind !== 'trap' && rectSwitchIds(r).includes(sw.id))) {
+          const gap = Math.max(rect.x - (sw.x + sw.w), sw.x - (rect.x + rect.w));
+          expect(gap, `${level.id}: ${sw.id} -> ${rect.id}`).toBeGreaterThan(reach);
+          if (gap < 60) tight.push(`${level.order}:${sw.id}->${rect.id}:${gap}`);
+        }
+      }
+    }
+    // The tightest is L4's plate B, 32 px from the bridge end (a ball's CENTRE must cross that lip to stand on the planks).
+    expect(tight).toEqual([
+      '2:door->door-gate:50',
+      '2:window->window-gate:50',
+      '4:near->bridge:50',
+      '4:far->bridge:32',
+      '5:door->door-gate:50',
+      '9:bait->door-gate:40',
+      '10:b->bridge:50',
+      '12:door->door-gate:40',
+    ]);
+  });
+
+  it('D11: the L10 golden opening is safe: red rides the SPRING onto A, which fires the LOADED blue, and stays on A until blue has landed across', () => {
+    // A, B and the DECK fire the cannon AND are all that holds the bridge; the fired ball comes down on the planks about
+    // 126-128 ticks after the fire and holds the DECK itself from then on. A firm flat shot that only skims across A fires
+    // blue and rolls off, and the planks are gone before blue gets there (accepted under D11, levels README). The
+    // spring ride ends on A, so A stays down and the bridge stays up under blue. The shots are the golden line's.
+    const golden = GOLDEN_LINES.find((g) => g.levelId === L10.id);
+    const [chip, ride] = (golden?.log ?? []).flatMap((e) => (e.cmd.type === 'setAim' ? [{ deg: (-e.cmd.angle * 180) / Math.PI, power: e.cmd.power }] : []));
+    const plateA = L10.switches.find((s) => s.id === 'a');
+    const gap = L10.terrain.gaps[0];
+    if (chip === undefined || ride === undefined || plateA === undefined || gap === undefined) throw new Error('L10 lost its golden opening, plate A or its chasm');
+    const load = solver.takeShot(solver.newGame(L10), chip);
+    if (load === null) throw new Error('the sim refused the golden chip into the cannon');
+    expect(load.summary.shooter).toBe(1);
+    expect(load.summary.waiting).toBe('loaded');
+    expect(solver.heldList(load.summary.switches)).toEqual([]); // the cannon is cold
+    expect(load.game.state.activePlayer).toBe(0);
+    const fire = solver.takeShot(load.game, ride);
+    if (fire === null) throw new Error('the sim refused the golden spring ride');
+    const s = fire.summary;
+    expect(s.partnerFired).toBe(true);
+    // red rests on A, and A never came up during the shot, so the bridge never dropped under blue
+    expect(s.fell).toBe(false);
+    expect(s.restX).toBeGreaterThanOrEqual(plateA.x);
+    expect(s.restX).toBeLessThanOrEqual(plateA.x + plateA.w);
+    expect(s.switches.a).toBe(true);
+    expect(fire.events.filter((e) => e.type === 'switchOff' && e.switchId === 'a')).toEqual([]);
+    expect(s.bridgeDrops).toBe(0);
+    // blue landed across, at rest on B or the DECK, and nobody paid a fall
+    const blue = fire.game.state.balls[1];
+    expect(s.partnerFell).toBe(false);
+    expect(blue.asleep).toBe(true);
+    expect(blue.pos.x).toBeGreaterThan(gap.x1);
+    expect(s.switches.b === true || s.switches.deck === true).toBe(true);
+    expect(fire.game.state.players.map((p) => p.strokes)).toEqual([1, 1]);
+  });
+
+  it('D11: the L10 copy promises no bridge under the fired ball; the Stuck? tip tells whoever fires the cannon to stay on A (or B) until the partner lands', () => {
+    // A touch fires the LOADED ball, but the bridge lasts only while a ball is on A, B or the DECK (the test above).
+    for (const copy of [L10.aha, L10.watchOut]) expect(copy).not.toMatch(/never fires without a bridge|cannon is safe/i);
+    expect(L10.watchOut).toMatch(/bridge lasts only while a ball is on/);
+    expect(L10.watchOut).toMatch(/whoever fires the cannon stays on A \(or B\) until the partner lands/);
+    expect(L10.aha).toMatch(/I stay on A until my partner lands/);
   });
 
   it('tees sit on the fairway >= MIN_TEE_SEPARATION apart and compiled positions are 2-dp exact', () => {

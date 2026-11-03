@@ -11,7 +11,7 @@ import {
   type ServerMessage,
   type ServerMessageType,
 } from '../../src/net/protocol';
-import { WORLD1_IDS, WORLD_IDS, campaignFrom } from '../../src/sim/levels/index';
+import { WORLD1_IDS, WORLD_IDS, campaignFrom, levelById } from '../../src/sim/levels/index';
 import { decodeSnapshot, encodeSnapshot } from '../../src/sim/serialize';
 import { createSim, runReplay, stepSim } from '../../src/sim/sim';
 import { GOLDEN_LINES, type GoldenLine } from '../../src/sim/__tests__/levels-golden';
@@ -760,25 +760,37 @@ describe('RoomManager == local play on every hole (golden lines through two seat
   }
 
   it('hole 12, a real BACK +1 line: trapReturn alone forces a same-tick immediate snapshot; the skip arrives with its turnStart', () => {
-    // Red rests LOADED in the cold cannon (the golden opening); Blue comes to rest in the DOOR seat trap, so both
-    // wait and Blue goes BACK +1. Leaving the seat releases DOOR, so by R5 that tick has no turnStart: trapReturn is
-    // its only IMMEDIATE_SNAPSHOT_EVENTS event. The next settled tick skips Red (loaded) and hands Blue the turn.
+    // Red rests LOADED in the cold cannon (the golden opening). Blue lobs over the FIRE dish (a roll through it
+    // would touch FIRE and fire Red, BUILD_DECISIONS D11) and lands in the DOOR seat trap, pressing DOOR on that
+    // first contact; when Blue rests there, caught, both wait, and that same tick's hand-off sends Blue BACK +1.
+    // Leaving the seat releases DOOR, so by R5 that tick has no turnStart: trapReturn is its only
+    // IMMEDIATE_SNAPSHOT_EVENTS event. The next settled tick skips Red (loaded) and hands Blue the turn.
     const log: ReplayEntry[] = [
       { tick: 0, cmd: { type: 'continue', playerId: 0 } },
       { tick: 1, cmd: { type: 'setAim', playerId: 0, angle: -1.8587, power: 60.6 } },
       { tick: 1, cmd: { type: 'shoot', playerId: 0 } },
-      { tick: 194, cmd: { type: 'setAim', playerId: 1, angle: -0.1262, power: 60.6 } },
+      { tick: 194, cmd: { type: 'setAim', playerId: 1, angle: -0.9599, power: 85.5 } },
       { tick: 194, cmd: { type: 'shoot', playerId: 1 } },
     ];
     const h = new Harness();
     const room = playOnline(h, ['w3-12-grand-machine'], log, 420);
     const { snaps, events } = expectServerEqualsLocal(room, log, 420);
+    expect(events.filter((e) => e.type === 'cannonLoad')).toMatchObject([{ playerId: 0, rectId: 'cannon' }]);
+    // FIRE is never touched, so Red stays loaded; DOOR goes down once (Blue's landing) and up once (the reset)
+    expect(events.some((e) => e.type === 'cannonFire')).toBe(false);
+    const plates = events.filter((e) => e.type === 'switchOn' || e.type === 'switchOff').map((e) => `${e.type}:${'switchId' in e ? e.switchId : ''}`);
+    expect(plates).toEqual(['switchOn:door', 'switchOff:door']);
     const reset = events.find((e) => e.type === 'trapReturn');
-    expect(reset).toMatchObject({ playerId: 1, strokes: 2, toTee: false });
+    expect(reset).toMatchObject({ playerId: 1, strokes: 2, toTee: false, respawnPos: levelById('w3-12-grand-machine').starts[1] });
     const tick = reset?.tick ?? -1;
     const at = (t: number): Snapshot | undefined => snaps.find((s) => s.tick === t);
     expect(at(tick)?.immediate).toBe(true);
-    expect(at(tick)?.events.filter((e) => e.tick === tick).map((e) => e.type)).toEqual(['trapReturn', 'switchOff', 'bridgeToggle']);
+    const sameTick = at(tick)?.events.filter((e) => e.tick === tick) ?? [];
+    expect(sameTick.map((e) => e.type)).toEqual(['ballRest', 'trapCaught', 'trapReturn', 'switchOff', 'bridgeToggle']);
+    expect(sameTick.filter(isImmediate).map((e) => e.type)).toEqual(['trapReturn']);
+    expect(sameTick[1]).toMatchObject({ type: 'trapCaught', playerId: 1, rectId: 'door-seat' });
+    expect(sameTick[3]).toMatchObject({ type: 'switchOff', switchId: 'door' });
+    expect(sameTick[4]).toMatchObject({ type: 'bridgeToggle', rectId: 'door-gate', active: true, switchId: 'door' });
     expect(at(tick + 1)?.events.filter((e) => e.tick === tick + 1)).toMatchObject([
       { type: 'turnSkipped', playerId: 0, reason: 'loaded', rectId: 'cannon', nextPlayer: 1 },
       { type: 'turnStart', playerId: 1, sameAsBefore: true },

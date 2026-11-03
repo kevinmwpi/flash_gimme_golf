@@ -1,11 +1,22 @@
 // OWNER: sim
-// ARCH.md §4 switches row + BUILD_DECISIONS D2 (switchIds OR, onRectId deck plates, cupHoldsSwitch, door closing on a ball).
+// ARCH.md §4 switches row + BUILD_DECISIONS D2 (switchIds OR, onRectId deck plates, cupHoldsSwitch, door closing on a ball)
+// + D11 (a plate is pressed by any ball on it: down on contact, held through hops, up the tick no ball is on it).
 import { describe, expect, it, vi } from 'vitest';
 import { evaluateSwitches } from '../physics';
 import { createSim, stepSim } from '../sim';
 import { isRectActive } from '../terrain';
-import type { BallState, Level, PlayerCommand, PlayerId, SimEvent, SimEventType, SimState, StepResult } from '../types';
-import { BALL_RADIUS, FALL_PENALTY, REST_TICKS, SUNK_BALL_DROP, SWITCH_CONTACT_TOLERANCE } from '../types';
+import type { Aim, BallState, Level, PlayerCommand, PlayerId, PressureSwitch, SimEvent, SimEventType, SimState, StepResult } from '../types';
+import {
+  BALL_RADIUS,
+  FALL_PENALTY,
+  GRAVITY,
+  GROUND_RESTITUTION,
+  PLATE_HOLD_HEIGHT_PX,
+  REST_TICKS,
+  SHOT_SPEED_PER_POWER,
+  SUNK_BALL_DROP,
+  SWITCH_CONTACT_TOLERANCE,
+} from '../types';
 import {
   BRIDGE_X1,
   BRIDGE_X2,
@@ -65,8 +76,57 @@ function run(state: SimState, ticks: number, commandsAt: Record<number, PlayerCo
 const ofType = <T extends SimEventType>(events: readonly SimEvent[], type: T): Extract<SimEvent, { type: T }>[] =>
   events.filter((e): e is Extract<SimEvent, { type: T }> => e.type === type);
 
+const shoot = (playerId: PlayerId, aim: Aim): PlayerCommand[] => [
+  { type: 'setAim', playerId, ...aim },
+  { type: 'shoot', playerId },
+];
+
 const bridge = gapBridgeLevel.rects[0];
 if (bridge === undefined) throw new Error('fixture');
+
+function plate(id: string): PressureSwitch {
+  const sw = gapBridgeLevel.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error('fixture');
+  return sw;
+}
+
+/** `near`: x 300-400 on the fairway before the gap; `deck`: x 524-636 on the bridge. */
+const NEAR = plate('near');
+const DECK = plate('deck');
+
+/** How far a ball's bottom is above a plate (negative: below it). */
+const heightAbove = (sw: PressureSwitch, ball: Readonly<BallState>): number => sw.surfaceY - (ball.pos.y + BALL_RADIUS);
+
+const overPlate = (sw: PressureSwitch, ball: Readonly<BallState>): boolean => ball.pos.x >= sw.x && ball.pos.x <= sw.x + sw.w;
+
+/**
+ * D11 restated from the balls' positions, for a plate on open fairway (nothing but the plate's own piece under
+ * it): after every tick the plate is down iff some unsunk ball's centre x is over it with its bottom at most
+ * SWITCH_CONTACT_TOLERANCE below it and at most SWITCH_CONTACT_TOLERANCE above it (contact) or, when the plate
+ * was already down the tick before, at most PLATE_HOLD_HEIGHT_PX above it (hold).
+ */
+function expectPlateRule(sw: PressureSwitch, from: SimState, results: readonly StepResult[]): void {
+  let down = from.switches[sw.id] === true;
+  for (const r of results) {
+    const reach = down ? PLATE_HOLD_HEIGHT_PX : SWITCH_CONTACT_TOLERANCE;
+    down = r.state.balls.some((b) => !b.sunk && overPlate(sw, b) && heightAbove(sw, b) >= -SWITCH_CONTACT_TOLERANCE && heightAbove(sw, b) <= reach);
+    expect(r.state.switches[sw.id], `${sw.id} after tick ${r.state.tick}`).toBe(down);
+  }
+}
+
+/** Red dropped onto the middle of `near` from 10 px above it at `vy` (red's tee ball parked at 210). */
+function landOnNear(vy: number): { start: SimState; trace: Trace } {
+  const landing: BallState = { ...moving(350, 0, TEE_Y - 10), vel: { x: 0, y: vy }, grounded: false };
+  const start = { ...aimingState(gapBridgeLevel, [landing, parked(210)]), phase: 'flying' as const };
+  return { start, trace: run(start, 400) };
+}
+
+/** The highest hop after a landing's first touchdown, as the ball's bottom above the plate. */
+function firstHop(trace: Trace): number {
+  const touchdown = trace.results.findIndex((r) => r.state.balls[0].grounded);
+  expect(touchdown).toBeGreaterThanOrEqual(0);
+  return Math.max(...trace.results.slice(touchdown).map((r) => heightAbove(NEAR, r.state.balls[0])));
+}
 
 describe('switches, bridges, blockers', () => {
   it('a ball resting on a plate => pressed next tick, switchOn emitted once', () => {
@@ -82,52 +142,166 @@ describe('switches, bridges, blockers', () => {
     expect(later.state.phase).toBe('aiming');
   });
 
-  it('a ball rolling across a plate never presses it: a plate is held by a RESTING ball', () => {
+  it('a ball rolling across a plate presses it while it is over it and lets it up as it rolls off: switchOn and switchOff once each (D11)', () => {
     const start = { ...aimingState(gapBridgeLevel, [moving(150, 250), parked(210)]), phase: 'flying' as const };
     const trace = run(start, 400);
-    const overNear = trace.results.filter((r) => !r.state.balls[0].asleep && r.state.balls[0].pos.x >= 300 && r.state.balls[0].pos.x <= 400);
-    expect(overNear.length).toBeGreaterThan(3);
-    for (const r of overNear) expect(r.state.switches.near).toBe(false);
-    expect(ofType(trace.events, 'switchOn')).toHaveLength(0);
-    expect(ofType(trace.events, 'switchOff')).toHaveLength(0);
-    expect(ofType(trace.events, 'bridgeToggle')).toHaveLength(0);
-    // it rolls off the plate and stops short of the gap it never bridged
+    const onAt = trace.results.findIndex((r) => overPlate(NEAR, r.state.balls[0]));
+    const offAt = trace.results.findIndex((r, i) => i > onAt && !overPlate(NEAR, r.state.balls[0]));
+    expect(onAt).toBeGreaterThan(0);
+    expect(offAt - onAt).toBeGreaterThan(3);
+    // down exactly while the ball's centre is over x 300-400, and the ball rolls (never rests) all that time
+    trace.results.forEach((r, i) => expect(r.state.switches.near, `tick ${r.state.tick}`).toBe(i >= onAt && i < offAt));
+    for (const r of trace.results.slice(onAt, offAt)) expect(r.state.balls[0].asleep).toBe(false);
+    const plateCentre = { x: NEAR.x + NEAR.w / 2, y: NEAR.surfaceY };
+    expect(ofType(trace.events, 'switchOn')).toEqual([{ type: 'switchOn', switchId: 'near', byPlayer: 0, pos: plateCentre, tick: trace.results[onAt]?.state.tick }]);
+    expect(ofType(trace.events, 'switchOff')).toEqual([{ type: 'switchOff', switchId: 'near', pos: plateCentre, tick: trace.results[offAt]?.state.tick }]);
+    expect(ofType(trace.events, 'bridgeToggle')).toEqual([
+      expect.objectContaining({ rectId: 'bridge', active: true, switchId: 'near', tick: trace.results[onAt]?.state.tick }),
+      expect.objectContaining({ rectId: 'bridge', active: false, switchId: 'near', tick: trace.results[offAt]?.state.tick }),
+    ]);
+    expectPlateRule(NEAR, start, trace.results);
+    // the bridge is up only while the ball is on the plate, 100 px before the gap, so the ball never gets to
+    // use it: it rolls off the plate and stops short of the gap
     expect(trace.state.balls[0].asleep).toBe(true);
-    expect(trace.state.balls[0].pos.x).toBeGreaterThan(400);
+    expect(trace.state.balls[0].pos.x).toBeGreaterThan(NEAR.x + NEAR.w);
     expect(trace.state.balls[0].pos.x).toBeLessThan(BRIDGE_X1 - BALL_RADIUS);
+    expect(trace.state.switches.near).toBe(false);
     expect(ofType(trace.events, 'fellOffWorld')).toHaveLength(0);
   });
 
-  it('a landing presses the plate exactly once, on its ballRest tick, however hard it hits (no chatter through the hops)', () => {
-    // 100 px/s into the floor hops 2 px; 700 px/s hops about 48 px (restitution 0.35), far outside SWITCH_CONTACT_TOLERANCE
-    for (const vy of [100, 400, 700]) {
-      const landing: BallState = { ...moving(350, 0, TEE_Y - 10), vel: { x: 0, y: vy }, grounded: false };
-      const start = { ...aimingState(gapBridgeLevel, [landing, parked(210)]), phase: 'flying' as const };
-      const trace = run(start, 400);
-      const restIndex = trace.results.findIndex((r) => r.events.some((e) => e.type === 'ballRest' && e.playerId === 0));
-      const onIndex = trace.results.findIndex((r) => r.events.some((e) => e.type === 'switchOn' && e.switchId === 'near'));
-      expect(restIndex, `vy ${vy}`).toBeGreaterThan(0);
-      expect(onIndex, `vy ${vy}`).toBe(restIndex);
+  it('a landing presses the plate on its first contact and holds it through every bounce hop: one switchOn, no switchOff (impacts up to 700 px/s)', () => {
+    // 100 px/s into the floor hops 2 px; 700 px/s hops about 47 px (restitution 0.35): far outside
+    // SWITCH_CONTACT_TOLERANCE, inside PLATE_HOLD_HEIGHT_PX
+    for (const vy of [100, 250, 400, 550, 700]) {
+      const { start, trace } = landOnNear(vy);
+      const contactAt = trace.results.findIndex((r) => heightAbove(NEAR, r.state.balls[0]) <= SWITCH_CONTACT_TOLERANCE);
+      const touchdown = trace.results.findIndex((r) => r.state.balls[0].grounded);
+      const onAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'switchOn' && e.switchId === 'near'));
+      const restAt = trace.results.findIndex((r) => r.events.some((e) => e.type === 'ballRest' && e.playerId === 0));
+      // down on contact (bottom within the contact tolerance), never later than the touchdown and long before the rest
+      expect(onAt, `vy ${vy}`).toBe(contactAt);
+      expect(onAt, `vy ${vy}`).toBeLessThanOrEqual(touchdown);
+      expect(restAt, `vy ${vy}`).toBeGreaterThan(touchdown);
+      // the ball leaves the ground again after its touchdown, and the plate never comes up
+      expect(trace.results.slice(touchdown, restAt).some((r) => !r.state.balls[0].grounded), `vy ${vy}`).toBe(true);
+      trace.results.forEach((r, i) => expect(r.state.switches.near, `vy ${vy} tick ${r.state.tick}`).toBe(i >= onAt));
       expect(ofType(trace.events, 'switchOn')).toHaveLength(1);
       expect(ofType(trace.events, 'switchOff')).toHaveLength(0);
       expect(ofType(trace.events, 'bridgeToggle')).toEqual([expect.objectContaining({ rectId: 'bridge', active: true, switchId: 'near' })]);
-      const beforeRest = trace.results.slice(0, restIndex);
-      expect(beforeRest.some((r) => !r.state.balls[0].grounded)).toBe(true);
-      for (const r of beforeRest) expect(r.state.switches.near).toBe(false);
-      expect(trace.state.switches.near).toBe(true);
+      expectPlateRule(NEAR, start, trace.results);
     }
   });
 
-  it('the hardest landing hops well out of the contact band before it rests, which is what used to chatter the plate', () => {
-    const landing: BallState = { ...moving(350, 0, TEE_Y - 10), vel: { x: 0, y: 700 }, grounded: false };
-    const start = { ...aimingState(gapBridgeLevel, [landing, parked(210)]), phase: 'flying' as const };
-    const trace = run(start, 400);
-    const firstGround = trace.results.findIndex((r) => r.state.balls[0].grounded);
-    expect(firstGround).toBeGreaterThanOrEqual(0);
-    const apex = Math.min(...trace.results.slice(firstGround).map((r) => r.state.balls[0].pos.y));
-    expect(TEE_Y - apex).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
-    expect(ofType(trace.events, 'switchOn')).toHaveLength(1);
-    expect(ofType(trace.events, 'switchOff')).toHaveLength(0);
+  it('the hold band is what keeps a hard landing down; a landing whose hop clears PLATE_HOLD_HEIGHT_PX lets the plate up mid-hop and presses it again on contact', () => {
+    // 700 px/s: the first hop leaves the contact band (which used to chatter a door) but stays inside the hold band
+    const hard = landOnNear(700);
+    expect(firstHop(hard.trace)).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
+    expect(firstHop(hard.trace)).toBeLessThanOrEqual(PLATE_HOLD_HEIGHT_PX);
+    expect(ofType(hard.trace.events, 'switchOn')).toHaveLength(1);
+    expect(ofType(hard.trace.events, 'switchOff')).toHaveLength(0);
+    // the edge of the band: an impact whose first hop is about 8 px higher than PLATE_HOLD_HEIGHT_PX
+    const vy = Math.ceil(Math.sqrt(2 * GRAVITY * (PLATE_HOLD_HEIGHT_PX + 8)) / GROUND_RESTITUTION);
+    const harder = landOnNear(vy);
+    expect(firstHop(harder.trace), `vy ${vy}`).toBeGreaterThan(PLATE_HOLD_HEIGHT_PX);
+    const { results } = harder.trace;
+    const offAt = results.findIndex((r) => r.events.some((e) => e.type === 'switchOff' && e.switchId === 'near'));
+    expect(offAt).toBe(results.findIndex((r) => heightAbove(NEAR, r.state.balls[0]) > PLATE_HOLD_HEIGHT_PX));
+    const againAt = results.findIndex((r, i) => i > offAt && r.events.some((e) => e.type === 'switchOn' && e.switchId === 'near'));
+    expect(againAt).toBe(results.findIndex((r, i) => i > offAt && heightAbove(NEAR, r.state.balls[0]) <= SWITCH_CONTACT_TOLERANCE));
+    expect(ofType(harder.trace.events, 'switchOn')).toHaveLength(2);
+    expect(ofType(harder.trace.events, 'switchOff')).toHaveLength(1);
+    expect(harder.trace.state.switches.near).toBe(true);
+    expectPlateRule(NEAR, harder.start, results);
+  });
+
+  it('a stall tap keeps the plate down throughout, so the partner parked on the bridge it holds never falls (D11 hold band)', () => {
+    // the World 1 stall taps (levels README `stall` pass): straight up at 10 and 15, 80 degrees at 20, 100 degrees at 15
+    const taps: Aim[] = [
+      { angle: -1.5708, power: 10 },
+      { angle: -1.5708, power: 15 },
+      { angle: -1.3963, power: 20 },
+      { angle: -1.7453, power: 15 },
+    ];
+    const peaks: number[] = [];
+    for (const aim of taps) {
+      const label = `${aim.angle}/${aim.power}`;
+      const onBridge: BallState = { ...parked(510), lastRest: { x: 210, y: TEE_Y } };
+      const held = run(aimingState(gapBridgeLevel, [parked(350), onBridge], 0, 'local', { near: true, far: false, deck: false }), 1).state;
+      const trace = run(held, 300, { 0: shoot(0, aim) });
+      expect(ofType(trace.events, 'ballHit'), label).toHaveLength(1);
+      for (const r of trace.results) expect(r.state.switches.near, `${label} tick ${r.state.tick}`).toBe(true);
+      expect(ofType(trace.events, 'switchOff'), label).toEqual([]);
+      expect(ofType(trace.events, 'bridgeToggle'), label).toEqual([]);
+      expect(ofType(trace.events, 'fellOffWorld'), label).toEqual([]);
+      expect(trace.state.balls[1], label).toEqual(onBridge);
+      peaks.push(Math.max(...trace.results.map((r) => heightAbove(NEAR, r.state.balls[0]))));
+      // the tap lands back on the plate and the turn passes to blue with the bridge still up
+      expect(overPlate(NEAR, trace.state.balls[0]), label).toBe(true);
+      expect(trace.state.balls[0].asleep, label).toBe(true);
+      expect(trace.state.phase, label).toBe('aiming');
+      expect(trace.state.activePlayer, label).toBe(1);
+      expectPlateRule(NEAR, held, trace.results);
+    }
+    for (const peak of peaks) expect(peak).toBeLessThanOrEqual(PLATE_HOLD_HEIGHT_PX);
+    // three of the four taps rise past the contact band: only the hold band keeps their plate down
+    expect(peaks.filter((peak) => peak > SWITCH_CONTACT_TOLERANCE)).toHaveLength(3);
+  });
+
+  it('a lob off a plate lets it up the tick the ball rises above PLATE_HOLD_HEIGHT_PX or leaves its x-range, and presses it again on contact', () => {
+    const holding = (): SimState => aimingState(gapBridgeLevel, [parked(350), parked(210)], 0, 'local', { near: true, far: false, deck: false });
+    // straight up, aimed about 12 px past the hold band (power 50 for 72 px: an 82 px lob), back down onto the plate
+    const lobPower = Math.ceil(Math.sqrt(2 * GRAVITY * (PLATE_HOLD_HEIGHT_PX + 12)) / SHOT_SPEED_PER_POWER);
+    const start = holding();
+    const up = run(start, 300, { 0: shoot(0, { angle: -1.5708, power: lobPower }) });
+    const offAt = up.results.findIndex((r) => r.events.some((e) => e.type === 'switchOff' && e.switchId === 'near'));
+    expect(offAt).toBeGreaterThan(0);
+    expect(offAt).toBe(up.results.findIndex((r) => heightAbove(NEAR, r.state.balls[0]) > PLATE_HOLD_HEIGHT_PX));
+    expect(overPlate(NEAR, up.results[offAt]!.state.balls[0])).toBe(true);
+    const backAt = up.results.findIndex((r, i) => i > offAt && r.events.some((e) => e.type === 'switchOn' && e.switchId === 'near'));
+    expect(backAt).toBe(up.results.findIndex((r, i) => i > offAt && heightAbove(NEAR, r.state.balls[0]) <= SWITCH_CONTACT_TOLERANCE));
+    // the plate stays up the whole way back down through the hold band: once up, only contact presses it
+    const descent = up.results.slice(offAt, backAt);
+    expect(descent.some((r) => heightAbove(NEAR, r.state.balls[0]) <= PLATE_HOLD_HEIGHT_PX)).toBe(true);
+    for (const r of descent) expect(r.state.switches.near).toBe(false);
+    expect(ofType(up.events, 'switchOff')).toHaveLength(1);
+    expect(ofType(up.events, 'switchOn')).toHaveLength(1);
+    expect(up.state.switches.near).toBe(true);
+    expectPlateRule(NEAR, start, up.results);
+    // a chip to the left: the plate comes up the tick the ball's centre leaves x 300-400, while the ball is still
+    // inside the hold band
+    const chipStart = holding();
+    const chip = run(chipStart, 300, { 0: shoot(0, { angle: -2.3562, power: 40 }) });
+    const chipOff = chip.results.findIndex((r) => r.events.some((e) => e.type === 'switchOff' && e.switchId === 'near'));
+    expect(chipOff).toBe(chip.results.findIndex((r) => !overPlate(NEAR, r.state.balls[0])));
+    expect(heightAbove(NEAR, chip.results[chipOff]!.state.balls[0])).toBeLessThanOrEqual(PLATE_HOLD_HEIGHT_PX);
+    expect(heightAbove(NEAR, chip.results[chipOff]!.state.balls[0])).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
+    expect(ofType(chip.events, 'switchOn')).toEqual([]);
+    expect(chip.state.switches.near).toBe(false);
+    expectPlateRule(NEAR, chipStart, chip.results);
+  });
+
+  it('a ball flying over a plate it never touches does not press it, even inside the hold band (the band only keeps a plate down)', () => {
+    // lobs to the left from x 470, between the plate and the gap: one crosses x 300-400 entirely 29-34 px up
+    // (inside the hold band), one crosses the band's edge on its way up
+    const lobs: { aim: Aim; insideBand: boolean }[] = [
+      { aim: { angle: -2.618, power: 65 }, insideBand: true },
+      { aim: { angle: -2.4435, power: 80 }, insideBand: false },
+    ];
+    for (const { aim, insideBand } of lobs) {
+      const label = `${aim.angle}/${aim.power}`;
+      const start = aimingState(gapBridgeLevel, [parked(470), parked(210)], 0, 'local', { near: false, far: false, deck: false });
+      const trace = run(start, 400, { 0: shoot(0, aim) });
+      const heights = trace.results.filter((r) => overPlate(NEAR, r.state.balls[0])).map((r) => heightAbove(NEAR, r.state.balls[0]));
+      expect(heights.length, label).toBeGreaterThan(10);
+      for (const h of heights) expect(h, label).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
+      expect(heights.every((h) => h <= PLATE_HOLD_HEIGHT_PX), label).toBe(insideBand);
+      for (const r of trace.results) expect(r.state.switches.near, `${label} tick ${r.state.tick}`).toBe(false);
+      expect(ofType(trace.events, 'switchOn'), label).toEqual([]);
+      expect(ofType(trace.events, 'bridgeToggle'), label).toEqual([]);
+      // it came down beyond the plate and rested there
+      expect(trace.state.balls[0].asleep, label).toBe(true);
+      expect(trace.state.balls[0].pos.x, label).toBeLessThan(NEAR.x);
+    }
   });
 
   it('a bridge appears exactly when activeWhen matches', () => {
@@ -144,7 +318,7 @@ describe('switches, bridges, blockers', () => {
     expect(isRectActive(wall, { door: true })).toBe(true);
   });
 
-  it('a ball parked on a bridge FALLS the tick after the holder leaves and respawns at lastRest with +1 credited to the FALLING ball owner', () => {
+  it('a ball parked on a bridge FALLS the tick after the holder leaves the plate and respawns at lastRest with +1 credited to the FALLING ball owner', () => {
     // red holds `near`; blue is parked on the bridge OUTSIDE the deck plate (x 510 < 524) so only red holds it up.
     // A bridge is never permanent ground, so blue's lastRest is still its tee.
     const onBridge: BallState = { ...parked(510), lastRest: { x: 210, y: TEE_Y } };
@@ -154,15 +328,21 @@ describe('switches, bridges, blockers', () => {
     // the holder chips away from the gap (leftwards) so only blue is over the vanished bridge
     const shot: PlayerCommand[] = [{ type: 'setAim', playerId: 0, angle: -2.3562, power: 40 }, { type: 'shoot', playerId: 0 }];
     const trace = run(held, 600, { 0: shot });
-    // the plate releases on the shot tick itself: the holder is no longer RESTING, although its bottom is
-    // still inside the contact band (the press is a rest test, not a height test)
+    // D11: the struck holder keeps the plate down while it is still over it, on the shot tick and every tick
+    // after it, until its centre leaves x 300-400; it is still inside the hold band then, so the x-range is
+    // what lets the plate up
     const offIndex = trace.results.findIndex((r) => r.events.some((e) => e.type === 'switchOff' && e.switchId === 'near'));
-    expect(offIndex).toBe(0);
-    const plateY = gapBridgeLevel.switches[0]?.surfaceY ?? GROUND_Y;
-    const struck = trace.results[0]!.state.balls[0];
-    expect(struck.asleep).toBe(false);
-    expect(plateY - (struck.pos.y + BALL_RADIUS)).toBeLessThanOrEqual(SWITCH_CONTACT_TOLERANCE);
-    expect(held.switches.near).toBe(true);
+    expect(offIndex).toBeGreaterThan(0);
+    expect(offIndex).toBe(trace.results.findIndex((r) => !overPlate(NEAR, r.state.balls[0])));
+    for (const r of trace.results.slice(0, offIndex)) {
+      expect(r.state.switches.near, `tick ${r.state.tick}`).toBe(true);
+      expect(r.state.balls[0].asleep).toBe(false);
+    }
+    expect(trace.results[0]?.events.map((e) => e.type)).toEqual(['ballHit']);
+    const leaving = trace.results[offIndex]!.state.balls[0];
+    expect(heightAbove(NEAR, leaving)).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
+    expect(heightAbove(NEAR, leaving)).toBeLessThanOrEqual(PLATE_HOLD_HEIGHT_PX);
+    expectPlateRule(NEAR, held, trace.results);
     const offTick = trace.results[offIndex];
     expect(ofType(offTick?.events ?? [], 'bridgeToggle')).toEqual([expect.objectContaining({ rectId: 'bridge', active: false })]);
     expect(offTick?.state.balls[1].asleep).toBe(true);
@@ -272,7 +452,7 @@ describe('switches, bridges, blockers', () => {
     ]);
   });
 
-  it('a deck plate (onRectId) is pressed only while its rect is active and the resting ball ground source is that rect', () => {
+  it('a deck plate (onRectId) is pressed only while its rect is active and the ball ground source is that rect', () => {
     const deckBall = parked(580);
     expect(evaluateSwitches(gapBridgeLevel, { near: true, far: false, deck: false }, [parked(350), deckBall])).toEqual({ near: true, far: false, deck: true });
     // the deck holds itself once pressed (bridge active via `deck`)
@@ -282,13 +462,20 @@ describe('switches, bridges, blockers', () => {
     // a ball on the near lip (x 510 < 524) stands on the bridge but outside the deck plate
     expect(evaluateSwitches(gapBridgeLevel, { near: true, far: false, deck: false }, [parked(350), parked(510)])).toEqual({ near: true, far: false, deck: false });
     // from a cold start (all false) the deck ball has no support in the stale switches: it is woken on the
-    // first tick, lands on the bridge `near` has just raised, and holds the deck once it is RESTING again
+    // first tick, and the next tick it lands on the bridge `near` has just raised and presses the deck on that
+    // first contact (D11), while it is still moving: it rests REST_TICKS later with the deck already down
     const cold = run(aimingState(gapBridgeLevel, [parked(350), deckBall]), REST_TICKS + 2);
     expect(cold.results[0]?.state.switches).toEqual({ near: true, far: false, deck: false });
     expect(cold.results[0]?.state.balls[1].asleep).toBe(false);
     const deckOn = cold.results.findIndex((r) => r.events.some((e) => e.type === 'switchOn' && e.switchId === 'deck'));
-    expect(deckOn).toBe(REST_TICKS);
-    expect(cold.results[deckOn]?.events.some((e) => e.type === 'ballRest' && e.playerId === 1)).toBe(true);
+    expect(deckOn).toBe(1);
+    expect(cold.results[deckOn]?.state.balls[1]).toMatchObject({ grounded: true, asleep: false });
+    expect(ofType(cold.results[deckOn]?.events ?? [], 'switchOn')).toEqual([expect.objectContaining({ switchId: 'deck', byPlayer: 1 })]);
+    const restAt = cold.results.findIndex((r) => r.events.some((e) => e.type === 'ballRest' && e.playerId === 1));
+    expect(restAt).toBe(REST_TICKS);
+    expect(ofType(cold.results[restAt]?.events ?? [], 'switchOn')).toEqual([]);
+    for (const r of cold.results.slice(deckOn)) expect(r.state.switches.deck).toBe(true);
+    expect(ofType(cold.events, 'switchOff')).toEqual([]);
     expect(cold.state.switches).toEqual({ near: true, far: false, deck: true });
     expect(Math.abs(cold.state.balls[1].pos.y - deckBall.pos.y)).toBeLessThan(0.1);
     expect(ofType(cold.events, 'fellOffWorld')).toHaveLength(0);
@@ -302,6 +489,37 @@ describe('switches, bridges, blockers', () => {
     expect(ofType(trace.events, 'fellOffWorld')).toHaveLength(0);
     expect(trace.state.balls[1]).toEqual(deckBall);
     expect(trace.state.switches.deck).toBe(true);
+  });
+
+  it('a deck plate is pressed by a ball ROLLING across the deck, only while it is on it; a lone deck ball keeps its bridge up through its own stall tap (D11)', () => {
+    // red holds `near`; blue rolls from the near fairway over the bridge to the far side
+    const start = { ...aimingState(gapBridgeLevel, [parked(350), moving(470, 200)], 1, 'local', { near: true, far: false, deck: false }), phase: 'flying' as const };
+    const trace = run(start, 400);
+    const onAt = trace.results.findIndex((r) => overPlate(DECK, r.state.balls[1]));
+    const offAt = trace.results.findIndex((r, i) => i > onAt && !overPlate(DECK, r.state.balls[1]));
+    expect(onAt).toBeGreaterThan(0);
+    expect(offAt - onAt).toBeGreaterThan(3);
+    trace.results.forEach((r, i) => expect(r.state.switches.deck, `tick ${r.state.tick}`).toBe(i >= onAt && i < offAt));
+    for (const r of trace.results.slice(onAt, offAt)) expect(r.state.balls[1].asleep).toBe(false);
+    expect(ofType(trace.events, 'switchOn')).toEqual([expect.objectContaining({ switchId: 'deck', byPlayer: 1, tick: trace.results[onAt]?.state.tick })]);
+    expect(ofType(trace.events, 'switchOff')).toEqual([expect.objectContaining({ switchId: 'deck', tick: trace.results[offAt]?.state.tick })]);
+    // `near` holds the bridge throughout, so the deck changes nothing it drives
+    expect(ofType(trace.events, 'bridgeToggle')).toEqual([]);
+    expect(ofType(trace.events, 'fellOffWorld')).toEqual([]);
+    expect(trace.state.balls[1].asleep).toBe(true);
+    expect(trace.state.balls[1].pos.x).toBeGreaterThan(BRIDGE_X2);
+
+    // blue alone on the deck holds the bridge it stands on; its stall taps keep the deck (and so the bridge) down
+    for (const aim of [{ angle: -1.5708, power: 15 }, { angle: -1.3963, power: 20 }] as const) {
+      const alone = aimingState(gapBridgeLevel, [parked(150), parked(580)], 1, 'local', { near: false, far: false, deck: true });
+      const tap = run(alone, 200, { 0: shoot(1, aim) });
+      expect(Math.max(...tap.results.map((r) => heightAbove(DECK, r.state.balls[1])))).toBeGreaterThan(SWITCH_CONTACT_TOLERANCE);
+      for (const r of tap.results) expect(r.state.switches.deck, `${aim.angle}/${aim.power} tick ${r.state.tick}`).toBe(true);
+      expect(ofType(tap.events, 'bridgeToggle')).toEqual([]);
+      expect(ofType(tap.events, 'fellOffWorld')).toEqual([]);
+      expect(tap.state.balls[1].asleep).toBe(true);
+      expect(overPlate(DECK, tap.state.balls[1])).toBe(true);
+    }
   });
 
   it('cupHoldsSwitch: while any ball is sunk the wired switch counts as pressed', () => {

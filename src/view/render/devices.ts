@@ -469,8 +469,8 @@ const arcCache = new WeakMap<Level, Map<string, LaunchArc>>();
 
 /**
  * The switches a cannon fires under: the current ones while it is LIT; while it is COLD, the current ones with
- * its first FIRE plate held (the partner-reachable plate the LOADED chip names, D10.10), because a loaded ball
- * fires the tick that plate is held. On Sky Bridge that same plate raises the bridge the flight crosses.
+ * its first FIRE plate pressed (the partner-reachable plate the LOADED chip names, D10.10), because a loaded ball
+ * fires the tick a ball touches that plate (D11). On Sky Bridge that same plate raises the bridge the flight crosses.
  */
 export function firingSwitches(rect: CannonRect, switches: Switches): Switches {
   const first = rectSwitchIds(rect)[0];

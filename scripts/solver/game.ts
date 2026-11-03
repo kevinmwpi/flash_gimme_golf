@@ -131,7 +131,11 @@ export function allOn(level: Level): Record<string, boolean> {
   return switches;
 }
 
-/** Switch state implied by RESTING balls: two passes so a deck plate on a rect the first pass activated resolves. */
+/**
+ * Switch state implied by RESTING balls: two passes so a deck plate on a rect the first pass activated resolves.
+ * Since BUILD_DECISIONS D11 a plate is pressed by any ball on it, but a resting ball's bottom is on its ground, so
+ * for crafted resting balls this is the plain contact test (the second pass's hold height changes nothing).
+ */
 export function settledSwitches(level: Level, balls: readonly BallState[]): Record<string, boolean> {
   const switches = evaluateSwitches(level, allOff(level), balls);
   return evaluateSwitches(level, switches, balls);

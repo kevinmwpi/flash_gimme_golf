@@ -5,7 +5,11 @@
  * - `launchers`: every spring and cannon ride of the intended lines, dropped onto every pad / breech x at 0.5 px
  *   for 9 launch perturbations (each component at 97 / 100 / 103 %, on a spread copy of the level) with the
  *   plates the line holds at that moment FIXED; a cannon is also fired LOADED (resting on its breech as it
- *   lights). Every drop must rest holding the target plate after exactly one launch.
+ *   lights). Every drop must rest holding the target plate after exactly one launch, and no bounce hop of its
+ *   landing may let that plate up while the ball is still over it (BUILD_DECISIONS D11: down on contact, then held
+ *   through every hop of at most PLATE_HOLD_HEIGHT_PX, so a door, trap or cannon it drives never flickers through
+ *   bounces). A landing that rolls across the plate onto its bowl's ramp and back lets it up meanwhile: D11 accepts
+ *   that (a rolling ball presses a plate only while it passes), and the pass counts those landings.
  * - `loops`: single-ball flights with fixed switches (all plates up, then all held) from every restable spot
  *   every 20 px plus the plate and device spots, both colours, a both-ways grid with the stall taps: none may
  *   still be flying when the 1,800-tick flight watchdog (D10.6) would end it.
@@ -91,6 +95,10 @@ export type LauncherRow = {
   readonly drops: number;
   /** Rested holding the target plate after exactly one launch. */
   readonly onTarget: number;
+  /** Drops whose bounce hop let the target plate up while the ball was still over it (its doors would flicker, D11). */
+  readonly hopReleased: number;
+  /** Drops that rolled off the target plate's end onto its bowl before resting (the plate is up meanwhile; D11 accepts it). */
+  readonly rolledOff: number;
   readonly refires: number;
   readonly unfired: number;
   readonly restX: readonly [number, number] | null;
@@ -117,9 +125,27 @@ function withLaunch(level: Level, rectId: string, kx: number, ky: number): Level
   return { ...level, rects: level.rects.map((r) => (r.id === rectId && isLauncher(r) ? { ...r, launch: { x: r.launch.x * kx, y: r.launch.y * ky } } : r)) };
 }
 
-type Drop = { readonly rest: Vec | null; readonly onTarget: boolean; readonly launches: number; readonly apex: number; readonly ticks: number };
+type Drop = {
+  readonly rest: Vec | null;
+  readonly onTarget: boolean;
+  /** The target came up while the ball was still over it: a bounce hop rose above PLATE_HOLD_HEIGHT_PX (D11 says never). */
+  readonly hopReleases: number;
+  /** The target came up because the ball rolled off its end onto the bowl (and, resting on it, rolled back on). */
+  readonly rollOffs: number;
+  readonly launches: number;
+  readonly apex: number;
+  readonly ticks: number;
+};
 
-/** One ball onto a pad at x with the switches FIXED: 'drop' falls from 1 px above it, 'loaded' rests on it as it lights. */
+/**
+ * One ball onto a pad at x with the switches FIXED: 'drop' falls from 1 px above it, 'loaded' rests on it as it lights.
+ * Alongside, the D11 state of the TARGET plate as this ball alone would drive it (switchPresser with the plate's own
+ * previous state: down on contact, held while the ball is over it and at most PLATE_HOLD_HEIGHT_PX above it). Each
+ * down -> up flip is a hop release when the ball's centre is still over the plate (it bounced higher than the hold
+ * height: the door flicker D11 rules out) or a roll-off when it has left the plate's x-range (it rolled across the
+ * plate onto the bowl's ramp; D11 accepts that a rolling ball presses a plate only while it passes).
+ * `onTarget` is the CONTACT test on the resting ball (the plate treated as up), whatever the fixed map says about it.
+ */
 function dropOnto(level: Level, switches: Readonly<Record<string, boolean>>, pad: Launcher, x: number, player: PlayerId, target: string, mode: DropMode): Drop {
   const pos: Vec = { x, y: pad.y - BALL_RADIUS - (mode === 'drop' ? 1 : 0) };
   const ball: BallState =
@@ -128,22 +154,29 @@ function dropOnto(level: Level, switches: Readonly<Record<string, boolean>>, pad
       : { pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos };
   const ctx = { level, switches, playerId: player, colliders: collidersFor(solidColliders(level, switches), player) };
   const plate = level.switches.find((s) => s.id === target);
+  const balls: Readonly<BallState>[] = player === RED ? [ball] : [{ ...ball, sunk: true }, ball];
+  const pressedBy = (down: boolean): boolean => plate !== undefined && switchPresser(level, plate, { ...switches, [plate.id]: down }, balls) === player;
   const out: StepBallOut = { events: [] };
   let launches = 0;
   let apex = pos.y;
+  let down = false;
+  let hopReleases = 0;
+  let rollOffs = 0;
   for (let t = 1; t <= FLIGHT_WATCHDOG_TICKS; t += 1) {
     stepBall(ball, ctx, out);
     launches += out.events.filter((e) => e.type === 'spring' || e.type === 'cannonFire').length;
     apex = Math.min(apex, ball.pos.y);
-    if (ball.sunk || out.events.some((e) => e.type === 'fellOffWorld')) return { rest: null, onTarget: false, launches, apex, ticks: t };
-    if (ball.asleep) {
-      const balls: Readonly<BallState>[] = player === RED ? [ball] : [{ ...ball, sunk: true }, ball];
-      const onTarget = plate !== undefined && switchPresser(level, plate, switches, balls) === player;
-      return { rest: ball.pos, onTarget, launches, apex, ticks: t };
+    if (ball.sunk || out.events.some((e) => e.type === 'fellOffWorld')) return { rest: null, onTarget: false, hopReleases, rollOffs, launches, apex, ticks: t };
+    const now = pressedBy(down);
+    if (down && !now && plate !== undefined) {
+      if (ball.pos.x >= plate.x && ball.pos.x <= plate.x + plate.w) hopReleases += 1;
+      else rollOffs += 1;
     }
+    down = now;
+    if (ball.asleep) return { rest: ball.pos, onTarget: pressedBy(false), hopReleases, rollOffs, launches, apex, ticks: t };
     out.events.length = 0;
   }
-  return { rest: null, onTarget: false, launches, apex, ticks: FLIGHT_WATCHDOG_TICKS };
+  return { rest: null, onTarget: false, hopReleases, rollOffs, launches, apex, ticks: FLIGHT_WATCHDOG_TICKS };
 }
 
 function launcherRow(level: Level, c: LauncherCase, pad: Launcher, mode: DropMode): LauncherRow {
@@ -151,6 +184,8 @@ function launcherRow(level: Level, c: LauncherCase, pad: Launcher, mode: DropMod
   for (const id of c.held) switches[id] = true;
   let drops = 0;
   let onTarget = 0;
+  let hopReleased = 0;
+  let rolledOff = 0;
   let refires = 0;
   let unfired = 0;
   let restX: [number, number] | null = null;
@@ -166,6 +201,8 @@ function launcherRow(level: Level, c: LauncherCase, pad: Launcher, mode: DropMod
         drops += 1;
         if (d.launches >= 2) refires += 1;
         if (d.launches === 0) unfired += 1;
+        if (d.hopReleases > 0) hopReleased += 1;
+        if (d.rollOffs > 0) rolledOff += 1;
         apexWorst = Math.min(apexWorst, d.apex);
         if (kx === 1 && ky === 1) apexNominal = Math.min(apexNominal, d.apex);
         longestTicks = Math.max(longestTicks, d.ticks);
@@ -175,7 +212,25 @@ function launcherRow(level: Level, c: LauncherCase, pad: Launcher, mode: DropMod
       }
     }
   }
-  return { rectId: pad.id, kind: pad.kind, player: c.player, held: c.held, target: c.target, mode, drops, onTarget, refires, unfired, restX, apexNominal: Math.round(apexNominal), apexWorst: Math.round(apexWorst), longestTicks, misses };
+  return {
+    rectId: pad.id,
+    kind: pad.kind,
+    player: c.player,
+    held: c.held,
+    target: c.target,
+    mode,
+    drops,
+    onTarget,
+    hopReleased,
+    rolledOff,
+    refires,
+    unfired,
+    restX,
+    apexNominal: Math.round(apexNominal),
+    apexWorst: Math.round(apexWorst),
+    longestTicks,
+    misses,
+  };
 }
 
 export function launcherCheck(level: Level): LauncherReport {
@@ -473,7 +528,10 @@ function rescueDistance(level: Level, state: SimState, targets: readonly Vec[]):
 
 /**
  * From a turn where `waiter` waits, a beam search over the free ball's shots (the WAITING rule gives it every
- * turn) for a shot after which one of the device's plates is held: a release / FIRE plate, or the cup.
+ * turn) for a shot after which one of the device's plates is held: a release / FIRE plate, or the cup. "After" is
+ * the settled state at the hand-off: under BUILD_DECISIONS D11 a ball rolling across a release plate frees a caught
+ * ball only while it passes (and a LOADED ball fires on that touch, which ends its wait for good), but a trap re-arms
+ * the tick the plate comes up, so a rescue counts only when a ball stays on the plate or the cup holds it.
  */
 function rescueSearch(level: Level, start: Game, waiter: Waiter): { rescued: boolean; shots: number; depth: number | null } {
   const { switchIds, cup } = releaseIdsOf(level, waiter.rect);

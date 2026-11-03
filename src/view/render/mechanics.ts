@@ -549,7 +549,7 @@ function drawGateStripes(ctx: CanvasRenderingContext2D, x: number, top: number, 
   ctx.restore();
 }
 
-/** Switch-driven blocker: hazard stripes between two posts; retracts into the bottom post when held. */
+/** Switch-driven blocker: hazard stripes between two posts; retracts into the bottom post while its plate is pressed. */
 function drawBlockerGate(ctx: CanvasRenderingContext2D, rect: BlockerRect, active: boolean, solidity: number, opts: RectDrawOptions): void {
   const s = clamp01(solidity);
   const cx = rect.x + rect.w / 2;

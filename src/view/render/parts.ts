@@ -3,7 +3,7 @@
  * Small hardware shared by every switch-linked prop (VISUAL.md §4): the lamp (mint + flat 35 % halo while
  * lit, `plateSh` while unlit), the metal post, the switch letter tag and the bottom shade band of a rounded
  * rect. mechanics.ts (World 1 props) and devices.ts (traps and cannons) both draw with them, so a lamp means
- * the same thing on a door, a bridge, a trap and a cannon: lit while a linked plate is held.
+ * the same thing on a door, a bridge, a trap and a cannon: lit while a linked plate is pressed.
  */
 import type { PressureSwitch } from '../../sim/types';
 import { circle, fillStroke, font, OUTLINE_DOT, OUTLINE_SMALL, PALETTE, roundRect } from './palette';

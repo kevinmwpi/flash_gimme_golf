@@ -125,7 +125,7 @@ export const SCRIPTED_LINES: readonly ScriptedLine[] = [
     name: 'Plate & Bridge (deck line)',
     beats: [
       { who: RED, what: 'chip onto plate A: bridge appears', ok: on('near') },
-      { who: BLUE, what: 'cross from the tee and rest ON THE DECK (544-1216)', ok: both(between(544, 1216), on('deck')) },
+      { who: BLUE, what: 'cross from the tee and rest ON THE DECK (the planks 520-1240, lip to lip since D11)', ok: both(between(520, 1240), on('deck')) },
       { who: RED, what: 'stall tap: stay on plate A (partner on the deck must not fall)', ok: on('near') },
       { who: BLUE, what: 'from the deck onto plate B', ok: on('far') },
       { who: RED, what: 'cross the bridge (held by B)', ok: past(1240) },
@@ -195,7 +195,7 @@ export const SCRIPTED_LINES: readonly ScriptedLine[] = [
       { who: RED, what: 'red: move up to the approach (650-790)', ok: between(650, 790) },
       { who: BLUE, what: 'blue: move toward the FIRE dish (300-450)', ok: between(300, 450) },
       { who: RED, what: 'red: lob into the cold cannon: LOADED', ok: loaded },
-      { who: BLUE, what: 'blue: rest on FIRE: red fires onto the far FIRE plate', ok: both(on('fire'), firedPartner, on('fire-far')) },
+      { who: BLUE, what: 'blue: onto FIRE (its touch fires red, D11) and stay: red lands on the far FIRE plate', ok: both(on('fire'), firedPartner, on('fire-far')) },
       { who: RED, what: 'red: putt out from the far plate (the cup keeps the cannon lit)', ok: sunk },
       { who: BLUE, what: 'blue: leave FIRE, move up (650-790)', ok: between(650, 790) },
       { who: BLUE, what: 'blue: lob into the funnel: BOOM, across the chasm', ok: both(fired, past(1520)) },
@@ -279,7 +279,7 @@ export const SCRIPTED_LINES: readonly ScriptedLine[] = [
     golden: true,
     beats: [
       { who: RED, what: 'red: lob LEFT into the cold cannon: LOADED', ok: loaded },
-      { who: BLUE, what: 'blue: rest on FIRE: red fires onto TOP', ok: both(on('fire'), firedPartner, on('top')) },
+      { who: BLUE, what: 'blue: onto FIRE (its touch fires red, D11) and stay: red lands on TOP', ok: both(on('fire'), firedPartner, on('top')) },
       { who: RED, what: 'red: chip down from TOP and sink (the cup keeps the cannon lit)', ok: sunk },
       { who: BLUE, what: 'blue: lob LEFT into the cannon: BOOM, onto TOP', ok: both(fired, on('top')) },
       { who: BLUE, what: 'blue: chip down from TOP and sink', ok: sunk },

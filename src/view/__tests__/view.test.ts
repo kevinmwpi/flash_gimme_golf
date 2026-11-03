@@ -225,7 +225,7 @@ describe('view state: balls', () => {
 });
 
 describe('view state: callouts, golfers, anims', () => {
-  it('builds callouts for gimme / sink / fellOffWorld / hazardBlock / nearCup / switch events (max 2 alive)', () => {
+  it('builds callouts for gimme / sink / fellOffWorld / hazardBlock / nearCup events (max 2 alive)', () => {
     const state = stateFor(mechanicsLevel);
     const view = createViewState(mechanicsLevel, state);
     const pos = { x: 500, y: 588 };
@@ -240,10 +240,85 @@ describe('view state: callouts, golfers, anims', () => {
     expectCallout(ev('fellOffWorld', { playerId: 0, pos, respawnPos: pos, strokes: 3 }), 'OUT! +1');
     expectCallout(ev('hazardBlock', { playerId: 1, pos, rectId: 'red-field', colour: 'red' }), 'LOCKED!');
     expectCallout(ev('nearCup', { playerId: 0, pos, distance: 60 }), 'SO CLOSE');
-    expectCallout(ev('switchOn', { switchId: 'a', byPlayer: 0, pos }), 'SWITCH A HELD');
-    expectCallout(ev('switchOn', { switchId: 'deck', byPlayer: 0, pos }), 'DECK HELD');
-    expectCallout(ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }), 'DOOR OPEN');
-    expectCallout(ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }), 'BRIDGE OPEN');
+  });
+
+  it('a plate says HELD, and its door and bridge OPEN, when a ball comes to REST on it, not when one touches it (D11)', () => {
+    const state = stateFor(mechanicsLevel);
+    const view = createViewState(mechanicsLevel, state);
+    const texts = (): string[] => view.callouts.map((c) => c.text);
+    const onA = { x: 415, y: GROUND_Y - BALL_RADIUS };
+    const aDown = { ...state, switches: { a: true, deck: false } };
+    // a ball touches A: the plate, the door and the bridge move, nothing is said
+    applySimEvents(
+      view,
+      [
+        ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 415, y: GROUND_Y } }),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }),
+      ],
+      aDown,
+    );
+    expect(texts()).toEqual([]);
+    // it comes to rest there: SWITCH A HELD, then the ways it keeps open (two at most alive: the newest win)
+    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: onA, onPermanentGround: true }, 30)], aDown);
+    expect(texts()).toEqual(['BRIDGE OPEN', 'DOOR OPEN']);
+    // the holder leaves: the hold is over, the bridge goes and the door shuts at once
+    applySimEvents(
+      view,
+      [
+        ev('switchOff', { switchId: 'a', pos: { x: 415, y: GROUND_Y } }, 50),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: false, switchId: 'a' }, 50),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: true, switchId: 'a' }, 50),
+      ],
+      state,
+    );
+    expect(texts()).toEqual(['BRIDGE GONE', 'DOOR SHUT']);
+  });
+
+  // D11 re-sync (plates.ts sync): a view mounted on a state, at a hand-off or mid-flight, says what a view that saw
+  // every event of the shot says. Only a HELD plate has said anything, so a plate down under a rolling ball has not.
+  const onA = { x: 415, y: GROUND_Y - BALL_RADIUS };
+  const onDeck = { x: 800, y: 601 - BALL_RADIUS };
+  /** A ball rolling at x, y whose last rest was on its tee (it has not rested on a plate this shot). */
+  const rollingAt = (x: number, y: number): BallState => ball(x, y, { vel: { x: 60, y: 0 }, asleep: false, restTicks: 0, lastRest: { x: 100, y: GROUND_Y - BALL_RADIUS } });
+
+  it('mounted while balls roll on two plates already down (the bridge up, the door open): each settling says HELD, and the first also its ways OPEN, as a view that saw them roll on says', () => {
+    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true }, balls: [rollingAt(onA.x, onA.y), rollingAt(onDeck.x, onDeck.y)] });
+    const rests = (view: ViewState): string[][] => {
+      applySimEvents(view, [ev('ballRest', { playerId: 0, pos: onA, onPermanentGround: true }, 30)], state);
+      const first = view.callouts.map((c) => c.text);
+      applySimEvents(view, [ev('ballRest', { playerId: 1, pos: onDeck, onPermanentGround: false }, 31)], state);
+      return [first, view.callouts.map((c) => c.text)];
+    };
+    // red settles on A: SWITCH A HELD, then the ways A keeps open (two at most alive: the newest win); blue then settles
+    // on the DECK, whose bridge A's hold has announced already: DECK HELD only
+    const mounted = rests(createViewState(mechanicsLevel, state));
+    expect(mounted).toEqual([
+      ['BRIDGE OPEN', 'DOOR OPEN'],
+      ['DOOR OPEN', 'DECK HELD'],
+    ]);
+    // the same view opened before the balls rolled on, fed their presses: the same words
+    const saw = createViewState(mechanicsLevel, stateFor(mechanicsLevel));
+    applySimEvents(
+      saw,
+      [
+        ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 415, y: GROUND_Y } }, 20),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }, 20),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }, 20),
+        ev('switchOn', { switchId: 'deck', byPlayer: 1, pos: { x: 800, y: 601 } }, 25),
+      ],
+      state,
+    );
+    expect(saw.callouts).toEqual([]);
+    expect(rests(saw)).toEqual(mounted);
+  });
+
+  it('mounted on a settled state with a ball resting on A says nothing, and a ball then settling on the DECK says only DECK HELD (a share link, a hand-off rejoin)', () => {
+    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true }, balls: [ball(onA.x, onA.y), rollingAt(onDeck.x, onDeck.y)] });
+    const view = createViewState(mechanicsLevel, state);
+    expect(view.callouts).toEqual([]);
+    applySimEvents(view, [ev('ballRest', { playerId: 1, pos: onDeck, onPermanentGround: false }, 31)], state);
+    expect(view.callouts.map((c) => c.text)).toEqual(['DECK HELD']);
   });
 
   it('turnStart walks the active golfer to 42 px behind its ball, facing the shot direction', () => {

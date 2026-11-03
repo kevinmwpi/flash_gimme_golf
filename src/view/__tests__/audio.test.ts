@@ -2,9 +2,15 @@
 // OWNER: view
 // ARCH.md §4 view row (audio debounce) + AUDIO.md §8 item 8 and §11 (Worlds 2-3), under a stubbed AudioContext.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitingOf } from '../../sim/devices';
 import { campaignFrom, levelsOfWorld, WORLD1_IDS, WORLD_IDS } from '../../sim/levels';
+import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
+import { level as boobyTrap } from '../../sim/levels/w2-06-booby-trap';
+import { level as skyBridge } from '../../sim/levels/w3-10-sky-bridge';
+import { level as grandMachine } from '../../sim/levels/w3-12-grand-machine';
+import { evaluateSwitches } from '../../sim/physics';
 import { createSim, isShotReady, stepSim } from '../../sim/sim';
-import { BALL_RADIUS, DT } from '../../sim/types';
+import { AIM_ANGLE_MAX, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
 import type { BallState, Level, LevelRectKind, PlayerId, SimConfig, SimEvent, SimEventType, SimState, Vec, WorldId } from '../../sim/types';
 import { createAudio, MUSIC_TRACKS, type AudioSystem, type Sfx, type SfxName } from '../audio';
 
@@ -29,12 +35,15 @@ class FakeParam {
   static holdsBeforeFirstEvent = 0;
   value = 0;
   readonly set: number[] = [];
+  /** [value, time] of each linear ramp (a voice cut short ramps its output gain to 0). */
+  readonly ramps: Array<[number, number]> = [];
   private times: number[] = [];
   setValueAtTime(v: number, t: number): void {
     this.set.push(v);
     this.times.push(t);
   }
-  linearRampToValueAtTime(_v: number, t: number): void {
+  linearRampToValueAtTime(v: number, t: number): void {
+    this.ramps.push([v, t]);
     this.times.push(t);
   }
   exponentialRampToValueAtTime(_v: number, t: number): void {
@@ -87,6 +96,7 @@ class FakeNode {
 class FakeAudioContext {
   static oscillators = 0;
   static created: FakeNode[] = [];
+  static gains: FakeNode[] = [];
   static sentinels: FakeNode[] = [];
   static noiseSamples: Float32Array[] = [];
   static last: FakeAudioContext | null = null;
@@ -102,7 +112,9 @@ class FakeAudioContext {
     return Promise.resolve();
   }
   createGain(): FakeNode {
-    return new FakeNode();
+    const node = new FakeNode();
+    FakeAudioContext.gains.push(node);
+    return node;
   }
   createOscillator(): FakeNode {
     FakeAudioContext.oscillators += 1;
@@ -142,6 +154,7 @@ class ThrowingAudioContext {
 function installFakeContext(): void {
   FakeAudioContext.oscillators = 0;
   FakeAudioContext.created = [];
+  FakeAudioContext.gains = [];
   FakeAudioContext.sentinels = [];
   FakeAudioContext.noiseSamples = [];
   FakeAudioContext.last = null;
@@ -216,6 +229,14 @@ const skippedAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'turn
 const againAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'turnStart', tick, playerId, readyInTicks: 27, sameAsBefore: true });
 const cannonFireAt = (tick: number, playerId: PlayerId): SimEvent => ({ type: 'cannonFire', tick, playerId, pos: P0, rectId: 'cannon', launch: { x: 400, y: -700 } });
 const bridgeToggleOf = (kind: LevelRectKind, tick = 1): SimEvent => ({ type: 'bridgeToggle', tick, rectId: `${kind}-1`, kind, active: true, switchId: 'a' });
+/** Two Doors' DOOR (a blocker: active = shut) as the sim toggles it. */
+const doorToggle = (tick: number, active: boolean): SimEvent => ({ type: 'bridgeToggle', tick, rectId: 'door-gate', kind: 'blocker', active, switchId: 'door' });
+
+function plateOf(level: Level, id: string): Level['switches'][number] {
+  const sw = level.switches.find((s) => s.id === id);
+  if (sw === undefined) throw new Error(`${level.id} has no plate ${id}`);
+  return sw;
+}
 
 /** Every ball-owned event a trap, a cannon or the watchdog adds (D10.4), built for one ball, and the voice it must reach. */
 const DEVICE_VOICES: ReadonlyArray<{ readonly voice: keyof Sfx; readonly make: (playerId: PlayerId) => SimEvent }> = [
@@ -451,29 +472,338 @@ describe('audio with a stubbed AudioContext', () => {
     expect(melody(ding)).toEqual([[RED_NOTE, Math.round((returnedAt + 0.35) * 1000)]]);
   });
 
-  it('bridgeToggle slides only for rects that appear or vanish (bridge, door, fan), never for a trap or a cannon', () => {
+  it('D11: a door slides only when its change lasts: never for a ball passing over its plate, once when a ball settles there, back when it leaves', () => {
     const audio = createAudio({ seed: 1 });
     audio.unlock();
-    for (const kind of ['bridge', 'blocker', 'fan'] as const) {
-      settleVoices();
-      expect(voicesDuring(() => audio.handleEvents([bridgeToggleOf(kind)], 0)), kind).toBe(1);
-    }
-    for (const kind of ['trap', 'cannon', 'sand', 'spring', 'bumper', 'colourGate'] as const) {
-      settleVoices();
-      expect(voicesDuring(() => audio.handleEvents([bridgeToggleOf(kind)], 0)), kind).toBe(0);
-    }
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const press = vi.spyOn(audio.sfx, 'switchOn');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    audio.handleEvents([levelStartOf(twoDoors.id, 0)], 0);
+    // a ball rolls across the DOOR plate: a click down, a bare tick up, and the door's flick is silent
+    audio.handleEvents([{ type: 'switchOn', tick: 10, switchId: 'door', byPlayer: 0, pos: top }, doorToggle(10, false)], 0);
+    audio.handleEvents([{ type: 'switchOff', tick: 20, switchId: 'door', pos: top }, doorToggle(20, true)], 0);
+    expect(slide).not.toHaveBeenCalled();
+    expect(press.mock.calls.map(([o]) => o)).toEqual([expect.objectContaining({ chime: false })]);
+    expect(lift.mock.calls.map(([o]) => o)).toEqual([expect.objectContaining({ chime: false })]);
+    // a ball lands on it: the click as it touches, then the HELD confirm and the door's slide when it rests
+    audio.handleEvents([{ type: 'switchOn', tick: 100, switchId: 'door', byPlayer: 0, pos: top }, doorToggle(100, false)], 0);
+    expect(slide).not.toHaveBeenCalled();
+    audio.handleEvents([{ type: 'ballRest', tick: 130, playerId: 0, pos: { x: top.x, y: top.y - BALL_RADIUS }, onPermanentGround: true }], 0);
+    expect(slide.mock.calls).toEqual([[false, expect.objectContaining({ playerId: 'door-gate' })]]);
+    expect(press).toHaveBeenLastCalledWith(expect.objectContaining({ click: false, playerId: 'door' }));
+    // it leaves: the falling confirm and the door's slide shut
+    audio.handleEvents([{ type: 'switchOff', tick: 300, switchId: 'door', pos: top }, doorToggle(300, true)], 0);
+    expect(slide).toHaveBeenLastCalledWith(true, expect.objectContaining({ playerId: 'door-gate' }));
+    expect(lift.mock.lastCall?.[0]?.chime).toBeUndefined();
   });
 
-  it("L10's chain reaction keeps every cue: plate, bridge and the cannon fired one tick later", () => {
+  it("D11: a trap's or a cannon's state never slides, and an unknown rect is ignored", () => {
     const audio = createAudio({ seed: 1 });
     audio.unlock();
-    const chain: SimEvent[] = [
-      { type: 'ballRest', tick: 40, playerId: 0, pos: P0, onPermanentGround: true },
-      { type: 'switchOn', tick: 40, switchId: 'a', byPlayer: 0, pos: P0 },
-      bridgeToggleOf('bridge', 40),
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    audio.handleEvents([levelStartOf(grandMachine.id, 0)], 0);
+    const devices = grandMachine.rects.filter((r) => r.kind === 'trap' || r.kind === 'cannon');
+    expect(devices.length).toBeGreaterThanOrEqual(2);
+    for (const r of devices) audio.handleEvents([{ type: 'bridgeToggle', tick: 5, rectId: r.id, kind: r.kind, active: true, switchId: 'top' }], 0);
+    for (const kind of ['bridge', 'blocker', 'fan', 'sand', 'spring', 'bumper', 'colourGate'] as const) audio.handleEvents([bridgeToggleOf(kind, 6)], 0);
+    expect(slide).not.toHaveBeenCalled();
+  });
+
+  it("L10's chain under D11: red's touch on A clicks and BOOMs at once; A's confirm and the bridge's slide wait for its rest", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const a = plateOf(skyBridge, 'a');
+    const top = { x: a.x + a.w / 2, y: a.surfaceY };
+    audio.handleEvents([levelStartOf(skyBridge.id, 0)], 0);
+    settleVoices();
+    const touch: SimEvent[] = [
+      { type: 'switchOn', tick: 40, switchId: 'a', byPlayer: 0, pos: top },
+      { type: 'bridgeToggle', tick: 40, rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' },
       cannonFireAt(41, 1),
     ];
-    expect(voicesDuring(() => audio.handleEvents(chain, 0))).toBe(4);
+    // the plate's click and the cannon's thoom
+    expect(voicesDuring(() => audio.handleEvents(touch, 0))).toBe(2);
+    settleVoices();
+    // the roll-stop, A's confirm and the bridge's slide
+    expect(voicesDuring(() => audio.handleEvents([{ type: 'ballRest', tick: 70, playerId: 0, pos: { x: top.x, y: top.y - BALL_RADIUS }, onPermanentGround: true }], 0))).toBe(3);
+  });
+
+  it('D11 on the real sim: a ball rolling across the DOOR plate and rocking back onto it slides the door once and confirms once, when it settles', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const press = vi.spyOn(audio.sfx, 'switchOn');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const start = createSim({ playerCount: 2, levelIds: [twoDoors.id], seed: 7, mode: 'local' });
+    const intro = stepSim(start.state, [{ type: 'continue', playerId: 0 }]);
+    audio.handleEvents([...start.events, ...intro.events], 0);
+    // red rolls flat out from its tee (the plates.test.ts line): across the plate, off the shut door, back, settles on it
+    let r = stepSim(intro.state, [
+      { type: 'setAim', playerId: 0, angle: AIM_ANGLE_MAX, power: 100 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const events: SimEvent[] = [...r.events];
+    audio.handleEvents(r.events, 0);
+    for (let i = 0; i < 1200 && r.state.phase === 'flying'; i += 1) {
+      context().currentTime += DT;
+      r = stepSim(r.state, []);
+      events.push(...r.events);
+      audio.handleEvents(r.events, 0);
+    }
+    const presses = events.filter((e) => e.type === 'switchOn' && e.switchId === 'door').length;
+    expect(presses).toBeGreaterThanOrEqual(2);
+    expect(r.state.switches.door).toBe(true);
+    expect(slide.mock.calls).toEqual([[false, expect.objectContaining({ playerId: 'door-gate' })]]);
+    expect(press.mock.calls.filter(([o]) => o?.chime === false)).toHaveLength(presses);
+    expect(press.mock.calls.filter(([o]) => o?.click === false)).toHaveLength(1);
+    expect(lift.mock.calls.every(([o]) => o?.chime === false)).toBe(true);
+    expect(lift).toHaveBeenCalledTimes(presses - 1);
+  });
+
+  /** Red settled on Two Doors' DOOR plate, red to shoot; the audio heard the hole start and red come to rest there. */
+  function redHoldingDoor(audio: AudioSystem): SimState {
+    const s = onHole(twoDoors, audio);
+    const door = plateOf(twoDoors, 'door');
+    const spot = { x: door.x + door.w / 2, y: door.surfaceY - BALL_RADIUS };
+    const red: BallState = { ...s.balls[0], pos: spot, vel: { x: 0, y: 0 }, asleep: true, grounded: true, restTicks: REST_TICKS, lastRest: spot };
+    const balls: [BallState, BallState] = [red, s.balls[1]];
+    const switches = evaluateSwitches(twoDoors, evaluateSwitches(twoDoors, s.switches, balls), balls);
+    expect(switches.door).toBe(true);
+    const arrival: SimEvent[] = [
+      { type: 'switchOn', tick: s.tick, switchId: 'door', byPlayer: 0, pos: { x: spot.x, y: door.surfaceY } },
+      doorToggle(s.tick, false),
+      { type: 'ballRest', tick: s.tick, playerId: 0, pos: spot, onPermanentGround: true },
+    ];
+    audio.handleEvents(arrival, 0);
+    return { ...s, balls, switches, activePlayer: 0, turnDelayTicks: 0, phase: 'aiming' };
+  }
+
+  /** The active ball's shot `deg` degrees up from flat right at `power`, heard tick by tick as GameCanvas plays it (1/60 s apart). */
+  function heardShot(audio: AudioSystem, start: SimState, deg: number, power: number): SimEvent[] {
+    const p = start.activePlayer;
+    let r = stepSim(start, [
+      { type: 'setAim', playerId: p, angle: quantize4((-deg * Math.PI) / 180), power },
+      { type: 'shoot', playerId: p },
+    ]);
+    const events = [...r.events];
+    audio.handleEvents(r.events, 0);
+    for (let i = 0; i < 2000 && (r.state.phase === 'flying' || r.state.turnDelayTicks > 0); i += 1) {
+      context().currentTime += DT;
+      r = stepSim(r.state, []);
+      events.push(...r.events);
+      audio.handleEvents(r.events, 0);
+    }
+    return events;
+  }
+
+  /** Each door / bridge slide as it is voiced: shut (active) or open, its voice's output gain, the audio time. */
+  function recordSlides(audio: AudioSystem): Array<{ active: boolean; out: FakeNode | undefined; at: number }> {
+    const slides: Array<{ active: boolean; out: FakeNode | undefined; at: number }> = [];
+    const voice = audio.sfx.bridgeToggle;
+    vi.spyOn(audio.sfx, 'bridgeToggle').mockImplementation((active, o) => {
+      const before = FakeAudioContext.gains.length;
+      voice(active, o);
+      // a voice's first node is its output gain (voiceOut), the one a cut fades
+      slides.push({ active: active === true, out: FakeAudioContext.gains[before], at: context().currentTime });
+    });
+    return slides;
+  }
+
+  it("D11: a hold that ends as its holder hops off and lands back on the plate: the door's closing slide is faded out the tick the door opens again", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    // an off-vertical tap: red leaves the plate's dish for three ticks and lands back on DOOR
+    const events = heardShot(audio, start, 107, 40);
+    const off = events.find((e) => e.type === 'switchOff' && e.switchId === 'door');
+    const on = events.find((e) => e.type === 'switchOn' && e.switchId === 'door');
+    const lifted = (on?.tick ?? 0) - (off?.tick ?? 0);
+    expect(lifted).toBeGreaterThan(0);
+    expect(lifted).toBeLessThan(10);
+    // the hold ended: the falling confirm and the shut slide; red then settles on DOOR again: the opening slide
+    expect(lift.mock.calls[0]?.[0]?.chime).toBeUndefined();
+    expect(slides.map((s) => s.active)).toEqual([true, false]);
+    const [shut, open] = slides;
+    // the door opened again before the shut slide was over: it fades out from that tick
+    const reopenedAt = (shut?.at ?? 0) + lifted * DT;
+    const fade = shut?.out?.gain.ramps.at(-1);
+    expect(fade?.[0]).toBe(0);
+    expect(fade?.[1]).toBeGreaterThan(reopenedAt);
+    expect(fade?.[1]).toBeLessThan(reopenedAt + 0.05);
+    expect(open?.out?.gain.ramps).toEqual([]);
+  });
+
+  it('D11: a holder that leaves its plate for good keeps the falling confirm and the whole closing slide', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const events = heardShot(audio, start, 150, 60);
+    expect(events.filter((e) => e.type === 'switchOn' && e.switchId === 'door')).toEqual([]);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slides.map((s) => s.active)).toEqual([true]);
+    expect(slides[0]?.out?.gain.ramps).toEqual([]);
+  });
+
+  /** Red waits in Booby Trap's snare, freed by blue resting on FREE; blue to shoot; the audio stands on that state. */
+  function redFreedByBlue(audio: AudioSystem): SimState {
+    const s = onHole(boobyTrap, audio);
+    const snare = boobyTrap.rects.find((r) => r.id === 'snare');
+    if (snare === undefined) throw new Error('Booby Trap has a snare');
+    const free = plateOf(boobyTrap, 'free');
+    const resting = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+    const balls: [BallState, BallState] = [resting({ x: snare.x + snare.w / 2, y: snare.y + snare.h - BALL_RADIUS }), resting({ x: free.x + free.w / 2, y: free.surfaceY - BALL_RADIUS })];
+    const switches = evaluateSwitches(boobyTrap, evaluateSwitches(boobyTrap, s.switches, balls), balls);
+    expect(switches.free).toBe(true);
+    expect(waitingOf(boobyTrap, switches, balls[0])).toBeNull();
+    audio.syncPlates(boobyTrap, switches, balls);
+    return { ...s, balls, switches, activePlayer: 1, turnDelayTicks: 0, phase: 'aiming' };
+  }
+
+  /** Each catch of red's jaws as it is voiced: whether it clinks (a lasting SNAP!), its voice's output gain, the audio time. */
+  function recordCatches(audio: AudioSystem): Array<{ clink: boolean; out: FakeNode | undefined; at: number }> {
+    const catches: Array<{ clink: boolean; out: FakeNode | undefined; at: number }> = [];
+    const voice = audio.sfx.trapCaught;
+    vi.spyOn(audio.sfx, 'trapCaught').mockImplementation((o) => {
+      const before = FakeAudioContext.gains.length;
+      voice(o);
+      catches.push({ clink: o?.chime !== false, out: FakeAudioContext.gains[before], at: context().currentTime });
+    });
+    return catches;
+  }
+
+  it("D11: blue hops off FREE and lands back on it three ticks later: the snap and clink of red's re-armed snare fade out the tick the jaws open again", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redFreedByBlue(audio);
+    settleVoices();
+    const catches = recordCatches(audio);
+    const events = heardShot(audio, start, 80, 45);
+    const off = events.find((e) => e.type === 'switchOff' && e.switchId === 'free');
+    const on = events.find((e) => e.type === 'switchOn' && e.switchId === 'free');
+    const lifted = (on?.tick ?? 0) - (off?.tick ?? 0);
+    expect(lifted).toBeGreaterThan(0);
+    expect(lifted).toBeLessThan(10);
+    expect(events.filter((e) => e.type === 'trapCaught').map((e) => e.tick)).toEqual([off?.tick]);
+    expect(events.filter((e) => e.type === 'trapFreed').map((e) => e.tick)).toEqual([on?.tick]);
+    // the hold ended and the snare re-armed around red: a lasting SNAP! (snap and clink); then blue's landing opens it
+    expect(catches.map((c) => c.clink)).toEqual([true]);
+    const [snap] = catches;
+    const reopenedAt = (snap?.at ?? 0) + lifted * DT;
+    const fade = snap?.out?.gain.ramps.at(-1);
+    expect(fade?.[0]).toBe(0);
+    expect(fade?.[1]).toBeGreaterThan(reopenedAt);
+    expect(fade?.[1]).toBeLessThan(reopenedAt + 0.05);
+  });
+
+  it('D11: a holder that leaves FREE for good keeps the whole SNAP! of the snare re-arming around red', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redFreedByBlue(audio);
+    settleVoices();
+    const catches = recordCatches(audio);
+    const events = heardShot(audio, start, 75, 50);
+    expect(events.filter((e) => e.type === 'switchOn' && e.switchId === 'free')).toEqual([]);
+    expect(catches.map((c) => c.clink)).toEqual([true]);
+    expect(catches[0]?.out?.gain.ramps).toEqual([]);
+  });
+
+  it("D11: a hidden tab's dropped events start no sound (catchUpPlates), and a take-back among them still fades the closing slide it names while it sounds", () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const start = redHoldingDoor(audio);
+    settleVoices();
+    const slides = recordSlides(audio);
+    // red's off-vertical tap (107/40): it leaves the plate's dish for a few ticks and lands back on DOOR
+    let r = stepSim(start, [
+      { type: 'setAim', playerId: 0, angle: quantize4((-107 * Math.PI) / 180), power: 40 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const ticks = [r];
+    for (let i = 0; i < 2000 && (r.state.phase === 'flying' || r.state.turnDelayTicks > 0); i += 1) {
+      r = stepSim(r.state, []);
+      ticks.push(r);
+    }
+    const offAt = ticks.findIndex((t) => t.events.some((e) => e.type === 'switchOff' && e.switchId === 'door'));
+    const onAt = ticks.findIndex((t, i) => i > offAt && t.events.some((e) => e.type === 'switchOn' && e.switchId === 'door'));
+    expect(onAt - offAt).toBeGreaterThan(0);
+    expect(onAt - offAt).toBeLessThan(10);
+    // heard in time up to the hold's end: its closing slide
+    for (const t of ticks.slice(0, offAt + 1)) {
+      context().currentTime += DT;
+      audio.handleEvents(t.events, 0);
+    }
+    expect(slides.map((s) => s.active)).toEqual([true]);
+    // the tab hides: the ticks up to the landing are dropped and taken in at once, the slide still sounding
+    context().currentTime += (onAt - offAt) * DT;
+    const at = context().currentTime;
+    const dropped = ticks.slice(offAt + 1, onAt + 1).flatMap((t) => t.events);
+    let oscillators = -1;
+    const voices = voicesDuring(() => {
+      oscillators = oscillatorsDuring(() => audio.catchUpPlates(dropped));
+    });
+    expect({ voices, oscillators }).toEqual({ voices: 0, oscillators: 0 });
+    const fade = slides[0]?.out?.gain.ramps.at(-1);
+    expect(fade?.[0]).toBe(0);
+    expect(fade?.[1]).toBeGreaterThanOrEqual(at);
+    expect(fade?.[1]).toBeLessThan(at + 0.05);
+    // red then settles on DOOR, heard in time: the opening slide, as for a page that heard it all
+    for (const t of ticks.slice(onAt + 1)) {
+      context().currentTime += DT;
+      audio.handleEvents(t.events, 0);
+    }
+    expect(slides.map((s) => s.active)).toEqual([true, false]);
+  });
+
+  it('D11: a hold taken in silently (catchUpPlates: the lob onto DOOR and its rest) plays nothing, and its holder leaving later is heard as a hold ending', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const s = onHole(twoDoors, audio);
+    settleVoices();
+    // red lobs onto DOOR and settles there (the plates-sync line, 42/80), every tick of it dropped by a hidden tab
+    let r = stepSim(s, [
+      { type: 'setAim', playerId: 0, angle: quantize4((-42 * Math.PI) / 180), power: 80 },
+      { type: 'shoot', playerId: 0 },
+    ]);
+    const dropped = [...r.events];
+    for (let i = 0; i < 2000 && r.state.phase === 'flying'; i += 1) {
+      r = stepSim(r.state, []);
+      dropped.push(...r.events);
+    }
+    expect(r.state.switches.door).toBe(true);
+    expect(dropped.some((e) => e.type === 'ballRest' && e.playerId === 0)).toBe(true);
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    expect(voicesDuring(() => audio.catchUpPlates(dropped))).toBe(0);
+    // red leaves DOOR for good, heard in time: the falling confirm and the closing slide, nothing else
+    audio.handleEvents([{ type: 'switchOff', tick: r.state.tick + 300, switchId: 'door', pos: top }, doorToggle(r.state.tick + 300, true)], 0);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slide.mock.calls).toEqual([[true, expect.objectContaining({ playerId: 'door-gate' })]]);
+  });
+
+  it('syncPlates: a state resumed with red holding DOOR (one synthetic levelStart), then red leaves: the falling confirm and the closing slide', () => {
+    const audio = createAudio({ seed: 1 });
+    audio.unlock();
+    const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
+    const lift = vi.spyOn(audio.sfx, 'switchOff');
+    const door = plateOf(twoDoors, 'door');
+    const top = { x: door.x + door.w / 2, y: door.surfaceY };
+    const onDoor = { x: top.x, y: top.y - BALL_RADIUS };
+    const resting = (pos: Vec): BallState => ({ pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false, grounded: true, restTicks: REST_TICKS, lastRest: pos });
+    audio.handleEvents([levelStartOf(twoDoors.id, 400)], 0);
+    audio.syncPlates(twoDoors, { door: true, window: false }, [resting(onDoor), resting(twoDoors.starts[1])]);
+    audio.handleEvents([{ type: 'switchOff', tick: 500, switchId: 'door', pos: top }, doorToggle(500, true)], 0);
+    expect(lift.mock.calls.map(([o]) => o?.chime)).toEqual([undefined]);
+    expect(slide.mock.calls).toEqual([[true, expect.objectContaining({ playerId: 'door-gate' })]]);
   });
 
   it('setFan(false) stops the loop even while the context is suspended (leaving a game, NEXT_STEPS #6)', async () => {
@@ -887,10 +1217,13 @@ function introducing(mechanic: 'trap' | 'cannon'): Level {
   return level;
 }
 
-/** The hole on its own, intro dismissed: red (slot 0) to play. */
-function onHole(level: Level): SimState {
+/** The hole on its own, intro dismissed: red (slot 0) to play. Like GameCanvas, the audio hears the start (its levelStart included). */
+function onHole(level: Level, audio?: AudioSystem): SimState {
   const config: SimConfig = { playerCount: 2, levelIds: [level.id], seed: 7, mode: 'local' };
-  return stepSim(createSim(config).state, [{ type: 'continue', playerId: 0 }]).state;
+  const start = createSim(config);
+  const intro = stepSim(start.state, [{ type: 'continue', playerId: 0 }]);
+  audio?.handleEvents([...start.events, ...intro.events], 0);
+  return intro.state;
 }
 
 /** A crafted flight: the shooter `slot` drops from `pos` at rest speed; the other ball stays where it is. */
@@ -922,7 +1255,7 @@ const ofType = (events: readonly SimEvent[], type: SimEventType): SimEvent[] => 
 describe('the shipped World 2 devices reach their voices through the real sim', () => {
   beforeEach(installFakeContext);
 
-  it("Booby Trap: SNAP!, then a skipped turn (red's muffled note, blue's ding), then FREE! with its chime", () => {
+  it("Booby Trap: SNAP!, then a skipped turn (red's muffled note, blue's ding), then FREE! with its chime once blue settles on FREE", () => {
     const level = introducing('trap');
     const trap = level.rects.find((r) => r.kind === 'trap');
     const release = level.switches.find((sw) => sw.id === trap?.switchIds?.[0]);
@@ -932,10 +1265,11 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
     const caught = vi.spyOn(audio.sfx, 'trapCaught');
     const freed = vi.spyOn(audio.sfx, 'trapFreed');
 
-    // red drops into the armed jaws: caught, so blue shoots next
-    const snap = flyInto(audio, dropping(onHole(level), 0, { x: trap.x + trap.w / 2, y: trap.y + BALL_RADIUS }));
+    // red drops into the armed jaws: caught (the whole snap and clink), so blue shoots next
+    const snap = flyInto(audio, dropping(onHole(level, audio), 0, { x: trap.x + trap.w / 2, y: trap.y + BALL_RADIUS }));
     expect(ofType(snap.events, 'trapCaught')).toMatchObject([{ playerId: 0, rectId: trap.id }]);
-    expect(caught).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0 }));
+    expect(caught.mock.calls).toEqual([[expect.objectContaining({ playerId: 0 })]]);
+    expect(caught.mock.calls[0]?.[0]?.chime).toBeUndefined();
     expect(snap.state.activePlayer).toBe(1);
 
     // blue's flight ends anywhere free: red is passed over, blue shoots again, and still hears its ding
@@ -951,11 +1285,22 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
       [BLUE_NOTE, at + 120],
     ]);
 
-    // blue lands on the release plate: red is freed where it sits (the turn passes on the next tick, ARCH R5)
+    // blue lands on the release plate (D11): red's jaws spring open as blue touches it, a quiet latch, and the FREE
+    // chime waits until blue settles there and holds it (the turn passes on the next tick, ARCH R5)
     settleVoices();
-    flyInto(audio, dropping(skip.state, 1, { x: release.x + release.w / 2, y: release.surfaceY - BALL_RADIUS - 4 }));
-    expect(freed).toHaveBeenCalledTimes(1);
-    expect(freed).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0, chime: true }));
+    const freeing = flyInto(audio, dropping(skip.state, 1, { x: release.x + release.w / 2, y: release.surfaceY - BALL_RADIUS - 4 }));
+    const [touch] = ofType(freeing.events, 'trapFreed');
+    const blueRest = freeing.events.find((e) => e.type === 'ballRest' && e.playerId === 1);
+    expect(touch).toMatchObject({ playerId: 0, rectId: trap.id });
+    expect((blueRest?.tick ?? 0) - (touch?.tick ?? 0)).toBeGreaterThan(0);
+    expect(freed.mock.calls.map(([o]) => o)).toEqual([
+      expect.objectContaining({ playerId: 0, chime: false }),
+      expect.objectContaining({ playerId: 0, click: false }),
+    ]);
+    // the late chime really sounds: E5 then A5, 80 ms apart, with no latch under it
+    const chime = FakeAudioContext.created.filter((o) => o.type === 'triangle' && (pitchOf(o) === 659.25 || pitchOf(o) === 880));
+    expect(chime.map(pitchOf).slice(-2)).toEqual([659.25, 880]);
+    expect(Math.round(((chime.at(-1)?.startAt ?? 0) - (chime.at(-2)?.startAt ?? 0)) * 1000)).toBe(80);
   });
 
   it('Load & Fire: LOADED! on the cold breech, then BOOM! the tick after the partner lands on FIRE, never the boing', () => {
@@ -970,7 +1315,7 @@ describe('the shipped World 2 devices reach their voices through the real sim', 
     const spring = vi.spyOn(audio.sfx, 'spring');
     const slide = vi.spyOn(audio.sfx, 'bridgeToggle');
 
-    const loaded = flyInto(audio, dropping(onHole(level), 0, { x: cannon.x + cannon.w / 2, y: cannon.y - BALL_RADIUS - 4 }));
+    const loaded = flyInto(audio, dropping(onHole(level, audio), 0, { x: cannon.x + cannon.w / 2, y: cannon.y - BALL_RADIUS - 4 }));
     expect(ofType(loaded.events, 'cannonLoad')).toMatchObject([{ playerId: 0, rectId: cannon.id }]);
     expect(load).toHaveBeenCalledWith(expect.objectContaining({ playerId: 0 }));
 

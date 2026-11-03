@@ -172,7 +172,10 @@ export function replayMatches(game: Game): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Solo-bypass chains (predictShot with the partner parked on its tee)
+// Solo-bypass chains (predictShot with the partner parked on its tee). Each shot starts from the plates its resting
+// ball presses (settledSwitches) and predictShot re-evaluates them every tick, so under BUILD_DECISIONS D11 a lone
+// ball that presses a plate on its way opens that door, bridge or cannon only while it is on it, as in the game:
+// `solo-not-bypassable` is also the proof that no lone ball uses a plate it passes to get through.
 // ---------------------------------------------------------------------------------------------
 
 export type SoloResult = {

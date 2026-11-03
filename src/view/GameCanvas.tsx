@@ -23,6 +23,7 @@ import { controllingSeat, createInputSystem, type InputSystem, type MissKind, ty
 import { renderFrame } from './render/index';
 import {
   applySimEvents,
+  catchUpPlates,
   createMotionPreference,
   createViewState,
   pulseMissRings,
@@ -57,11 +58,16 @@ export type FrameSummary = {
   /** BUILD_DECISIONS D3 (UX CD-7). */
   sunk: [boolean, boolean];
   turnDelayTicks: number;
-  /** switchId -> slot whose resting ball presses it, from SimState (VISUAL.md §11), so a resumed or re-synced game is right at once. */
+  /**
+   * switchId -> slot whose RESTING ball presses it, from SimState (VISUAL.md §11), so a resumed or re-synced game is
+   * right at once. Any ball on a plate presses it (D11), but a chip says HOLDS only for a ball that stays there: a
+   * ball rolling or flying across a plate (a cannon shot, a door's push) never flashes HOLDS for a frame.
+   */
   holds: Record<string, PlayerId>;
   /**
    * Per slot: the device its resting ball waits in and the plate that releases it (D10.10), derived from
-   * SimState every summary, never from events (online drops old events; a resumed game must be right at once).
+   * SimState every summary, never from events (online drops old events; a resumed game must be right at once),
+   * through the plates resting balls hold (`lastingSwitches`, D11).
    */
   waiting: [WaitingChip | null, WaitingChip | null];
   /** A fresh miss press (UX.md §5.2), for MISS_HINT_MS or until a real drag starts; drives the hint pill. */
@@ -154,20 +160,36 @@ function seatsOf(session: LocalSession | OnlineSessionView): readonly PlayerId[]
   return session.kind === 'local' ? session.seats : [session.seat];
 }
 
-/** Who physically holds each pressed switch (a cup hold has no slot and is reported by the level's `cupHoldsSwitch`). */
-function holdsOf(level: Level, sim: SimState): Record<string, PlayerId> {
+/**
+ * Who holds each pressed switch: the first slot whose ball RESTS on it (switchPresser over the resting balls only,
+ * a moving one counted out as if sunk). A cup hold has no slot and is reported by the level's `cupHoldsSwitch`.
+ */
+export function holdsOf(level: Level, sim: Pick<SimState, 'switches' | 'balls'>): Record<string, PlayerId> {
   const holds: Record<string, PlayerId> = {};
+  const resting = sim.balls.map((b) => (b.asleep ? b : { ...b, sunk: true }));
   for (const sw of level.switches) {
     if (sim.switches[sw.id] !== true) continue;
-    const presser = switchPresser(level, sw, sim.switches, sim.balls);
+    const presser = switchPresser(level, sw, sim.switches, resting);
     if (presser !== null) holds[sw.id] = presser;
   }
   return holds;
 }
 
-/** The chip for a slot whose ball waits in a trap or a cold cannon: the reason plus the label of the device's first release plate. */
+/**
+ * The plates as the HUD reads them (D11): down only while a RESTING ball presses them or the cup holds them. At every
+ * hand-off the balls are settled, so this is exactly the mask the WAITING rule decides turns on; in between, a ball
+ * rolling across FREE lets a caught partner go for a moment (the jaws on the canvas show it), and the chip stays
+ * `CAUGHT · needs FREE` instead of flickering to WAITING and back.
+ */
+export function lastingSwitches(level: Level, sim: Pick<SimState, 'switches' | 'balls'>): Record<string, boolean> {
+  const holds = holdsOf(level, sim);
+  const cupHolds = sim.balls.some((b) => b.sunk);
+  return Object.fromEntries(level.switches.map((sw) => [sw.id, holds[sw.id] !== undefined || (cupHolds && sw.id === level.cupHoldsSwitch && sim.switches[sw.id] === true)]));
+}
+
+/** The chip for a slot whose ball waits in a trap or a cold cannon: the reason plus the labels of the device's release plates. */
 export function waitingChipOf(level: Level, sim: SimState, slot: PlayerId): WaitingChip | null {
-  const waiting = waitingOf(level, sim.switches, sim.balls[slot]);
+  const waiting = waitingOf(level, lastingSwitches(level, sim), sim.balls[slot]);
   if (waiting === null) return null;
   const rect = level.rects.find((r) => r.id === waiting.rectId);
   return { reason: waiting.reason, release: rect === undefined ? '' : releaseLabel(level, rect) };
@@ -339,14 +361,43 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   let lastPhase: SimPhase | null = null;
   let lastMiss: MissKind | null = null;
   let transformScale = fitCanvas(wrapper, canvas);
+  /** The hole both plate trackers (view.plates, audio's) stand on: a levelStart moves them, and so does syncPlates. */
+  let platesOn: string | null = null;
+  /** Online: the plate trackers have been re-based on the room's state since the loop began. */
+  let based = false;
+
+  /**
+   * BUILD_DECISIONS D11: the plate trackers judge every press against what they were fed, so a state that did not come
+   * through its own levelStart and events re-bases both of them, the view's and audio's alike: its plates down, the
+   * holds of its balls (and the cup), its doors and bridges as those holds drive them (plates.ts sync). Every event fed
+   * after it is a later one.
+   */
+  const syncPlates = (state: SimState): void => {
+    const on = levelOf(state);
+    view.plates.sync(on, state.switches, state.balls);
+    latest.current.audio.syncPlates(on, state.switches, state.balls);
+    platesOn = state.levelId;
+  };
+
+  /** Events this page will never present (a hidden tab's dropped batches): both plate trackers take them in silently. */
+  const catchUp = (events: readonly SimEvent[]): void => {
+    if (events.length === 0) return;
+    catchUpPlates(view, events);
+    latest.current.audio.catchUpPlates(events);
+    for (const e of events) if (e.type === 'levelStart') platesOn = e.levelId;
+  };
 
   const emit = (events: readonly SimEvent[], now: number): void => {
     if (events.length === 0) return;
     applySimEvents(view, events, sim);
     latest.current.audio.handleEvents(events, now, 0);
     latest.current.onEvents(events);
+    for (const e of events) if (e.type === 'levelStart') platesOn = e.levelId;
   };
   emit(initial.events, last);
+  // a `?state=` link opens with one synthetic levelStart, which resets both trackers to no plate down: both start from
+  // the state instead (online, the first frame re-bases them on the room's state)
+  syncPlates(initial.state);
 
   /** Local modes: fixed 60 Hz steps; the first step of a frame drains the persistent queue. */
   const stepLocal = (now: number): number => {
@@ -377,7 +428,22 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     prev = interp.prev;
     sim = interp.state;
     if (interp.snap) for (const rb of view.renderBalls) rb.snapNextFrame = true;
-    emit(client.drainEvents(client.renderTime(now)), now);
+    let events = client.drainEvents(client.renderTime(now));
+    // D11: the plate trackers have every event once, in order. A sync (the start or rejoin this loop opened on, a
+    // later rejoin, playAgain) re-bases them on the state it carries, which the events after it never repeat; the
+    // batches a hidden tab dropped as stale reach them silently (take-backs only); then this frame's events. Never a
+    // re-base on a mere `snap`: that comes with every shot and turn, and would forget the hold of a holder that shoots.
+    const { synced, dropped } = client.takeStreamBreak();
+    if (synced !== null) {
+      syncPlates(synced);
+      catchUp(dropped);
+    } else if (!based) {
+      // no sync left to start from (another loop took it): the drawn state, which already has what is drained
+      syncPlates(interp.prev);
+      events = [];
+    } else catchUp(dropped);
+    based = true;
+    emit(events, now);
     return interp.alpha;
   };
 
@@ -393,6 +459,10 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   };
 
   const syncLevel = (): void => {
+    // a hole the events reached without its levelStart re-bases the plate trackers; online the events drained reach
+    // the older snapshot of the pair (the newer one is drawn ahead of them), locally the state just stepped
+    const reached = session.kind === 'online' ? prev : sim;
+    if (reached.levelId !== platesOn) syncPlates(reached);
     if (sim.levelId === level.id) return;
     level = levelOf(sim);
     view.level = level;

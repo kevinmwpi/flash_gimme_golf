@@ -25,7 +25,8 @@ two of you against the course; per-player strokes are shown as a footnote.
 - **Turns.** Red and blue alternate. After a ball settles there is a short hand-off before the next
   player may shoot; who tees off first is set per hole.
 - **World 1 mechanics, one new idea per hole:** sand (kills bounce and roll), **pressure plates**
-  (held while a ball *rests* on them; leave and the door shuts or the bridge vanishes), **doors and
+  (pressed while a ball is on them, rolling or resting, and through its small bounces; when no ball is
+  on it the door shuts or the bridge vanishes, so holding one for your partner means staying put), **doors and
   windows** (open only while their plate is held), **colour gates** (only the matching player's ball
   passes; the other bounces off), and a **bridge** across a gap that exists only while a plate is
   held. A ball that has sunk keeps holding the switch its hole is wired to, so finishing first helps

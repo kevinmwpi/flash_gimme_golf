@@ -2,6 +2,11 @@
 /**
  * The solver's single-shot sweeps (scripts/solver.ts), all on `predictShot` with every switch off and the
  * partner parked on its tee: aces, wall passes, gap crossings, plus the lone-plate rule of a bridged chasm.
+ * "Every switch off" is the state the shot STARTS in: `predictShot` re-evaluates the plates every tick exactly as
+ * `stepSim` does, so under BUILD_DECISIONS D11 a shot that rolls or bounces across a plate presses it, and opens
+ * its door or bridge, for exactly as long as it is on it. The aces, walls and gaps criteria therefore also prove
+ * that no ball gets through a door or across a chasm it opened itself on the way (D11's "never long enough to let
+ * itself through").
  *
  * Every exception to these generic passes is one row of OPT_OUTS, never an implicit skip: the solver checks
  * each row still describes its level (the skipped column is no gate, the exempt ledge starts rows, the skipped
@@ -281,8 +286,23 @@ export function plateSwitches(level: Level): PressureSwitch[] {
   return level.switches.filter((sw) => sw.onRectId === undefined);
 }
 
-export type LonePlateResult = { readonly switchId: string; readonly shot: Shot; readonly restX: number; readonly fell: boolean; readonly crossed: boolean; readonly bridgeDrops: number };
+export type LonePlateResult = {
+  readonly switchId: string;
+  readonly fromX: number;
+  readonly shot: Shot;
+  /** One of LONE_PLATE_SHOTS played from the plate's centre, aimed into the chasm: it must fall. */
+  readonly chasmShot: boolean;
+  readonly restX: number;
+  readonly fell: boolean;
+  readonly crossed: boolean;
+  /** The ball ended off its plate (it fell, or rests outside the plate's x-range). */
+  readonly leftPlate: boolean;
+  /** It met the planks: a bridge bounce, a rest off permanent ground, or a press of a DECK plate on the bridge. */
+  readonly touchedBridge: boolean;
+  readonly bridgeDrops: number;
+};
 
+/** Shots aimed into the chasm from a near bridge plate (mirrored from a far one); each one falls. */
 const LONE_PLATE_SHOTS: Shot[] = [
   { deg: 29, power: 49 },
   { deg: 40, power: 94 },
@@ -291,24 +311,64 @@ const LONE_PLATE_SHOTS: Shot[] = [
   { deg: 61, power: 83 },
 ];
 
-/** A lone ball on a bridge plate (partner on its tee) shoots: the bridge must vanish under it and it never rests beyond the gap. */
+/**
+ * The lone-plate rule of a bridged chasm, restated for BUILD_DECISIONS D11. A lone ball on a bridge plate (partner
+ * on its tee, so nothing else holds the bridge) keeps that plate pressed only while it is over it and at most
+ * PLATE_HOLD_HEIGHT_PX above it, so the bridge drops the tick after the ball leaves the plate. Every bridge plate
+ * ends 32 px or more short of its lip (L4: A 50, B 32; L10: A 70, B 50) and a ball moves at most
+ * (MAX_BALL_SPEED + GRAVITY * DT) * DT = 18.5 px a tick, so the planks are gone before its centre is over the
+ * chasm: no shot touches the bridge (with a DECK on the planks, a touch would press it and keep the bridge for the
+ * lone ball, D11), every shot that leaves the plate drops the bridge, none rests across the chasm, and the
+ * LONE_PLATE_SHOTS into the chasm all fall from the plate's centre. Shots: those five plus the human grid (162),
+ * aimed at the chasm (rightward from a near plate, mirrored from a far one), from the plate's centre and from its
+ * chasm-side end (the shortest way to the lip; from there a weak "chasm" shot may land short and roll back, which
+ * proves nothing either way). Before D11 the plate came up the tick the ball was struck, so only the five chasm
+ * shots from a near plate's centre were played.
+ */
 export function lonePlateCheck(level: Level): LonePlateResult[] {
   const out: LonePlateResult[] = [];
   const base = newGame(level);
+  const deckIds = level.switches.filter((sw) => sw.onRectId !== undefined).map((sw) => sw.id);
+  const chasmKeys = new Set(LONE_PLATE_SHOTS.map(fmtShot));
+  const rightward = [...LONE_PLATE_SHOTS, ...shotsOf(HUMAN_GRID).filter((s) => !chasmKeys.has(fmtShot(s)))];
   for (const bridge of bridgesOf(level)) {
     const gap = level.terrain.gaps.find((g) => g.x1 === bridge.x);
     if (gap === undefined) continue;
-    for (const sw of plateSwitches(level).filter((s) => rectSwitchIds(bridge).includes(s.id) && s.x + s.w <= gap.x1)) {
-      for (const shot of LONE_PLATE_SHOTS) {
-        const shooter = craftedBall(level, 0, onFairway(level, sw.x + sw.w / 2));
+    for (const sw of plateSwitches(level).filter((s) => rectSwitchIds(bridge).includes(s.id))) {
+      const near = sw.x + sw.w <= gap.x1;
+      if (!near && sw.x < gap.x2) continue;
+      const centre = sw.x + sw.w / 2;
+      const shots = near ? rightward : rightward.map((s) => ({ deg: 180 - s.deg, power: s.power }));
+      for (const fromX of [centre, near ? sw.x + sw.w : sw.x]) {
+        const shooter = craftedBall(level, 0, onFairway(level, fromX));
         const game = withBalls(base, inSlotOrder(0, shooter, craftedBall(level, 1, level.starts[1])), 0);
-        const r = takeShot(game, shot);
-        if (r === null) continue;
-        out.push({ switchId: sw.id, shot, restX: Math.round(r.summary.restX), fell: r.summary.fell, crossed: r.summary.restX > gap.x2, bridgeDrops: r.summary.bridgeDrops });
+        for (const [i, shot] of shots.entries()) {
+          const r = takeShot(game, shot);
+          if (r === null) continue;
+          const s = r.summary;
+          const deckPressed = r.events.some((e) => e.type === 'switchOn' && deckIds.includes(e.switchId));
+          out.push({
+            switchId: sw.id,
+            fromX,
+            shot,
+            chasmShot: fromX === centre && i < LONE_PLATE_SHOTS.length,
+            restX: Math.round(s.restX),
+            fell: s.fell,
+            crossed: !s.fell && (near ? s.restX > gap.x2 : s.restX < gap.x1),
+            leftPlate: s.fell || s.restX < sw.x || s.restX > sw.x + sw.w,
+            touchedBridge: s.bridgeTouched || deckPressed,
+            bridgeDrops: s.bridgeDrops,
+          });
+        }
       }
     }
   }
   return out;
+}
+
+/** A lone-plate row breaks the rule: it crossed, touched the planks, left the plate without dropping the bridge, or is a chasm shot that did not fall. */
+export function lonePlateBroken(l: LonePlateResult): boolean {
+  return l.crossed || l.touchedBridge || (l.leftPlate && l.bridgeDrops === 0) || (l.chasmShot && !l.fell);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -217,7 +217,7 @@ function arcRider(level: Level, state: SimState, r: CannonRect): PlayerId | null
 
 /**
  * The dotted arc of every cannon that is LOADED or LIT: the real flight it fires on (a cold cannon's with its
- * first FIRE plate held, so L10's crosses the bridge that plate raises), memoised per firing switch mask.
+ * first FIRE plate pressed, so L10's crosses the bridge that plate raises), memoised per firing switch mask.
  */
 function drawCannonArcs(ctx: CanvasRenderingContext2D, level: Level, state: SimState, view: ViewState): void {
   for (const r of level.rects) {

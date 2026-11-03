@@ -26,6 +26,12 @@ src/net/
   wsUrl.ts            VITE_WS_URL or same-origin /ws on localhost; null => online hidden
 src/view/             client-only presentation; may use Math.random/performance; never writes SimState
   view.ts             ViewState: camera, particles, trails, shake, golfer anims, callouts, aim preview
+  plates.ts           which plate presses LAST (D11): view and audio both classify every press with it, so
+                      a pass-over clicks the cap but only a lasting hold gets words, chimes and slides; a
+                      word a later press undoes is taken back (unsay for SHUT/GONE, unsnap for SNAP!) while it
+                      stands; view and audio feed whole ticks alike (feedAll); both re-base on a state the
+                      events did not bring (a sync, a ?state= link, a hole without its levelStart) and take a
+                      hidden tab's dropped batches in silently (catchUpPlates)
   render/             Canvas 2D in a fixed 1280x720 logical space (world, mechanics, devices: trap jaws and
                       cannons with their predictLaunch arc, parts: shared hardware, surface: terrain
                       queries, entities, aim, text)
@@ -67,8 +73,9 @@ are derived from position, the rest flag and the switches (`devices.ts`).
 Input is command-based with absolute aim: `setAim{angle,power}`, `shoot`, `continue`, `restartLevel`,
 each stamped with a `playerId`. `allowedCommands(state, seat)` is the single phase x role table;
 the host is seat 0 in every mode and in solo seat 0 owns both slots. Every ball is simulated every
-tick; switches are re-evaluated from resting balls every tick; a turn advances only when all balls are
-settled and no switch changed that tick. Who tees off first is `level.firstPlayer`.
+tick; switches are re-evaluated every tick from the balls on the plates (D11: any ball over a plate on
+contact, rolling or resting, kept pressed through hops up to `PLATE_HOLD_HEIGHT_PX`); a turn advances
+only when all balls are settled and no switch changed that tick. Who tees off first is `level.firstPlayer`.
 
 **Devices and the WAITING rule (BUILD_DECISIONS D10.4-D10.6).** A trap is a rect ARMED while none of
 its release plates is held; a ball that comes to rest inside an armed trap is caught. A cannon breech
@@ -160,7 +167,11 @@ snapshot's aim at 55 % alpha.
   sweep. Rooms are destroyed after `roomIdleMs` idle, when a grace expires, on a deliberate leave, or
   on shutdown (`roomClosed` with a reason to everyone). The client replays buffered events
   only within `EVENT_REPLAY_WINDOW_MS` of render time: a tab that was hidden re-syncs from the next
-  snapshot instead of firing every missed sound and toast at once.
+  snapshot instead of firing every missed sound and toast at once. `GameClient.takeStreamBreak()` hands
+  over each sync's state and, in order, the events of the batches dropped as stale (up to
+  `MAX_DROPPED_EVENTS`); events the server re-sends up to a sync's tick are dropped. The canvas re-bases
+  both D11 plate trackers only on a sync and takes the dropped events in without presenting them, so a
+  rejoin or a hidden tab keeps its plate words and sounds.
 - **No auto-advance.** Intro and results cards wait for a `continue` from either seat (first wins),
   so neither player can stall the other and nobody loses a hint mid-read (BUILD_DECISIONS D6).
 - **Process.** `server/index.ts`: HTTP `200 ok` on `/`, JSON stats on `/healthz` (both with CORS for
@@ -186,15 +197,15 @@ version validation and show a "from an older version" card.
 | `src/sim/__tests__/contract.test.ts` | every contracted export exists with the right type (fails the moment a contract is renamed) |
 | `src/sim/__tests__/replay.test.ts` | `runReplay` is bit-identical across runs and across a split run; golden snapshot; ticks matter |
 | `src/sim/__tests__/turns.test.ts` | the allowed-command table, seats in solo/local, turn delay 27 -> 26, level and campaign transitions |
-| `src/sim/__tests__/switches.test.ts` | held plates, release timing, bridges appearing and vanishing under a parked ball, no wake loops, solo can hold and cross |
+| `src/sim/__tests__/switches.test.ts` | plates pressed on contact by rolling, bouncing or resting balls and held through low hops (D11), release timing, bridges appearing and vanishing under a parked ball, no wake loops, solo can hold and cross |
 | `src/sim/__tests__/physics.test.ts` | no tunnelling at any speed, bounded energy on springs/bumpers, friction, slopes, colour gates, sand, `predictShot` parity with real shots |
 | `src/sim/__tests__/cup.test.ts` | sink vs lip-out by speed, gimme radius inclusive, near-cup callout, swept detection |
 | `src/sim/__tests__/serialize.test.ts` | round-trip idempotence, lossless settled states, size budget, every rejection path |
-| `src/sim/__tests__/devices.test.ts` | traps catch only resting balls and free/re-catch with their plates (and the cup); cannons load cold and fire on entry or the tick they light; the WAITING rule, `turnSkipped`, scoped resets, the R5 deferral and the tee guard; safe spots; the flight watchdog; flush-footed doors; device validity rules; replay determinism and snapshot round trips of device scenarios |
-| `src/sim/__tests__/levels.test.ts` | every registered hole (12) passes `validateLevel`; ids match filenames; worlds, orders, campaigns and course pars; introduced mechanics per world; labels, first player, plate distances, back bunkers, the overview rule, device tables; golden lines replay bit-exactly |
+| `src/sim/__tests__/devices.test.ts` | traps catch only resting balls and free/re-catch with their plates (and the cup), a partner rolling across FREE freeing only while on it (D11); cannons load cold and fire on entry or the tick they light, a loaded ball firing on a partner's first touch of FIRE; the WAITING rule, `turnSkipped`, scoped resets, the R5 deferral and the tee guard; safe spots; the flight watchdog; flush-footed doors; device validity rules; replay determinism and snapshot round trips of device scenarios |
+| `src/sim/__tests__/levels.test.ts` | every registered hole (12) passes `validateLevel`; ids match filenames; worlds, orders, campaigns and course pars; introduced mechanics per world; labels, first player, plate distances (D11: every plate more than a tick's travel short of what it drives; decks lip to lip), back bunkers, the overview rule, device tables; golden lines replay bit-exactly |
 | `src/sim/__tests__/levels-solver-w{1,2,3}.test.ts` | (`npm run test:levels`, a CI matrix job per world) co-op solvable, par calibrated, not solo-bypassable, no aces, walls and gaps hold (with the explicit `OPT_OUTS`), scripted lines, stall taps, decks, launchers land, no flight loops, every trapped or loaded ball can be freed |
 | `src/net/__tests__/protocol.test.ts` | parsers accept every documented shape, rebuild objects, reject every bad one |
-| `src/net/__tests__/client.test.ts` | aim coalescing and flush order, ring/interpolation, discontinuity snaps, reconnect |
+| `src/net/__tests__/client.test.ts` | aim coalescing and flush order, ring/interpolation, discontinuity snaps, reconnect, `takeStreamBreak` (each sync once, stale batches in order, overflow) and re-sent events dropped up to a sync's tick |
 | `server/__tests__/rooms.test.ts` | the whole room lifecycle on fake sockets with an injected clock: handshake, caps, tick arithmetic, turn checks, cursors, grace, idle, stats back to zero |
 | `server/__tests__/equivalence.test.ts` | the server path equals `runReplay` on the same command log (server == local) |
 | `server/__tests__/devices.test.ts` | a device scenario (catch, reset, skips, free, load, partner-fired cannon) on the server equals `runReplay`, snapshots and events |
@@ -202,7 +213,10 @@ version validation and show a "from an older version" card.
 | `src/view/__tests__/{view,audio}.test.ts` | snap flags on teleports, no interpolation of sunk balls, SFX debounce; every device event's sound, the skip cue, one music bed per world on white keys, the fan stop |
 | `src/view/__tests__/{devices-view,stickers-levels}.test.ts` | jaws, barrels, lamps and arcs follow the switches; device callouts and their priority; the camera follows launched balls; golfers beside waiting balls; every must-label prop on holes 5-12 keeps its sticker under the cap at every follow position |
 | `src/ui/__tests__/{copy,storage,worlds,callouts}.test.ts` | no competitive copy; `fg.v1.*` storage validates ids and survives blocked storage; world picker and continue helpers; skip banner lines |
-| `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; shared plate, deck, bridge planks, doorway middle, own colour field, unknown spots, waiting balls and device-only plates never tip |
+| `src/view/__tests__/plates.test.ts` | D11 presentation on the real sim: a pass-over or a ball rocking in a dish presses without words, a lasting hold gets HELD/OPEN once, trap flicks stay quiet, the waiting chip stays steady while a rescuer rocks on FREE, no way or jaws word ever contradicts the door, bridge or trap it names (taken back on a re-press), a tracker re-based at any tick of the 12 golden lines says what one that saw every event says, and a silent catch-up shows and plays nothing |
+| `src/view/__tests__/plates-sync.test.ts` | the real GameCanvas loop with a real GameClient and audio: a page that rejoins on a later hole, mid-hold or mid-flight, a hidden tab that drops a levelStart or spans a partner's stall tap or a holder leaving, and a share-link resume all say and play the same plate words, chimes and slides as a page that saw every event |
+| `src/view/__tests__/plates-consumers.test.ts` | the real view and audio consumers' trackers agree tick by tick over a holder grid that includes every L12 pit shot, and a rest on L12's DOOR seat sent BACK +1 in the same tick says and plays nothing lasting |
+| `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; a stall tap keeps every plate the tip can name pressed (deck plates included); shared plate, bridge planks, doorway middle, own colour field, unknown spots, waiting balls and device-only plates never tip |
 
 ## Tooling
 

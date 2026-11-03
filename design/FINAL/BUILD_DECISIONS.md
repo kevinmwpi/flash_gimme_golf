@@ -18,7 +18,8 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
 - `PressureSwitch.onRectId?: string` — a DECK plate that lives on top of a bridge/blocker rect: it is pressed only
   while that rect is active and the resting ball's `groundAt` source is THAT rect (index match); plates without
   `onRectId` require `g.source === 'piece'` (unchanged). `surfaceY` of a deck plate = the rect's top y. The view
-  draws a deck plate only while its rect is active. Used by L4's `deck` plate (inset 24 px from both lips).
+  draws a deck plate only while its rect is active. Used by L4's `deck` plate (inset 24 px from both lips; since D11
+  any ball on it presses it, and the L4 and L10 decks span their bridge lip to lip).
 - `Level.cupHoldsSwitch?: string` — a level may wire the cup to ONE switch: while ANY ball is sunk that switch counts
   as pressed (evaluated inside `evaluateSwitches` after ball contacts). L2 -> `window`, L3 -> `door2`, L4 -> `far`.
   The HUD chip says "HOLDS <label> FROM THE CUP".
@@ -32,13 +33,14 @@ Read ARCH.md first; where ARCH.md, VISUAL.md, LEVELS.md, UX.md or AUDIO.md disag
   step 1 (treat "inside an active blocker/bridge/wrong-colour-gate AABB" like "support vanished") and ejected through
   the nearest face by the normal contact resolution. No special "side it came from" tracking.
 - Switch press zone: ball centre x inside `[sw.x, sw.x + sw.w]` with the contact tolerance in types.ts (no extra
-  margin). Deck plate press requires the ball fully on the bridge by geometry (the 24 px inset does that).
+  margin). Deck plate press requires the ball fully on the bridge by geometry (the 24 px inset does that). Since D11
+  the deck runs lip to lip and the ground-source rule alone keeps a ball resting at a lip from pressing it.
 - Labels: every switch and every switch-driven rect in the shipped levels carries a short `label` that matches the
   hint copy: L2 `DOOR` / `WINDOW`; L3 `DOOR 1` / `DOOR 2`; L4 `A` / `B` / `DECK` (bridge label `BRIDGE`). The renderer
   shows stickers as `<LABEL> · ON|OFF` (switch) and `<LABEL> · OPEN|SHUT` (door/window) / `BRIDGE · ON|OFF`; with no
   label it falls back to `SWITCH <letter>` by index. HUD chip status: `HOLDS DOOR`, `AIMING`, `WAITING`, `IN THE CUP`.
 - Spring, bumper and fan are NOT used in World 1 but ARE implemented, rendered and unit-tested (SIM + VIEW).
-- No `wait` command. The "stall tap" is taught by the holder tip (`src/ui/holderTip.ts`): at most once per hole (a restart re-arms it; online, each browser only for its own ball), at the start of a turn whose ball rests on a plate the partner still needs (never a deck plate or the cup-wired plate). Levels are verified without it.
+- No `wait` command. The "stall tap" is taught by the holder tip (`src/ui/holderTip.ts`): at most once per hole (a restart re-arms it; online, each browser only for its own ball), at the start of a turn whose ball rests on a plate the partner still needs (never a deck plate or the cup-wired plate; since D11 a deck plate may be named, because a stall tap keeps it pressed). Levels are verified without it.
 - Pars: 6 / 7 / 9 / 8 as authored; the LEVELS re-verification stage may adjust by +-1 with evidence.
 
 ## D3. Contract requests accepted (owners must implement them)
@@ -191,7 +193,8 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
 - **D10.13 Verification.** The solver adds `launchers`, `loops` and `traps` passes and explicit opt-outs (backboards and
   ledge-only columns for `walls`, cannon-crossed gaps for `gaps`). Pars are calibrated as D9 and LEVELS.md require
   (solver minimum <= par <= minimum + 2): Booby Trap 7 -> 6 (minimum 4: once red holds the perch, blue can hole out
-  from its tee through the open door), Bait 9 -> 8 and Grand Machine 8 -> 7; course pars 28 / 29 / 30. The slow suite
+  from its tee through the open door), Bait 9 -> 8 and Grand Machine 8 -> 7; course pars 28 / 29 / 30 (28 / 29 / 29
+  since D11 lowered Crossfire 8 -> 7). The slow suite
   is split per world and runs as a CI matrix.
 - **D10.14 UI and visual amendments from the review (2026-11-01; UX.md and VISUAL.md are amended by this list).**
   Every card (intro, results, world results, dialogs) ignores presses for its first 400 ms (`CARD_INPUT_GRACE_MS`) and
@@ -203,3 +206,93 @@ older document (ARCH, VISUAL, UX, AUDIO, LEAD_BRIEF, the World 1 LEVELS.md, D1-D
   Colour-field stripes are drawn in the field's own colour; a field with a door or window standing on it hangs its
   label beside the field; the 6-label cap counts labels slid onto the screen; labels keep clear of the HUD-scaled
   top and bottom bands. The canvas reads the same reduced-motion setting as the CSS (`<html data-motion>`).
+
+## D11. Plates are pressed by any ball on them (owner request 2026-11-02; supersedes D2's resting-only plate rule)
+The owner asked why a plate only goes down once the ball has stopped (just before the turn passes) instead of as the
+ball passes over it. The resting-only rule was chosen to stop doors flickering through bounce hops; its cost is that
+a plate reacts late and a ball rolling over a button does nothing, which reads as lag. New rule (`switchPresser`):
+- A plate is PRESSED by any non-sunk ball whose centre x is over it and whose ground is the plate's own surface (a
+  terrain piece, or the deck rect for a deck plate), rolling, bouncing or resting. It goes down on CONTACT (bottom
+  within `SWITCH_CONTACT_TOLERANCE`).
+- Once down it STAYS down while a ball over it is at most `PLATE_HOLD_HEIGHT_PX` (72) above it, so a landing's bounce
+  hops (limits in the next point) and stall taps keep it down (measured: a straight-up tap holds every plate up to
+  power 46, a 69.6 px rise; power 47 rises 72.7 px and lifts it); it comes UP the tick no ball is on it. No latching:
+  holding a door open for a partner still means staying on the plate.
+- The hold height was raised from 56 to 72 (2026-11-02) after a back-smash onto L5's DOOR plate (155° / power 100
+  from x 1100, off the wall's cap; an 803 px/s landing) hopped 62.1 px, letting the plate up mid-bounce and shutting
+  the door for 34 ticks. A first hop rises about (0.35 v)^2 / 2g for an impact of v px/s: 56 covered landings up to
+  about 750 px/s, 72 covers about 850. At 72, tracking every plate with `switchPresser` each tick, the solver's
+  `loops` flights (both colours, plates up and held) plus shots from the decks, 320,164 flights on the 12 holes, show
+  0 hop flickers (4 at 56, all from that L5 shot); the hardest landings are L12 FIRE 811 px/s, L5 DOOR 803 and L6
+  FREE 767 (every other plate 655 or less), the highest first hops L5 DOOR 62.1 px, L12 FIRE 57.6 and L6 FREE 56.7
+  (every other plate 43.0 or less). Fine lob grids from all ground 200 px or more above a plate (every 4 px) find
+  landings up to 905 px/s (the fastest come down at a plate's end, where the dish's ramp turns them sideways) and
+  first hops up to 68.9 px (L12 FIRE); from the top of L6's backboard, where a ball can come to rest (rarely: 266 of
+  12,050 near-vertical full-power shots from the perch's left end), up to 71.4 px onto FREE, the thinnest margin.
+  Not reachable in play: a ball resting on top of L11's blue field (y 200, solid for red) would land on FIRE at about
+  890 px/s with a first hop of up to 81.1 px and let FIRE up mid-hop, but red can never get there. The field blocks
+  red from the FIRE ledge (the only spot that perch is reached from), and red's highest centre over that column is
+  y 273 against the 188 it would need (`wall-top-clear`); blue passes through its own field, so it cannot stand on
+  it. A future hole with a plate below ground more than about 230 px higher should re-run this scan (hops above
+  72 px need impacts above about 850 px/s).
+- A ball that ROCKS sideways in a plate's dish leaves the plate's x-range and lets it up: 77 % of plate landings
+  press their plate 2-4 times before settling, and the door follows. That is the honest physics of the rule and is
+  kept in the sim: holding the press sideways over the dish ramps would let Two Doors' ball hold its own door open
+  up the ramp that ends at the door face, and a release delay long enough to cover rocking (p90 48 ticks) is longer
+  than the 6-10 ticks a passing ball needs to reach its door. Gameplay is unaffected: hand-offs and the WAITING
+  rule only ever look at settled balls.
+- Presentation (amends VISUAL.md §4/§13, AUDIO.md and UX.md §9.3; `src/view/plates.ts` classifies every press for
+  view and audio alike): the plate cap, lamp and the way it drives react on contact (a fresh press also gets ink
+  sparks); the words `<PLATE> HELD`, DOOR/BRIDGE OPEN and SHUT/GONE, SNAP!/FREE!, the confirm chime and the door
+  and bridge slides come only for a LASTING change (a ball comes to rest on the plate, or the cup holds it); a
+  newer callout about the same door or ball replaces the old one. A word must never contradict what it names: a
+  SHUT / GONE said as a hold ends is taken back (and its closing slide faded) on the tick a press that does not last
+  reopens the way (the holder's hop landing back on its plate, a deck lob touching B); on a grid of holder taps and
+  deck lobs 876 of 1,319 such words are taken back, a median 40 ticks after them. A SNAP! that a free which does not
+  last undoes (a release plate's holder hopping off, so the trap re-arms around its waiting partner, and landing
+  back) is taken back the same way and its snap fades (124 of 462 such taps left SNAP! over open jaws before). A
+  word can be taken back only while it stands (`WORD_STANDS_TICKS` 90, longer than a callout's 1.1 s). Accepted
+  with it: a reversal within a few ticks still flashes its word for those frames, and a hold that ends for good
+  after a take-back closes with no second word (the door's own animation shows it). A hold that ends in the tick it
+  starts is not lasting (on L12 a ball can rest on DOOR in the door seat and go BACK +1 in the same tick): view and
+  audio feed whole ticks alike (`PlateTracker.feedAll`, each event judged against the mask its tick ends with), so
+  they cannot disagree. Both trackers re-base on a state the events did not bring: the start or rejoin a page opens
+  on, every later sync (rejoin, playAgain), a `?state=` link and a hole reached without its levelStart; a re-base
+  counts a plate as held by the cup, a resting ball, or a moving ball whose last rest is on it. GameClient drops
+  the events the server re-sends up to a sync's tick, so the events after a re-base are exactly the later ones. A
+  hidden tab's batches dropped as stale are not a break: GameClient hands them over (`takeStreamBreak`) and both
+  trackers take them in, in order, without showing or playing anything; only words leave the screen (a word taken
+  back or replaced, a HELD whose plate came up, a SNAP! whose jaws opened, a SHUT/GONE whose way moved, every plate
+  word at a new hole). A stall tap seen across a hidden tab repeats nothing. The HOLDS chip and the CAUGHT/LOADED chip read
+  only resting balls (what the WAITING rule decides). The holder tip may name deck plates, since a stall tap on a
+  deck now keeps the bridge up. Copy: 'Any ball on it presses it. Stay on it to keep it down.'
+- Consequences accepted with it: a ball rolling across a plate opens its door or bridge while it passes, never long
+  enough to let itself through: the plate comes up the tick the ball leaves it and what it drives changes the next
+  tick, by when the ball's leading edge is at most `(MAX_BALL_SPEED + GRAVITY * DT) * DT + BALL_RADIUS` = 30.5 px past
+  the plate, and every plate ends farther than that from each door, window, bridge or breech it drives (tightest:
+  L4's B 32 px from the bridge, the L9 and L12 trap seats 40 px from their doors, then 50 px; `levels.test.ts`); a
+  loaded ball fires the moment any ball touches a FIRE plate, including on L10 where A, B and the DECK both fire the
+  cannon and hold the bridge the fired ball needs about 126 ticks later: a firm flat shot that skims across A's (or
+  B's) bowl and rolls off fires the LOADED partner and lets the planks vanish before it lands, so it falls (+1, back
+  to its tee). Review 2026-11-02: 0 of the 2,579 partner-firing first shots from the tee flat (the spring ride and
+  every bowl landing end on A), 47-52 of 2,789-4,003 from spire-top spots, all at power 72+ within 12 degrees of flat
+  (1-3 of 105-148 on the human grid); no softlock. Kept rather than special-casing cannons, since firing on a touch
+  is what the owner asked for; the L10 copy now says the firing ball stays on A until its partner lands. A release
+  plate frees a caught ball only while a ball
+  is on it (a rescue must still stay on FREE/TOP to hold at the hand-off); World 1 plays differently (doors react
+  sooner, a holder's stall tap keeps the door open), so its goldens and the D10.3 World 1 equivalence are
+  re-baselined on purpose.
+- Decks span their bridge lip to lip (L4 520-1240, L10 860-1580; D2's 24 px inset is gone). With the inset, a lone
+  deck ball rolling for a lip left the plate 22-24 px short of it and the planks vanished under it: 120 of 1,120
+  lone-deck rolls fell into the chasm, a gotcha nobody could read. Lip to lip, 0 of 1,200 fall; a ball resting AT a
+  lip stands on the lip's terrain, so it still never holds the bridge (0 of 48 lip rests press DECK). The copy now
+  says to roll off the deck; a lob that rises more than `PLATE_HOLD_HEIGHT_PX` lifts off it and drops the planks.
+- Re-verification (2026-11-02, every solver pass on all 12 holes passes, at a hold height of 56 and again at 72 with
+  the same minimums, pars and goldens): Crossfire's solver minimum fell 6 -> 5
+  (red waits LOADED and blue's lob only has to touch FIRE), so under D10.13 its par falls 8 -> 7 and World 3's course
+  par 30 -> 29; its design line still takes 8, one over par. Plate & Bridge's searches now report 6 because blue's
+  deck rest moved (the earlier 5-stroke line still replays), par 7 unchanged. Every golden line keeps its shots and
+  strokes; only its final tick moves (2-3 ticks sooner, L10 -19 and L12 -145 where a LOADED ball now fires on the
+  partner's first touch).
+- Copy says "on" a plate rather than "resting on" where the difference matters (cannons fire on touch; holding still
+  means staying on the plate).

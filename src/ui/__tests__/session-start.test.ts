@@ -2,9 +2,10 @@
 // OWNER: ui
 // The first moments of a session, through the whole App (the real sim, snapshot codec and GameClient behind a fake
 // WebSocket, the real GameCanvas loop on a fake animation-frame clock; only the canvas renderer is stubbed):
-// - online, the server's own session-opening levelStart reaches the client late (the start sync carries no events;
-//   it rides the first snapshot after it), so a Tee off pressed before it must not read as the partner's
-//   ("Blue teed off" to the player who pressed it), on every new room, Play again and Continue to World N+1;
+// - online, the server's own session-opening levelStart rides the first snapshot after the event-less start sync
+//   (GameClient now drops it as at or before the sync's tick), and a Tee off pressed before that snapshot must not
+//   read as the partner's ("Blue teed off" to the player who pressed it), on every new room, Play again and
+//   Continue to World N+1;
 // - a player who reached the stage with the keyboard is coached with keys from the first intro card (UX.md §1.6),
 //   not with the touch/pointer guess the stage starts from before it sees a key.
 import React, { act } from 'react';

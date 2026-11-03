@@ -3,8 +3,9 @@
  * World 3, hole 12 — GRAND MACHINE (worlds-2-3 LEVELS.md "Level 12", Appendix A; the DOOR rect is
  * renamed `door-gate`, D10.8). The finale introduces nothing: cannon, spring, trap and door combined,
  * with two co-op machines up to a 300 px summit. FLY: a CANNON on a mount at the far left (breech
- * 100-140 at y 565 in a sand funnel 41-99 / 141-199) fires along (700, -760) while a ball rests on FIRE
- * (the dish 420-600) or TOP; overshoot the mount and the pit behind it (0-40) is a TRAP (12-40 x
+ * 100-140 at y 565 in a sand funnel 41-99 / 141-199) fires along (700, -760) while a ball is on FIRE
+ * (the dish 420-600) or TOP (plates press on contact, BUILD_DECISIONS D11: a LOADED ball fires the tick
+ * a ball touches either); overshoot the mount and the pit behind it (0-40) is a TRAP (12-40 x
  * 590-640) released by FIRE or TOP. CLIMB: a sunken seat channel (680-1180, floor 640) runs under a
  * wall at 820-860 (top y 200) whose DOOR stands flush on the channel floor (D10.12); the DOOR plate (680-780)
  * sits inside a TRAP (680-780 x 590-640, released only by TOP), so the holder is caught and its partner
@@ -12,7 +13,7 @@
  * basin (plate 1230-1680) that holds the door, lights the cannon and frees both traps. Red shoots
  * first. The cup holds TOP (D2), so the second ball can always take either route.
  *
- * Intended lines (par 7): FLY - red lobs LEFT into the cannon and waits, LOADED -> blue rests on FIRE
+ * Intended lines (par 7): FLY - red lobs LEFT into the cannon and waits, LOADED -> blue rolls onto FIRE
  * and red is fired onto TOP -> blue lobs LEFT into the cannon (TOP keeps it lit) and flies up -> both
  * chip down to the green and putt. CLIMB - red rolls onto the DOOR plate and is caught (the door opens)
  * -> blue rolls through to the spring and lands on TOP, freeing red -> red rolls through and climbs ->

@@ -15,11 +15,15 @@
  * FAR out of reach): a softlock the scoped reset cannot end. Now nothing between the door and the chasm
  * holds a resting ball but the breech, where the lit cannon fires it or the cold one LOADS it.
  *
- * Intended line (par 8): red moves up toward the red field (x 600-660) -> blue lobs LEFT through its
- * field onto the FIRE ledge (the cannon lights) -> red lobs through the red field into the pit and is
- * fired onto FAR (or waits LOADED until blue's landing fires it) -> FAR opens the door and keeps the
- * cannon lit; red putts out (the cup keeps FAR held) -> blue drops off the ledge, rolls through the
- * door into the cannon, is fired onto FAR and putts.
+ * Intended line (par 7; the design and the first build said 8): red moves up toward the red field
+ * (x 600-660) -> blue lobs LEFT through its field onto the FIRE ledge (the cannon lights) -> red lobs
+ * through the red field into the pit and is fired onto FAR (or waits LOADED until blue's touch on FIRE
+ * fires it) -> FAR opens the door and keeps the cannon lit; red putts out (the cup keeps FAR held) ->
+ * blue drops off the ledge, rolls through the door into the cannon, is fired onto FAR and putts.
+ * Since plates press on contact (BUILD_DECISIONS D11) a LOADED red fires the moment blue's lob touches
+ * FIRE, even if blue rolls on to the ledge's end, so the solver's minimum fell from 6 to 5 (red loads
+ * from its tee, blue's lob grazes FIRE, red sinks, blue rolls off the ledge through the door into the
+ * cannon and sinks) and par from 8 to 7 (minimum <= par <= minimum + 2, levels README "Pars").
  *
  * Measured against the real sim (levels README "Launcher re-verification"): from every breech x
  * (0.5 px steps) and every +-3 % launch change, red (FIRE held) and blue (FIRE and FAR held) are fired
@@ -40,7 +44,7 @@ export const level: Level = compileLevel({
   name: 'Crossfire',
   world: 3,
   order: 11,
-  par: 8,
+  par: 7, // D11 (plates press on contact): 8 -> 7, the solver minimum fell 6 -> 5 (levels README "Pars")
   hint: 'Only red gets through the RED field into the CANNON, and only blue reaches FIRE behind the BLUE field. Red lands on FAR, which opens the DOOR so blue can roll in.',
   aha: "The colours pick the roles: only red can load the cannon and only blue can reach FIRE, and red's landing plate opens the door that lets blue into the same cannon.",
   watchOut:

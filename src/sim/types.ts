@@ -180,11 +180,13 @@ export type LevelRect =
 export type LevelRectKind = LevelRect['kind'];
 
 /**
- * Pressure plate. HELD while a RESTING (asleep, not sunk) ball has its centre x inside [x, x+w], its
- * bottom within SWITCH_CONTACT_TOLERANCE px of `surfaceY` and, as its ground, a terrain piece (or, for
- * a deck plate, the `onRectId` rect): a ball rolling or bouncing across a plate never presses it, and a
- * caught ball still holds the plate it rests on (a trap seat). Released the very tick the holder moves
- * (no latching). Levels pair switches so the holder can also cross.
+ * Pressure plate (BUILD_DECISIONS D11). PRESSED by any ball that is on it, rolling, bouncing or resting:
+ * the ball's centre x inside [x, x+w], over the plate's own ground (a terrain piece, or for a deck plate
+ * the `onRectId` rect). It goes down on contact (the ball's bottom within SWITCH_CONTACT_TOLERANCE px of
+ * `surfaceY`) and, once down, stays down while a ball over it is at most PLATE_HOLD_HEIGHT_PX above it, so
+ * a landing's bounces and a stall tap never flicker the door. It comes up the tick no ball is on it (no
+ * latching): to hold a door open for a partner, a ball has to stay on the plate. A caught ball still
+ * holds the plate it rests on (a trap seat). Levels pair switches so the holder can also cross.
  */
 export type PressureSwitch = {
   readonly id: string;
@@ -196,8 +198,8 @@ export type PressureSwitch = {
   readonly colour: string;
   readonly label?: string;
   /** A DECK plate: lives on top of the rect with this id (a bridge or blocker). Pressed only while
-   *  that rect is active and the resting ball's ground source is that rect; `surfaceY` is the
-   *  rect's top. Plates without `onRectId` require ground source 'piece'. */
+   *  that rect is active and the ball's ground source is that rect (any ball on it, D11); `surfaceY`
+   *  is the rect's top. Plates without `onRectId` require ground source 'piece'. */
   readonly onRectId?: string;
 };
 
@@ -303,14 +305,14 @@ export type PlayerState = {
 export type BallState = {
   pos: Vec;
   vel: Vec;
-  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls hold plates and
-   *  wait in devices. Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
+  /** True once at rest (REST_TICKS consecutive slow grounded ticks); only resting balls wait in devices
+   *  and decide hand-offs (any ball on a plate presses it, D11). Woken (physics wakeIfNeeded) when an active fan contains the ball, a solid rect
    *  closed on it (a door), it rests on the breech of a cannon that is now lit (it fires), or its support
    *  vanished. */
   asleep: boolean;
   /** True once in the cup (sunk or gimme). pos is then {hole.x, hole.rimY + 10} and the ball is skipped. */
   sunk: boolean;
-  /** Ground/rect-top contact during the last tick (drives the rest test; plates read `asleep`). */
+  /** Ground/rect-top contact during the last tick (drives the rest test; plates read neither, D11). */
   grounded: boolean;
   /** Consecutive ticks that satisfied the rest test; asleep when it reaches REST_TICKS. */
   restTicks: number;
@@ -650,6 +652,15 @@ export const FAN_FORCE = 900; // px/s^2 upward (net 280 against gravity)
 export const FAN_MAX_LIFT = 420; // px/s cap on upward speed inside a fan
 
 export const SWITCH_CONTACT_TOLERANCE = 6; // px between ball bottom and plate surface
+/**
+ * A pressed plate stays pressed while a ball over it hops no more than this far above it (D11): it covers
+ * the first hop of a landing up to about 850 px/s ((0.35 v)^2 / 2g at GROUND_RESTITUTION 0.35; the highest
+ * first hop measured on a reachable landing on the 12 holes is 71.4 px, onto L6's FREE from the backboard
+ * top) and every stall tap, so a door never flickers through bounces, while a ball that rolls off the plate
+ * or lobs well above it releases it. It was 56 (about 750 px/s) until a back-smash onto L5's DOOR plate
+ * (803 px/s, a 62 px hop) let it up mid-bounce. BUILD_DECISIONS D11 has the scan.
+ */
+export const PLATE_HOLD_HEIGHT_PX = 72;
 export const BRIDGE_LIP_TOLERANCE = 3; // px, validity test
 /** Minimum vertical clearance between an overhang's base and the surface below it (2R + 24). */
 export const OVERHANG_MIN_CLEARANCE = 2 * BALL_RADIUS + 24;
