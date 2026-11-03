@@ -54,7 +54,7 @@ export const level: Level = compileLevel({
   hint: 'Blue: chip back into the CANNON and wait. Red: ride the SPRING onto A, and the BRIDGE and the cannon both go live.',
   aha: 'My landing on A does three things at once: it raises the bridge, lights the cannon and fires my partner across. Then I stay on A until my partner lands, because the bridge lasts only while a ball is on A, B or the DECK.',
   watchOut:
-    'A ball in the cold CANNON waits, LOADED, until a ball touches A, B or the DECK. The bridge lasts only while a ball is on one of them, so whoever fires the cannon stays on A (or B) until the partner lands, or the partner drops into the chasm (+1). Without the cannon, ride the SPRING onto A and cross one at a time, rolling off the DECK: a high lob lifts off it and the planks vanish.',
+    'A ball in the cold CANNON waits, LOADED, until a ball touches A, B or the DECK. The bridge lasts only while a ball is on one of them, so whoever fires the cannon stays on A (or B) until the partner lands, or the partner drops into the chasm (+1). Without the cannon, ride the SPRING onto A and cross one at a time, rolling off the DECK: a high lob lifts off it, and the planks vanish unless a ball holds A or B.',
   mechanicsIntroduced: [],
   firstPlayer: 1,
   cupHoldsSwitch: 'b',

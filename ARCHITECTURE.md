@@ -27,7 +27,9 @@ src/net/
 src/view/             client-only presentation; may use Math.random/performance; never writes SimState
   view.ts             ViewState: camera, particles, trails, shake, golfer anims, callouts, aim preview
   plates.ts           which plate presses LAST (D11): view and audio both classify every press with it, so
-                      a pass-over clicks the cap but only a lasting hold gets words, chimes and slides
+                      a pass-over clicks the cap but only a lasting hold gets words, chimes and slides; a
+                      word a later press undoes is taken back ('unsay'); both trackers re-sync from the drawn
+                      state whenever it did not arrive through a levelStart (mount, online stream breaks)
   render/             Canvas 2D in a fixed 1280x720 logical space (world, mechanics, devices: trap jaws and
                       cannons with their predictLaunch arc, parts: shared hardware, surface: terrain
                       queries, entities, aim, text)
@@ -163,7 +165,9 @@ snapshot's aim at 55 % alpha.
   sweep. Rooms are destroyed after `roomIdleMs` idle, when a grace expires, on a deliberate leave, or
   on shutdown (`roomClosed` with a reason to everyone). The client replays buffered events
   only within `EVENT_REPLAY_WINDOW_MS` of render time: a tab that was hidden re-syncs from the next
-  snapshot instead of firing every missed sound and toast at once.
+  snapshot instead of firing every missed sound and toast at once. `GameClient.eventStreamEpoch()` counts
+  those breaks (and every sync), and the canvas re-bases both D11 plate trackers from the drawn state on
+  each one, so a rejoin or a hidden tab keeps its plate words and sounds.
 - **No auto-advance.** Intro and results cards wait for a `continue` from either seat (first wins),
   so neither player can stall the other and nobody loses a hint mid-read (BUILD_DECISIONS D6).
 - **Process.** `server/index.ts`: HTTP `200 ok` on `/`, JSON stats on `/healthz` (both with CORS for
@@ -197,7 +201,7 @@ version validation and show a "from an older version" card.
 | `src/sim/__tests__/levels.test.ts` | every registered hole (12) passes `validateLevel`; ids match filenames; worlds, orders, campaigns and course pars; introduced mechanics per world; labels, first player, plate distances (D11: every plate more than a tick's travel short of what it drives; decks lip to lip), back bunkers, the overview rule, device tables; golden lines replay bit-exactly |
 | `src/sim/__tests__/levels-solver-w{1,2,3}.test.ts` | (`npm run test:levels`, a CI matrix job per world) co-op solvable, par calibrated, not solo-bypassable, no aces, walls and gaps hold (with the explicit `OPT_OUTS`), scripted lines, stall taps, decks, launchers land, no flight loops, every trapped or loaded ball can be freed |
 | `src/net/__tests__/protocol.test.ts` | parsers accept every documented shape, rebuild objects, reject every bad one |
-| `src/net/__tests__/client.test.ts` | aim coalescing and flush order, ring/interpolation, discontinuity snaps, reconnect |
+| `src/net/__tests__/client.test.ts` | aim coalescing and flush order, ring/interpolation, discontinuity snaps, reconnect, the event-stream epoch (syncs and dropped batches) |
 | `server/__tests__/rooms.test.ts` | the whole room lifecycle on fake sockets with an injected clock: handshake, caps, tick arithmetic, turn checks, cursors, grace, idle, stats back to zero |
 | `server/__tests__/equivalence.test.ts` | the server path equals `runReplay` on the same command log (server == local) |
 | `server/__tests__/devices.test.ts` | a device scenario (catch, reset, skips, free, load, partner-fired cannon) on the server equals `runReplay`, snapshots and events |
@@ -205,7 +209,8 @@ version validation and show a "from an older version" card.
 | `src/view/__tests__/{view,audio}.test.ts` | snap flags on teleports, no interpolation of sunk balls, SFX debounce; every device event's sound, the skip cue, one music bed per world on white keys, the fan stop |
 | `src/view/__tests__/{devices-view,stickers-levels}.test.ts` | jaws, barrels, lamps and arcs follow the switches; device callouts and their priority; the camera follows launched balls; golfers beside waiting balls; every must-label prop on holes 5-12 keeps its sticker under the cap at every follow position |
 | `src/ui/__tests__/{copy,storage,worlds,callouts}.test.ts` | no competitive copy; `fg.v1.*` storage validates ids and survives blocked storage; world picker and continue helpers; skip banner lines |
-| `src/view/__tests__/plates.test.ts` | D11 presentation on the real sim: a pass-over or a ball rocking in a dish presses without words, a lasting hold gets HELD/OPEN once, trap flicks stay quiet, the waiting chip stays steady while a rescuer rocks on FREE |
+| `src/view/__tests__/plates.test.ts` | D11 presentation on the real sim: a pass-over or a ball rocking in a dish presses without words, a lasting hold gets HELD/OPEN once, trap flicks stay quiet, the waiting chip stays steady while a rescuer rocks on FREE, and no way word ever contradicts the door or bridge it names (taken back on a re-press) |
+| `src/view/__tests__/plates-sync.test.ts` | the real GameCanvas loop with a real GameClient and audio: a page that rejoins on a later hole or mid-hold, a hidden tab that drops a levelStart and a share-link resume all say and play the same plate words, chimes and slides as a page that saw every event |
 | `src/ui/__tests__/holderTip.test.ts` | no holder tip on any golden line; a short crossing tips the holder; a stall tap keeps every plate the tip can name pressed (deck plates included); shared plate, bridge planks, doorway middle, own colour field, unknown spots, waiting balls and device-only plates never tip |
 
 ## Tooling

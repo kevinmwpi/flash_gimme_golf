@@ -245,7 +245,14 @@ a plate reacts late and a ball rolling over a button does nothing, which reads a
   view and audio alike): the plate cap, lamp and the way it drives react on contact (a fresh press also gets ink
   sparks); the words `<PLATE> HELD`, DOOR/BRIDGE OPEN and SHUT/GONE, SNAP!/FREE!, the confirm chime and the door
   and bridge slides come only for a LASTING change (a ball comes to rest on the plate, or the cup holds it); a
-  newer callout about the same door or ball replaces the old one. The HOLDS chip and the CAUGHT/LOADED chip read
+  newer callout about the same door or ball replaces the old one. A word must never contradict what it names: a
+  SHUT / GONE said as a hold ends is taken back (and its closing slide faded) on the tick a press that does not last
+  reopens the way (the holder's hop landing back on its plate, a deck lob touching B); on a grid of holder taps and
+  deck lobs 876 of 1,319 such words are taken back, a median 40 ticks after them. Accepted with it: a reversal within
+  a few ticks still flashes its word for those frames, and a hold that ends for good after a take-back closes with
+  no second word (the door's own animation shows it). Both trackers re-sync from the drawn state whenever it did
+  not arrive through a levelStart: on mount, on every online sync or dropped event batch
+  (`GameClient.eventStreamEpoch`), and on a hole change. The HOLDS chip and the CAUGHT/LOADED chip read
   only resting balls (what the WAITING rule decides). The holder tip may name deck plates, since a stall tap on a
   deck now keeps the bridge up. Copy: 'Any ball on it presses it. Stay on it to keep it down.'
 - Consequences accepted with it: a ball rolling across a plate opens its door or bridge while it passes, never long
