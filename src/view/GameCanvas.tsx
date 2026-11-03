@@ -368,12 +368,13 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
   /**
    * BUILD_DECISIONS D11: the plate trackers judge every press against what they were fed, so a state that did not come
    * through its own levelStart and events re-bases both of them, the view's and audio's alike: its plates down, the
-   * holds of its resting balls (and the cup), its doors and bridges as they stand.
+   * holds of its balls (and the cup), its doors and bridges as those holds drive them (plates.ts sync). `already`: the
+   * events this state includes that are emitted next, so the trackers start from before them and say their words.
    */
-  const syncPlates = (state: SimState): void => {
+  const syncPlates = (state: SimState, already: readonly SimEvent[] = []): void => {
     const on = levelOf(state);
-    view.plates.sync(on, state.switches, state.balls);
-    latest.current.audio.syncPlates(on, state.switches, state.balls);
+    view.plates.sync(on, state.switches, state.balls, already);
+    latest.current.audio.syncPlates(on, state.switches, state.balls, already);
     platesOn = state.levelId;
   };
 
@@ -418,15 +419,17 @@ function createLoop({ session, canvas, ctx, wrapper, latest }: LoopDeps): Loop {
     prev = interp.prev;
     sim = interp.state;
     if (interp.snap) for (const rb of view.renderBalls) rb.snapNextFrame = true;
-    // the first frame, a sync (a rejoin, playAgain) or batches a hidden tab dropped: the events no longer add up to
-    // what is drawn, so the plate trackers start over from the snapshot the next events follow. Never on a mere
-    // `snap`: that comes with every shot and turn, and a re-sync then would forget the hold of a holder that shoots.
+    const events = client.drainEvents(client.renderTime(now));
+    // the first frame, a sync (a rejoin, playAgain) or batches dropped (a hidden tab's, or this drain's): the events no
+    // longer add up to what is drawn, so the plate trackers start over from the snapshot this frame's events reach,
+    // told that it includes them. Never on a mere `snap`: that comes with every shot and turn, and a re-sync then would
+    // forget the hold of a holder that shoots.
     const epoch = client.eventStreamEpoch();
     if (epoch !== syncedEpoch) {
       syncedEpoch = epoch;
-      syncPlates(interp.prev);
+      syncPlates(interp.prev, events);
     }
-    emit(client.drainEvents(client.renderTime(now)), now);
+    emit(events, now);
     return interp.alpha;
   };
 

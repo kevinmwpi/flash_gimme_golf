@@ -161,12 +161,13 @@ describe('device callouts (D10)', () => {
       return view.callouts[view.callouts.length - 1]?.text;
     };
     expect(say(ev('trapCaught', { playerId: 0, pos, rectId: 'snare' }))).toBe('SNAP!');
-    // D11: blue rolling onto FREE lets red go only while it is on the plate, so FREE! waits until blue settles there
+    // D11: blue rolling onto FREE lets red go only while it is on the plate, so FREE! waits until blue settles there;
+    // the jaws are open on red meanwhile, so the SNAP! said 10 ticks ago is taken back (UNSNAP), never left over them
     const freeDown = { ...state, switches: { ...state.switches, free: true } };
     applySimEvents(view, [ev('switchOn', { switchId: 'free', byPlayer: 1, pos: { x: 350, y: 600 } }, 20), ev('trapFreed', { playerId: 0, pos, rectId: 'snare' }, 20)], freeDown);
-    expect(view.callouts.map((c) => c.text)).toEqual(['SNAP!']);
+    expect(view.callouts.map((c) => c.text)).toEqual([]);
     applySimEvents(view, [ev('ballRest', { playerId: 1, pos: { x: 350, y: 588 }, onPermanentGround: true }, 40)], freeDown);
-    // the newer word about red's jaws replaces SNAP!
+    // the free lasts once blue settles: FREE! (late), the only word left about red's jaws
     expect(view.callouts.map((c) => c.text)).toEqual(['FREE HELD', 'FREE!']);
     expect(view.callouts.find((c) => c.text === 'FREE!')?.worldPos).toEqual(pos);
     expect(say(ev('trapReturn', { playerId: 0, pos, respawnPos: { x: 100, y: 588 }, strokes: 2, toTee: false }))).toBe('BACK +1');

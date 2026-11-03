@@ -351,6 +351,54 @@ describe('the plate trackers follow the hole an online page renders (D11)', () =
     expect(page.heard).toEqual({ confirms: [], falls: ['door'], slides: ['door-gate:active'] });
   });
 
+  it.each([
+    ['as it lands on the plate, before it rocks off it and back (no DOOR SHUT for a door nobody had opened)', 'landing'],
+    ['as it rocks back onto the plate for the last time, before it settles (DOOR OPEN when it does)', 'settling'],
+  ])("a page that rejoins while red's lob is still moving on DOOR, %s, says and plays what a page that saw it land does", (_case, when) => {
+    const campaign = twoDoorsRoom();
+    const states = campaign.run.states as SimState[];
+    const door = twoDoors.switches.find((s) => s.id === 'door');
+    if (door === undefined) throw new Error('Two Doors has a DOOR plate');
+    const red = (t: number): SimState['balls'][number] => (states[t] as SimState).balls[0];
+    const doorDown = (t: number): boolean => (states[t] as SimState).switches.door === true;
+    let landing = campaign.teeOff2;
+    while (!doorDown(landing)) landing += 1;
+    let rest = landing;
+    while (!red(rest).asleep) rest += 1;
+    const at = when === 'landing' ? landing + 1 : rest - 1;
+    // the plate is down under red, still moving; its last rest is off the plate (nothing lasting has happened yet)
+    expect(doorDown(at)).toBe(true);
+    expect(red(at).asleep).toBe(false);
+    expect(red(at).lastRest.x < door.x || red(at).lastRest.x > door.x + door.w).toBe(true);
+    // from the landing, red rocks off the plate (the door shuts) and back before it settles
+    if (when === 'landing') expect(Array.from({ length: rest - at }, (_, i) => at + i).some((t) => !doorDown(t))).toBe(true);
+    const page = onlinePage(campaign.run, at, campaign.end);
+    expect(page.levelStarts).toEqual([WORLD1_IDS[0]]);
+    expect(page.words).toEqual(TWO_DOORS_WORDS);
+    expect(page.heard).toEqual(TWO_DOORS_HEARD);
+  });
+
+  it.each([8, 14, 24])(
+    'a tab hidden for 70 ticks that comes back %i ticks after red settles on DOOR (its rest among the events the first frame drains) says DOOR HELD and DOOR OPEN',
+    (after) => {
+      const campaign = twoDoorsRoom();
+      const states = campaign.run.states as SimState[];
+      let rest = campaign.teeOff2;
+      while (!((states[rest] as SimState).switches.door === true && (states[rest] as SimState).balls[0].asleep)) rest += 1;
+      expect(campaign.run.events[rest]).toContainEqual(expect.objectContaining({ type: 'ballRest', playerId: 0 }));
+      const back = rest + after;
+      // the rest falls inside the replay window of the frame the tab comes back on, after the snapshot it renders from
+      const window = Math.ceil(EVENT_REPLAY_WINDOW_MS / TICK_MS);
+      const renderDelay = Math.ceil(CLIENT_RENDER_DELAY_MS / TICK_MS);
+      expect(rest).toBeGreaterThan(back - renderDelay - window);
+      expect(rest).toBeLessThanOrEqual(back - renderDelay);
+      const page = onlinePage(campaign.run, campaign.results1, campaign.end, (t) => t >= back - 70 && t < back);
+      expect(page.levelStarts).toEqual([WORLD1_IDS[0], twoDoors.id]);
+      expect(page.words).toEqual(TWO_DOORS_WORDS);
+      expect(page.heard).toEqual(TWO_DOORS_HEARD);
+    },
+  );
+
   it("a tab hidden while the partner moves on to the next hole drops that hole's levelStart, and still has its words and sounds there", () => {
     // the tab sits on First Fairway's results card; it goes to the background as the partner presses Next hole and
     // comes back on the intro card, long enough after for the levelStart's batch to be dropped as stale

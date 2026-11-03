@@ -26,14 +26,23 @@
  * - a trap's JAWS on a ball last the same way: a ball coming to rest in armed jaws is caught for good, but a free
  *   lasts only while a HELD release plate (or the cup) keeps the trap open. A rescuer rolling across FREE, or rocking
  *   in its dish, frees and re-catches its partner two or three times before settling; those flicks are not lasting,
- *   and the free is announced (`late`) when the rescuer settles on the plate.
+ *   and the free is announced (`late`) when the rescuer settles on the plate;
+ * - a jaws word never contradicts the jaws it names either: when a free that does not last reopens jaws whose SNAP!
+ *   stands (the holder of a release plate hops off it, the trap re-arms around its waiting partner, and the holder
+ *   lands back), that SNAP! is taken back (UNSNAP) on the same tick, and FREE! comes (`late`) once the holder settles
+ *   on the plate. On a grid of near-vertical taps by such a holder (every trap's release plates, 75-105 degrees x
+ *   power 10-60), 124 of 462 taps otherwise left a SNAP! on screen over jaws the landing had opened;
+ * - a word stands, and can be taken back, for WORD_STANDS_TICKS after it is said: longer than its callout lives and
+ *   its sound plays, so there is nothing left of an older word to take back.
  * Events only, so audio (which never sees SimState) can run it; the view passes the live switch mask to confirm a
  * hold, which also heals a tracker that missed events (an online client drops events past its replay window). A
  * state the events did not bring (a `?state=` link, an online rejoin or sync, a dropped levelStart) re-bases both
- * trackers through `sync` (GameCanvas: view.plates and AudioSystem.syncPlates, with the state it draws).
+ * trackers through `sync` (GameCanvas: view.plates and AudioSystem.syncPlates, with the state it draws). Taken at any
+ * tick, mid-flight too, the re-based tracker then says what a tracker that saw every event says, except what a
+ * snapshot does not carry (see `sync`).
  */
 import { hasLevel, levelById } from '../sim/levels/index';
-import { isRectActive, rectSwitchIds } from '../sim/terrain';
+import { isRectActive, rectContains, rectSwitchIds } from '../sim/terrain';
 import type { BallState, Level, LevelRect, LevelRectKind, PlayerId, PressureSwitch, SimEvent, Vec } from '../sim/types';
 import { BALL_RADIUS, SWITCH_CONTACT_TOLERANCE } from '../sim/types';
 
@@ -48,6 +57,8 @@ export type PlateMoment =
   | { readonly kind: 'way'; readonly rectId: string; readonly rectKind: LevelRectKind; readonly active: boolean; readonly switchId: string; readonly tick: number }
   /** The way's back-to-rest word no longer stands: a press that does not last moved it again (`switchId` drove that toggle). */
   | { readonly kind: 'unsay'; readonly rectId: string; readonly rectKind: LevelRectKind; readonly switchId: string; readonly tick: number }
+  /** A ball's SNAP! no longer stands: a free that does not last opened the jaws of `rectId` on it again. */
+  | { readonly kind: 'unsnap'; readonly playerId: PlayerId; readonly rectId: string; readonly tick: number }
   /**
    * A trap's jaws on a ball (`trapCaught` / `trapFreed`, or a free announced `late`). `lasting`: a catch, a catch
    * after a free that lasted, or a free a HELD release plate (or the cup) keeps open. A `late` free carries no
@@ -67,8 +78,21 @@ export type PlateMoment =
 export type PlateTracker = {
   /** The moments `e` causes, in order. `live`: the switch mask after `e`'s tick, when the caller has it (it confirms a hold). */
   feed(e: SimEvent, live?: Readonly<Record<string, boolean>>): PlateMoment[];
-  /** Starts over on `level` from a known state: plates down, holds of resting balls and the cup, ways as they stand. */
-  sync(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void;
+  /**
+   * Starts over on `level` from a known state, at any tick. A plate is HELD when the cup holds it, a ball rests on it,
+   * or a ball still moving last came to rest on it (`lastRest`: a holder that has just been shot); a way stands
+   * announced as those HELD plates drive it, so a pass-over or a landing still rocking in its dish has said nothing;
+   * a ball resting in jaws a press keeps open with no HELD release is let go only for now, as `trapFreed` records it.
+   * The tracker has said no word yet, so it has none to take back. A snapshot does not carry when a plate came up (a
+   * plate up at the sync presses `fresh`), nor a rest off permanent ground (the sim keeps a ball's safe spot only
+   * there, so the holder of a deck plate already rolling at the sync reads as a ball passing over it), nor a holder's
+   * hop that has landed back on its plate (it reads as still holding: its rest then says no HELD and OPEN).
+   * `already`: events the state already includes that the caller feeds next (an online frame drains the last batches
+   * up to the snapshot it re-syncs from). The tracker starts from the state as it stood before them, so their HELD,
+   * OPEN, SHUT and FREE! are said, not swallowed: each plate as its first switch event there found it, a ball shot or
+   * reset there still resting where it was, and a ball that comes to rest (or is put down, or sinks) there still moving.
+   */
+  sync(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[], already?: readonly SimEvent[]): void;
 };
 
 /**
@@ -76,6 +100,14 @@ export type PlateTracker = {
  * median 30 ticks and within 60 ticks 97 % of the time (2,521 re-presses on the shipped holes).
  */
 export const FRESH_PRESS_TICKS = 60;
+
+/**
+ * A word (a way's SHUT / GONE, a ball's SNAP!) stands this long (1.5 s) after it is said and can be taken back until
+ * then: longer than its callout lives on screen (view CALLOUT_TTL, 1.1 s) and its sound plays (a slide 0.35 s, a snap
+ * 0.3 s). An older word has nothing left to take back, and a re-based tracker, which said nothing, agrees with one
+ * that saw every event.
+ */
+export const WORD_STANDS_TICKS = 90;
 
 /** Rect kinds a plate opens or closes for a ball: doors and windows (blockers), bridges, switch-driven fans. */
 const WAY_KINDS: ReadonlySet<LevelRectKind> = new Set<LevelRectKind>(['blocker', 'bridge', 'fan']);
@@ -98,6 +130,53 @@ function restState(rect: LevelRect): boolean {
   return isRectActive(rect, {});
 }
 
+/** Was a word said at `said` still standing at `tick`. */
+function stands(said: number, tick: number): boolean {
+  return tick - said < WORD_STANDS_TICKS;
+}
+
+/** sync: a ball resting on the plate, or one still moving whose last rest was on it (a holder that has just been shot). */
+function holdsAtSync(sw: PressureSwitch, b: Readonly<BallState>): boolean {
+  if (b.sunk) return false;
+  return restsOnPlate(sw, b.asleep ? b.pos : b.lastRest);
+}
+
+/** Events that leave a ball at rest (or sunk): before one, the ball was still moving. */
+const SETTLING: ReadonlySet<SimEvent['type']> = new Set<SimEvent['type']>(['ballRest', 'fellOffWorld', 'flightTimeout', 'sink', 'gimme']);
+/** A last rest nobody knows: on no plate, in no trap. */
+const NOWHERE: Vec = { x: Number.NaN, y: Number.NaN };
+
+/**
+ * sync: the state as it stood before `already` (events it includes; those after its last levelStart). A plate stood as
+ * its first switch event there found it; a ball first shot (`ballHit`), fired (`cannonFire`) or reset (`trapReturn`)
+ * there rested where it was; a ball first coming to rest, put down or sinking there was still moving, its last rest
+ * unknown.
+ */
+function stateBefore(
+  switches: Readonly<Record<string, boolean>>,
+  balls: readonly Readonly<BallState>[],
+  already: readonly SimEvent[],
+): { switches: Record<string, boolean>; balls: Readonly<BallState>[] } {
+  let from = 0;
+  for (let i = 0; i < already.length; i += 1) if (already[i]?.type === 'levelStart') from = i + 1;
+  const was: Record<string, boolean> = { ...switches };
+  const plates = new Set<string>();
+  const ballWas = new Map<number, Readonly<BallState>>();
+  for (const e of already.slice(from)) {
+    if (e.type === 'switchOn' || e.type === 'switchOff') {
+      if (!plates.has(e.switchId)) was[e.switchId] = e.type === 'switchOff';
+      plates.add(e.switchId);
+      continue;
+    }
+    if (!('playerId' in e) || ballWas.has(e.playerId)) continue;
+    const b = balls[e.playerId];
+    if (b === undefined) continue;
+    if (e.type === 'ballHit' || e.type === 'cannonFire' || e.type === 'trapReturn') ballWas.set(e.playerId, { ...b, pos: e.pos, vel: { x: 0, y: 0 }, asleep: true, sunk: false });
+    else if (SETTLING.has(e.type)) ballWas.set(e.playerId, { ...b, asleep: false, sunk: false, lastRest: NOWHERE });
+  }
+  return { switches: was, balls: balls.map((b, i) => ballWas.get(i) ?? b) };
+}
+
 const registryLevel = (id: string): Level | null => (hasLevel(id) ? levelById(id) : null);
 
 export function createPlateTracker(levelFor: (id: string) => Level | null = registryLevel): PlateTracker {
@@ -108,8 +187,10 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
   const upAt = new Map<string, number>();
   /** rectId -> the state last announced (a WAY moment); absent = its rest state. */
   const announced = new Map<string, boolean>();
-  /** Ways whose back-to-rest word (SHUT, GONE) is the last thing said about them and still stands. */
-  const standing = new Set<string>();
+  /** rectId -> the tick its back-to-rest word (SHUT, GONE) was said, while that is the last thing said about the way. */
+  const standing = new Map<string, number>();
+  /** slot -> the trap and tick of its SNAP!, while that is the last thing said about the ball's jaws. */
+  const snapped = new Map<PlayerId, { rectId: string; tick: number }>();
   const sunk: [boolean, boolean] = [false, false];
   /** Balls put down at rest this tick (rests and respawns): a press in the same tick by one of them is a hold at once. */
   let settled: { tick: number; spots: Vec[] } = { tick: -1, spots: [] };
@@ -141,6 +222,7 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
     for (const [playerId, loose] of looseIn) {
       if (!releases(loose.rectId).includes(sw.id)) continue;
       looseIn.delete(playerId);
+      snapped.delete(playerId);
       out.push({ kind: 'jaws', playerId, rectId: loose.rectId, pos: loose.pos, tick, caught: false, lasting: true, late: true });
     }
   };
@@ -173,6 +255,7 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
     upAt.clear();
     announced.clear();
     standing.clear();
+    snapped.clear();
     sunk[0] = false;
     sunk[1] = false;
     settled = { tick: -1, spots: [] };
@@ -186,17 +269,27 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
   };
 
   return {
-    sync(next, switches, balls = []) {
+    sync(next, switchesNow, ballsNow = [], already = []) {
       reset(next);
       if (next === null) return;
+      const { switches, balls } = stateBefore(switchesNow, ballsNow, already);
       sunk[0] = balls[0]?.sunk === true;
       sunk[1] = balls[1]?.sunk === true;
       for (const sw of next.switches) {
         if (switches[sw.id] !== true) continue;
         down.add(sw.id);
-        if (cupHolds(sw.id) || balls.some((b) => b.asleep && !b.sunk && restsOnPlate(sw, b.pos))) held.add(sw.id);
+        if (cupHolds(sw.id) || balls.some((b) => holdsAtSync(sw, b))) held.add(sw.id);
       }
-      for (const rect of next.rects) if (isWay(rect)) announced.set(rect.id, isRectActive(rect, switches));
+      // only a HELD plate announces a way, so the ways stand announced as the HELD plates alone drive them
+      const heldMask = Object.fromEntries([...held].map((id) => [id, true]));
+      for (const rect of next.rects) if (isWay(rect)) announced.set(rect.id, isRectActive(rect, heldMask));
+      // a ball resting in jaws a press keeps open while no release plate (nor the cup) lasts: trapFreed's loose ball
+      balls.forEach((b, slot) => {
+        if (!b.asleep || b.sunk) return;
+        const trap = next.rects.find((r) => r.kind === 'trap' && rectContains(r, b.pos) && !isRectActive(r, switches));
+        if (trap === undefined || rectSwitchIds(trap).some((id) => held.has(id) || cupHolds(id))) return;
+        looseIn.set(slot as PlayerId, { rectId: trap.id, pos: b.pos });
+      });
     },
 
     feed(e, live) {
@@ -226,21 +319,29 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
           const rect = level?.rects.find((r) => r.id === e.rectId);
           if (rect === undefined || !isWay(rect)) break;
           if (e.active !== restState(rect)) {
-            if (standing.delete(rect.id)) out.push({ kind: 'unsay', rectId: rect.id, rectKind: rect.kind, switchId: e.switchId, tick: e.tick });
+            const said = standing.get(rect.id);
+            standing.delete(rect.id);
+            if (said !== undefined && stands(said, e.tick)) out.push({ kind: 'unsay', rectId: rect.id, rectKind: rect.kind, switchId: e.switchId, tick: e.tick });
             break;
           }
           if (announcedState(rect) === e.active) break;
           announced.set(rect.id, e.active);
-          standing.add(rect.id);
+          standing.set(rect.id, e.tick);
           out.push({ kind: 'way', rectId: rect.id, rectKind: rect.kind, active: e.active, switchId: e.switchId, tick: e.tick });
           break;
         }
         case 'trapFreed': {
           // a free lasts while a HELD release plate (or the cup) keeps the trap open; otherwise the ball is let go only
-          // while a rolling ball is on the plate, and the free is announced once that plate comes to last
+          // while a rolling ball is on the plate, and the free is announced once that plate comes to last. Either way the
+          // ball's SNAP! no longer stands: FREE! replaces a lasting one, and a free that does not last takes it back
           const lasting = level === null || releases(e.rectId).some((id) => held.has(id) || cupHolds(id));
           if (lasting) looseIn.delete(e.playerId);
           else looseIn.set(e.playerId, { rectId: e.rectId, pos: e.pos });
+          const snap = snapped.get(e.playerId);
+          snapped.delete(e.playerId);
+          if (!lasting && snap !== undefined && snap.rectId === e.rectId && stands(snap.tick, e.tick)) {
+            out.push({ kind: 'unsnap', playerId: e.playerId, rectId: e.rectId, tick: e.tick });
+          }
           out.push({ kind: 'jaws', playerId: e.playerId, rectId: e.rectId, pos: e.pos, tick: e.tick, caught: false, lasting, late: false });
           break;
         }
@@ -248,6 +349,7 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
           // caught again before any free was announced: the jaws closed on a ball that, as far as anyone heard, never got out
           const regained = looseIn.get(e.playerId)?.rectId === e.rectId;
           looseIn.delete(e.playerId);
+          if (!regained) snapped.set(e.playerId, { rectId: e.rectId, tick: e.tick });
           out.push({ kind: 'jaws', playerId: e.playerId, rectId: e.rectId, pos: e.pos, tick: e.tick, caught: true, lasting: !regained, late: false });
           break;
         }
@@ -258,6 +360,7 @@ export function createPlateTracker(levelFor: (id: string) => Level | null = regi
         case 'trapReturn':
         case 'flightTimeout':
           looseIn.delete(e.playerId);
+          snapped.delete(e.playerId);
           settleAt(e.respawnPos, e.tick, live, out);
           break;
         case 'sink':

@@ -3,19 +3,22 @@
 // sparks after the first press and (audio.test.ts) the confirm chime and the door slide wait for a press that LASTS
 // (plates.ts). Real-sim shots on Two Doors and Load & Fire, then the tracker's edge cases.
 import { describe, expect, it } from 'vitest';
+import { EVENT_REPLAY_WINDOW_MS } from '../../net/GameClient';
+import { GOLDEN_LINES, type GoldenLine } from '../../sim/__tests__/levels-golden';
 import { waitingOf } from '../../sim/devices';
+import { LEVELS, levelById } from '../../sim/levels/index';
 import { level as twoDoors } from '../../sim/levels/w1-02-two-doors';
 import { level as plateAndBridge } from '../../sim/levels/w1-04-plate-and-bridge';
 import { level as boobyTrap } from '../../sim/levels/w2-06-booby-trap';
 import { level as loadAndFire } from '../../sim/levels/w2-07-load-and-fire';
 import { evaluateSwitches } from '../../sim/physics';
 import { createSim, stepSim } from '../../sim/sim';
-import { isRectActive } from '../../sim/terrain';
-import type { Aim, BallState, Level, PlayerId, SimEvent, SimState, Vec } from '../../sim/types';
-import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, BALL_RADIUS, DT, REST_TICKS, quantize4 } from '../../sim/types';
+import { isRectActive, rectSwitchIds } from '../../sim/terrain';
+import type { Aim, BallState, Level, PlayerCommand, PlayerId, SimEvent, SimState, Vec } from '../../sim/types';
+import { AIM_ANGLE_MAX, AIM_ANGLE_MIN, BALL_RADIUS, DT, REST_TICKS, SWITCH_CONTACT_TOLERANCE, quantize4 } from '../../sim/types';
 import { holdsOf, waitingChipOf } from '../GameCanvas';
-import { FRESH_PRESS_TICKS, createPlateTracker, type PlateMoment } from '../plates';
-import { PLATE_CLICK_SEC, applySimEvents, createViewState, updateView, type ViewState } from '../view';
+import { FRESH_PRESS_TICKS, WORD_STANDS_TICKS, createPlateTracker, type PlateMoment } from '../plates';
+import { CALLOUT_TTL, PLATE_CLICK_SEC, applySimEvents, createViewState, updateView, type ViewState } from '../view';
 
 type Tick = { readonly state: SimState; readonly events: readonly SimEvent[] };
 
@@ -104,6 +107,24 @@ function viewOf(start: SimState, level: Level, ticks: readonly Tick[]): { view: 
 
 const ofType = <T extends SimEvent['type']>(ticks: readonly Tick[], type: T): Extract<SimEvent, { type: T }>[] =>
   ticks.flatMap((t) => t.events.filter((e): e is Extract<SimEvent, { type: T }> => e.type === type));
+
+/** Every tick's state and events of a golden line, from createSim (the solver's config: seed 1, local). */
+function goldenRun(g: GoldenLine): { level: Level; states: SimState[]; events: SimEvent[][] } {
+  const level = levelById(g.levelId);
+  const first = createSim({ playerCount: 2, levelIds: [g.levelId], seed: 1, mode: 'local' });
+  const byTick = new Map<number, PlayerCommand[]>();
+  for (const e of g.log) byTick.set(e.tick, [...(byTick.get(e.tick) ?? []), e.cmd]);
+  const states: SimState[] = [first.state];
+  const events: SimEvent[][] = [[...first.events]];
+  let s = first.state;
+  while (s.tick < g.finalTick) {
+    const r = stepSim(s, byTick.get(s.tick) ?? []);
+    s = r.state;
+    states[s.tick] = s;
+    events[s.tick] = [...r.events];
+  }
+  return { level, states, events };
+}
 
 describe('Two Doors: a ball rolling across the DOOR plate (real sim)', () => {
   // red rolls flat out from its tee: onto the DOOR plate, across it (the door opens and shuts before red gets
@@ -352,6 +373,173 @@ describe('Booby Trap: a rescue on FREE (real sim)', () => {
   });
 });
 
+describe('a jaws word never contradicts the jaws it names (D11, real sim)', () => {
+  /** What a live SNAP! / FREE! claims: its subject (`jaws:<slot>`) names the ball, SNAP! says it is caught, FREE! free. */
+  function jawsClaim(c: { readonly text: string; readonly subject?: string | undefined }): { p: PlayerId; caught: boolean } | null {
+    const slot = /^jaws:([01])$/.exec(c.subject ?? '')?.[1];
+    if (slot === undefined || (c.text !== 'SNAP!' && c.text !== 'FREE!')) return null;
+    return { p: slot === '0' ? RED : BLUE, caught: c.text === 'SNAP!' };
+  }
+
+  /** Plays the ticks into a view one per frame (a local game at 60 Hz) and lists each frame a live jaws word contradicts its ball. */
+  function jawsContradictions(start: SimState, level: Level, ticks: readonly Tick[]): string[] {
+    const view = createViewState(level, start);
+    const out: string[] = [];
+    let prev = start;
+    for (const t of ticks) {
+      applySimEvents(view, t.events, t.state);
+      updateView(view, prev, t.state, 1, DT);
+      for (const c of view.callouts) {
+        const claim = jawsClaim(c);
+        if (claim === null) continue;
+        const caught = waitingOf(level, t.state.switches, t.state.balls[claim.p])?.reason === 'caught';
+        if (claim.caught !== caught) out.push(`t${t.state.tick} ${c.text}`);
+      }
+      prev = t.state;
+    }
+    return out;
+  }
+
+  /** The seat of a trap: a ball resting on its floor, centred. */
+  const seatOf = (rect: Level['rects'][number]): Vec => ({ x: rect.x + rect.w / 2, y: rect.y + rect.h - BALL_RADIUS });
+
+  /** Red waits in `trapId`, freed by blue resting on its release plate `plateId`; blue to shoot. */
+  function freedBy(level: Level, trapId: string, plateId: string): SimState {
+    return crafted(level, seatOf(rectOf(level, trapId)), plateSpot(level, plateId), BLUE);
+  }
+
+  const jawsMoments = (start: SimState, level: Level, ticks: readonly Tick[]): PlateMoment[] =>
+    trackerMoments(start, level, ticks).filter((m) => m.kind === 'jaws' || m.kind === 'unsnap');
+
+  it('the grid: blue, holding a release plate, taps 75-105 deg x power 10-60 on every trap of the shipped holes, and no frame has a jaws word that contradicts its ball', () => {
+    const offenders: string[] = [];
+    const taps: Record<string, number> = {};
+    const takenBack: Record<string, number> = {};
+    for (const level of LEVELS) {
+      for (const trap of level.rects.filter((r) => r.kind === 'trap')) {
+        const seat = seatOf(trap);
+        for (const id of rectSwitchIds(trap)) {
+          const sw = level.switches.find((s) => s.id === id);
+          // a deck plate, or a seat plate the waiting ball itself sits on, has no separate holder
+          if (sw === undefined || sw.onRectId !== undefined || (sw.x <= seat.x && seat.x <= sw.x + sw.w)) continue;
+          const start = freedBy(level, trap.id, id);
+          if (start.switches[id] !== true || waitingOf(level, start.switches, start.balls[RED]) !== null) continue;
+          const pair = `${level.id} ${trap.id} via ${id}`;
+          for (let deg = 75; deg <= 105; deg += 5) {
+            for (let power = 10; power <= 60; power += 5) {
+              const ticks = shot(start, AIM(deg, power));
+              taps[pair] = (taps[pair] ?? 0) + 1;
+              if (jawsMoments(start, level, ticks).some((m) => m.kind === 'unsnap')) takenBack[pair] = (takenBack[pair] ?? 0) + 1;
+              const bad = jawsContradictions(start, level, ticks);
+              if (bad.length > 0) offenders.push(`${pair} ${deg}/${power}: ${bad[0] ?? ''} (${bad.length} frames)`);
+            }
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    // every trap's release plates, 7 x 11 taps each; on each of them some taps re-open the jaws under a standing SNAP!
+    expect(taps).toEqual({
+      'w2-06-booby-trap snare via free': 77,
+      'w2-06-booby-trap snare via far': 77,
+      'w3-09-bait bait-trap via top': 77,
+      'w3-12-grand-machine pit via fire': 77,
+      'w3-12-grand-machine pit via top': 77,
+      'w3-12-grand-machine door-seat via top': 77,
+    });
+    for (const pair of Object.keys(taps)) expect(takenBack[pair] ?? 0, pair).toBeGreaterThan(0);
+  });
+
+  it('L6: blue hops off FREE (the snare re-arms around red: SNAP!) and lands back on it: SNAP! goes the tick the jaws open again, and FREE! comes once blue settles', () => {
+    const start = freedBy(boobyTrap, 'snare', 'free');
+    const seat = start.balls[RED].pos;
+    const ticks = shot(start, AIM(75, 35));
+    const off = ofType(ticks, 'switchOff').find((e) => e.switchId === 'free');
+    const on = ofType(ticks, 'switchOn').find((e) => e.switchId === 'free');
+    const blueRest = ofType(ticks, 'ballRest').find((e) => e.playerId === BLUE);
+    // the hold ended as blue rose, a press that did not last opened the jaws again, and blue settled on FREE
+    expect(on?.tick).toBeGreaterThan(off?.tick ?? Infinity);
+    expect(blueRest?.tick).toBeGreaterThan(on?.tick ?? Infinity);
+    expect(ticks[ticks.length - 1]?.state.switches.free).toBe(true);
+    expect(jawsContradictions(start, boobyTrap, ticks)).toEqual([]);
+    expect(jawsMoments(start, boobyTrap, ticks)).toEqual([
+      { kind: 'jaws', playerId: RED, rectId: 'snare', pos: seat, tick: off?.tick, caught: true, lasting: true, late: false },
+      { kind: 'unsnap', playerId: RED, rectId: 'snare', tick: on?.tick },
+      { kind: 'jaws', playerId: RED, rectId: 'snare', pos: seat, tick: on?.tick, caught: false, lasting: false, late: false },
+      { kind: 'jaws', playerId: RED, rectId: 'snare', pos: seat, tick: blueRest?.tick, caught: false, lasting: true, late: true },
+    ]);
+    // the words said are the same as ever: SNAP! as the jaws close, FREE HELD and FREE! (late) as blue settles
+    const { born, alive } = viewOf(start, boobyTrap, ticks);
+    expect(born).toEqual([
+      { tick: off?.tick, text: 'SNAP!' },
+      { tick: blueRest?.tick, text: 'FREE HELD' },
+      { tick: blueRest?.tick, text: 'FREE!' },
+    ]);
+    const reopened = ticks.findIndex((t) => t.state.tick === on?.tick);
+    expect(alive[reopened - 1]).toContain('SNAP!');
+    expect(alive[reopened]).not.toContain('SNAP!');
+  });
+
+  it('a holder that leaves FREE for good: SNAP! the tick the snare re-arms around red, and it stands, red staying caught', () => {
+    const start = freedBy(boobyTrap, 'snare', 'free');
+    const ticks = shot(start, AIM(75, 50));
+    const off = ofType(ticks, 'switchOff').find((e) => e.switchId === 'free');
+    expect(ofType(ticks, 'switchOn').filter((e) => e.switchId === 'free')).toEqual([]);
+    expect(jawsMoments(start, boobyTrap, ticks).map((m) => m.kind === 'jaws' && m.caught && m.lasting)).toEqual([true]);
+    expect(jawsContradictions(start, boobyTrap, ticks)).toEqual([]);
+    const { born, alive } = viewOf(start, boobyTrap, ticks);
+    expect(born).toEqual([{ tick: off?.tick, text: 'SNAP!' }]);
+    // alive from the catch until it fades out (CALLOUT_TTL 1.1 s), never taken back
+    const from = ticks.findIndex((t) => t.state.tick === off?.tick);
+    expect(alive.slice(from, from + 60).every((texts) => texts.includes('SNAP!'))).toBe(true);
+  });
+
+  it('a jaws word stands longer than its callout lives: a free that does not last after WORD_STANDS_TICKS takes nothing back', () => {
+    const snare = rectOf(boobyTrap, 'snare');
+    const seat = seatOf(snare);
+    const caught = (tick: number): SimEvent => ({ type: 'trapCaught', tick, playerId: RED, pos: seat, rectId: 'snare' });
+    const freed = (tick: number): SimEvent => ({ type: 'trapFreed', tick, playerId: RED, pos: seat, rectId: 'snare' });
+    const t = createPlateTracker(() => boobyTrap);
+    t.sync(boobyTrap, Object.fromEntries(boobyTrap.switches.map((s) => [s.id, false])), [rest(seat), rest(boobyTrap.starts[1])]);
+    expect(t.feed(caught(100)).map((m) => m.kind)).toEqual(['jaws']);
+    expect(t.feed(freed(100 + WORD_STANDS_TICKS - 1)).map((m) => m.kind)).toEqual(['unsnap', 'jaws']);
+    expect(t.feed(caught(300)).map((m) => m.kind)).toEqual(['jaws']);
+    expect(t.feed(freed(300 + WORD_STANDS_TICKS)).map((m) => m.kind)).toEqual(['jaws']);
+    // by then the word has left the screen: nothing of it is left to take back
+    expect(CALLOUT_TTL).toBeLessThan(WORD_STANDS_TICKS * DT);
+  });
+
+  it.each([
+    [
+      'w3-09-bait',
+      ['178:DOOR OPEN', '178:SNAP!', '329:SAND…', '437:BOING!', '548:SAND…', '570:FREE!', '662:SAND…', '714:DOOR SHUT', '715:SAND…', '844:TOP HELD', '844:DOOR OPEN', '936:BOING!', '1047:SAND…', '1105:SAND…', '1291:IN THE HOLE!'],
+    ],
+    [
+      'w3-12-grand-machine',
+      ['76:SAND…', '167:LOADED!', '239:BOOM!', '364:SAND…', '382:FIRE HELD', '397:TOP HELD', '397:DOOR OPEN', '457:SAND…', '457:DOOR SHUT', '535:TOP HELD', '535:DOOR OPEN', '641:SAND…', '655:BOOM!', '780:SAND…', '933:IN THE HOLE!'],
+    ],
+  ])('the golden line of %s says what it always said, and takes nothing back', (id, words) => {
+    const g = GOLDEN_LINES.find((x) => x.levelId === id);
+    if (g === undefined) throw new Error(`no golden line for ${id}`);
+    const { level, states, events } = goldenRun(g);
+    const view = createViewState(level, states[0] as SimState);
+    applySimEvents(view, events[0] ?? [], states[0] as SimState);
+    const tracker = createPlateTracker();
+    for (const e of events[0] ?? []) tracker.feed(e);
+    const born: string[] = [];
+    let lastId = 0;
+    for (let t = 1; t <= g.finalTick; t += 1) {
+      const s = states[t] as SimState;
+      for (const e of events[t] ?? []) for (const m of tracker.feed(e)) expect(m.kind === 'unsay' || m.kind === 'unsnap', `t${t} ${m.kind}`).toBe(false);
+      applySimEvents(view, events[t] ?? [], s);
+      for (const c of view.callouts) if (c.id > lastId) born.push(`${t}:${c.text}`);
+      lastId = Math.max(lastId, ...view.callouts.map((c) => c.id));
+      updateView(view, states[t - 1] as SimState, s, 1, DT);
+    }
+    expect(born).toEqual(words);
+  });
+});
+
 describe('plate tracker edge cases', () => {
   const door = twoDoors.switches.find((s) => s.id === 'door');
   if (door === undefined) throw new Error('Two Doors has a DOOR plate');
@@ -415,6 +603,112 @@ describe('plate tracker edge cases', () => {
     t.feed(off(14));
     expect(t.feed(toggle(14, 'door-gate', true, 'door'))).toEqual([]);
   });
+
+  it('a way word stands longer than its callout lives: a press that does not last after WORD_STANDS_TICKS takes nothing back', () => {
+    const t = tracker({ ...allUp, door: true }, [rest(onDoor), rest(twoDoors.starts[1])]);
+    expect(t.feed(off(100)).map((m) => m.kind)).toEqual(['release']);
+    expect(t.feed(toggle(100, 'door-gate', true, 'door')).map((m) => m.kind)).toEqual(['way']);
+    t.feed(on(100 + WORD_STANDS_TICKS - 1));
+    expect(t.feed(toggle(100 + WORD_STANDS_TICKS - 1, 'door-gate', false, 'door')).map((m) => m.kind)).toEqual(['unsay']);
+    const late = tracker({ ...allUp, door: true }, [rest(onDoor), rest(twoDoors.starts[1])]);
+    late.feed(off(100));
+    late.feed(toggle(100, 'door-gate', true, 'door'));
+    late.feed(on(100 + WORD_STANDS_TICKS));
+    expect(late.feed(toggle(100 + WORD_STANDS_TICKS, 'door-gate', false, 'door'))).toEqual([]);
+  });
+
+  /** A ball rolling at `pos` whose last rest was `lastRest`. */
+  const rolling = (pos: Vec, lastRest: Vec): BallState => ({ ...rest(pos), vel: { x: 120, y: 0 }, asleep: false, restTicks: 0, lastRest });
+
+  it('re-based while a holder that has just been shot is still on its plate: the plate is HELD and DOOR OPEN stands, so its leaving ends the hold and says DOOR SHUT', () => {
+    const t = tracker({ ...allUp, door: true }, [rolling(onDoor, onDoor), rest(twoDoors.starts[1])]);
+    expect(t.feed(off(9))).toEqual([{ kind: 'release', switchId: 'door', pos: doorTop, tick: 9, ended: true }]);
+    expect(t.feed(toggle(9, 'door-gate', true, 'door')).map((m) => m.kind)).toEqual(['way']);
+  });
+
+  it('re-based while a landing still rocks on the plate (nothing said yet): its rest says HELD and DOOR OPEN; a ball rolling off it says nothing', () => {
+    const landing = tracker({ ...allUp, door: true }, [rolling(onDoor, twoDoors.starts[0]), rest(twoDoors.starts[1])]);
+    expect(landing.feed({ type: 'ballRest', tick: 30, playerId: RED, pos: onDoor, onPermanentGround: true }).map((m) => m.kind)).toEqual(['held', 'way']);
+    const passing = tracker({ ...allUp, door: true }, [rolling(onDoor, twoDoors.starts[0]), rest(twoDoors.starts[1])]);
+    expect(passing.feed(off(12))).toEqual([{ kind: 'release', switchId: 'door', pos: doorTop, tick: 12, ended: false }]);
+    expect(passing.feed(toggle(12, 'door-gate', true, 'door'))).toEqual([]);
+  });
+
+  it('re-based while a rescuer rolls on FREE and red waits in the open snare: red is let go only for now, and FREE! comes when the rescuer settles', () => {
+    const snare = rectOf(boobyTrap, 'snare');
+    const seat = { x: snare.x + snare.w / 2, y: snare.y + snare.h - BALL_RADIUS };
+    const onFree = plateSpot(boobyTrap, 'free');
+    const switches = { ...Object.fromEntries(boobyTrap.switches.map((s) => [s.id, false])), free: true };
+    const t = createPlateTracker(() => boobyTrap);
+    t.sync(boobyTrap, switches, [rest(seat), rolling(onFree, boobyTrap.starts[1])]);
+    expect(t.feed({ type: 'ballRest', tick: 40, playerId: BLUE, pos: onFree, onPermanentGround: true }, switches).filter((m) => m.kind === 'jaws')).toEqual([
+      { kind: 'jaws', playerId: RED, rectId: 'snare', pos: seat, tick: 40, caught: false, lasting: true, late: true },
+    ]);
+  });
+});
+
+describe('a tracker re-based at any tick says what a tracker that saw every event says (D11 sync, golden lines)', () => {
+  /**
+   * What a snapshot cannot carry, written as a re-based tracker says it: when a plate up at the sync came up (its first
+   * press within FRESH_PRESS_TICKS of the sync is `fresh`, as for a plate up a long time), and a rest off permanent
+   * ground (the sim keeps a ball's safe spot only there, so a deck plate down at the sync with no ball resting on it
+   * reads as pressed by a ball passing over: unless a ball comes to rest on it first, its first release ends no hold).
+   */
+  function asReBased(want: readonly PlateMoment[], level: Level, s0: SimState): PlateMoment[] {
+    const seen = new Set<string>();
+    const heldSince = new Set<string>();
+    return want.map((m) => {
+      if (m.kind === 'held') heldSince.add(m.switchId);
+      if (m.kind !== 'press' && m.kind !== 'release') return m;
+      const first = !seen.has(m.switchId);
+      seen.add(m.switchId);
+      if (!first) return m;
+      const down = s0.switches[m.switchId] === true;
+      if (m.kind === 'press') return !down && m.tick - s0.tick < FRESH_PRESS_TICKS ? { ...m, fresh: true } : m;
+      const sw = level.switches.find((x) => x.id === m.switchId);
+      if (sw?.onRectId === undefined || !down || heldSince.has(sw.id) || level.cupHoldsSwitch === sw.id) return m;
+      const restingOn = s0.balls.some((b) => b.asleep && !b.sunk && b.pos.x >= sw.x && b.pos.x <= sw.x + sw.w && Math.abs(b.pos.y + BALL_RADIUS - sw.surfaceY) <= SWITCH_CONTACT_TOLERANCE);
+      return restingOn ? m : { ...m, ended: false };
+    });
+  }
+
+  /**
+   * Re-bases a fresh tracker on the state at every tick t0 of a golden line, told that it already includes the events
+   * of the last `window` ticks (an online frame re-syncs from the snapshot its drained events reach), feeds it those
+   * and every later event, and lists where its moments differ from those of a tracker that saw every event.
+   */
+  function reBasedMismatches(g: GoldenLine, window: number): string[] {
+    const { level, states, events } = goldenRun(g);
+    const full = createPlateTracker();
+    const fullAt = events.map((evs) => evs.flatMap((e) => full.feed(e)));
+    const mismatches: string[] = [];
+    for (let t0 = window; t0 < g.finalTick; t0 += 1) {
+      const s0 = states[t0] as SimState;
+      const from = t0 - window + 1;
+      const synced = createPlateTracker();
+      synced.sync(level, s0.switches, s0.balls, events.slice(from, t0 + 1).flat());
+      const got = events.slice(from).flatMap((evs) => evs.flatMap((e) => synced.feed(e)));
+      const want = asReBased(fullAt.slice(from).flat(), level, states[from - 1] as SimState);
+      let at = -1;
+      for (let i = 0; i < Math.max(got.length, want.length) && at < 0; i += 1) if (JSON.stringify(got[i]) !== JSON.stringify(want[i])) at = i;
+      if (at >= 0) mismatches.push(`sync@${t0}: got ${JSON.stringify(got[at])} want ${JSON.stringify(want[at])}`);
+    }
+    return mismatches;
+  }
+
+  it.each(GOLDEN_LINES.map((g) => [g.levelId, g] as const))('%s: a fresh tracker re-based at every tick of the golden line says every later moment as one that saw every event', (_id, g) => {
+    const mismatches = reBasedMismatches(g, 0);
+    expect(mismatches.length, mismatches.slice(0, 5).join('\n')).toBe(0);
+  });
+
+  it.each(GOLDEN_LINES.map((g) => [g.levelId, g] as const))(
+    '%s: re-based at every tick from a state that already includes the last 30 ticks of events (an online frame draining its 500 ms replay window), it says their moments too',
+    (_id, g) => {
+      expect(30 * DT * 1000).toBeGreaterThanOrEqual(EVENT_REPLAY_WINDOW_MS);
+      const mismatches = reBasedMismatches(g, 30);
+      expect(mismatches.length, mismatches.slice(0, 5).join('\n')).toBe(0);
+    },
+  );
 });
 
 describe('the press reads as a click, the chip as a hold', () => {

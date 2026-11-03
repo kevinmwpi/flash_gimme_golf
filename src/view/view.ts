@@ -244,7 +244,8 @@ const SINK_SHRINK_DURATION = 0.25;
 const RESPAWN_POP_DURATION = 0.2;
 const LEVEL_COMPLETE_OVERVIEW_DELAY = 0.6;
 const FLASH_DURATION = 0.034;
-const CALLOUT_TTL = 1.1;
+/** A callout's life on screen (s); a plate word stands, and can be taken back, longer (plates.ts WORD_STANDS_TICKS). */
+export const CALLOUT_TTL = 1.1;
 /** Clear gap between two stacked callouts. */
 const CALLOUT_STACK_GAP = 4;
 const CALLOUT_SIZE = 44;
@@ -1122,7 +1123,8 @@ function wayCallout(view: ViewState, m: Extract<PlateMoment, { kind: 'way' }>): 
  * pops the plate's sticker (a ball rocking in the dish re-presses without them); `<PLATE> HELD` and the door or
  * bridge words wait until the press lasts, and so do SNAP! and FREE! for the trap a release plate drives. A ball
  * rolling across a plate gets the click (and the jaws or the door move) and nothing it would contradict, and a
- * SHUT / GONE that a press undoes before it lasts leaves the screen on that tick.
+ * SHUT / GONE that a press undoes before it lasts leaves the screen on that tick, as does a SNAP! whose jaws a press
+ * opens again (UNSNAP).
  */
 function applyPlateMoment(view: ViewState, m: PlateMoment): void {
   const level = view.level;
@@ -1153,6 +1155,10 @@ function applyPlateMoment(view: ViewState, m: PlateMoment): void {
     case 'unsay':
       // the door or bridge moved again before the change lasted: its SHUT / GONE goes with it, never over an open way
       view.callouts = view.callouts.filter((c) => c.subject !== rectStickerKey(m.rectId));
+      break;
+    case 'unsnap':
+      // the jaws opened on the ball again before the catch lasted: its SNAP! goes with them, never over open jaws
+      view.callouts = view.callouts.filter((c) => c.subject !== jawSubject(m.playerId));
       break;
     case 'jaws':
       if (!m.lasting) break;

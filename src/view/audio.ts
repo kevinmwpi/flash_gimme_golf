@@ -206,9 +206,10 @@ export type AudioSystem = {
   /**
    * Re-bases the plate tracker (D11, plates.ts) on a state the events did not bring: a `?state=` resume (one synthetic
    * levelStart), an online page that joined mid-campaign or dropped a levelStart. GameCanvas calls it with the state it
-   * renders, as it syncs the view's tracker, so the two keep agreeing on which plates are held.
+   * renders, as it syncs the view's tracker, so the two keep agreeing on which plates are held. `already`: the events
+   * that state includes which handleEvents gets next (PlateTracker.sync).
    */
-  syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void;
+  syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[], already?: readonly SimEvent[]): void;
   /** volume = power01 for 'hit', strength01 for bounce*, else a 0..1 multiplier. */
   play(name: SfxName, volume?: number): void;
   setMuted(muted: boolean): void;
@@ -577,6 +578,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
   const plates = createPlateTracker();
   /** rectId -> the slide its last way moment made: a SHUT / GONE taken back (UNSAY) fades it out where it stands. */
   const slides = new Map<string, Voice>();
+  /** slot -> the snap and clink of its last lasting catch: a SNAP! taken back (UNSNAP) fades them out where they stand. */
+  const snaps = new Map<PlayerId, Voice>();
   /** The voice the last admitted sfx opened (`begin`), read by `voiceOf`. */
   let opened: Voice | null = null;
   /** Scheduled time of the last trapReturn: the hand-off cues after it wait TRAP_RETURN_LEAD_SEC (across frames). */
@@ -1856,7 +1859,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
    * BUILD_DECISIONS D11 (plates.ts): every press clicks (softer when the same landing rocks back onto the plate), the
    * HELD confirm and a door's or bridge's slide wait until the press lasts, and a ball passing over lets the plate up
    * with a bare tick; the falling confirm and the closing slide sound when a hold ends, and a closing slide whose
-   * change a press undoes (the holder's hop landing back on its plate) fades out where it stands.
+   * change a press undoes (the holder's hop landing back on its plate) fades out where it stands, as does the snap and
+   * clink of a SNAP! whose jaws such a press opens again (the latch that opens them sounds as usual).
    */
   function routeMoment(m: PlateMoment, at: number, batch: Batch): void {
     switch (m.kind) {
@@ -1882,11 +1886,21 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
         if (slide !== undefined) fadeOut(slide, at);
         break;
       }
+      case 'unsnap': {
+        const snap = snaps.get(m.playerId);
+        snaps.delete(m.playerId);
+        if (snap !== undefined) fadeOut(snap, at);
+        break;
+      }
       case 'jaws':
         // a catch snaps and clinks; a free latches and chimes, except when the cup frees it (the hole-out's own chime
         // carries that moment); jaws a rescuer only rolls across snap or latch quietly, and a free that comes to last
         // later adds just its chime
-        if (m.caught) sfx.trapCaught({ at, playerId: m.playerId, ...(m.lasting ? {} : { chime: false, volume: PLATE_FLICK_VOLUME }) });
+        if (m.caught && m.lasting) {
+          const snap = voiceOf(() => sfx.trapCaught({ at, playerId: m.playerId }));
+          if (snap === null) snaps.delete(m.playerId);
+          else snaps.set(m.playerId, snap);
+        } else if (m.caught) sfx.trapCaught({ at, playerId: m.playerId, chime: false, volume: PLATE_FLICK_VOLUME });
         else if (!m.lasting) sfx.trapFreed({ at, playerId: m.playerId, chime: false, volume: PLATE_FLICK_VOLUME });
         else if (m.late) sfx.trapFreed({ at, playerId: m.playerId, click: false });
         else sfx.trapFreed({ at, playerId: m.playerId, chime: !batch.holeOutTicks.has(m.tick) });
@@ -1920,8 +1934,8 @@ export function createAudio(opts: CreateAudioOptions = {}): AudioSystem {
     });
   }
 
-  function syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[]): void {
-    plates.sync(level, switches, balls);
+  function syncPlates(level: Level | null, switches: Readonly<Record<string, boolean>>, balls?: readonly Readonly<BallState>[], already?: readonly SimEvent[]): void {
+    plates.sync(level, switches, balls, already);
   }
 
   function dispose(): void {

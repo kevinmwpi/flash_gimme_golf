@@ -275,14 +275,50 @@ describe('view state: callouts, golfers, anims', () => {
     expect(texts()).toEqual(['BRIDGE GONE', 'DOOR SHUT']);
   });
 
-  it('a ball settling on a plate that is already down (its ways open) says only HELD: SWITCH A HELD, DECK HELD', () => {
-    // both plates down (balls rolling on them), the bridge up and the door open: nothing left to announce but the holds
-    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true } });
+  // D11 re-sync (plates.ts sync): a view mounted on a state, at a hand-off or mid-flight, says what a view that saw
+  // every event of the shot says. Only a HELD plate has said anything, so a plate down under a rolling ball has not.
+  const onA = { x: 415, y: GROUND_Y - BALL_RADIUS };
+  const onDeck = { x: 800, y: 601 - BALL_RADIUS };
+  /** A ball rolling at x, y whose last rest was on its tee (it has not rested on a plate this shot). */
+  const rollingAt = (x: number, y: number): BallState => ball(x, y, { vel: { x: 60, y: 0 }, asleep: false, restTicks: 0, lastRest: { x: 100, y: GROUND_Y - BALL_RADIUS } });
+
+  it('mounted while balls roll on two plates already down (the bridge up, the door open): each settling says HELD, and the first also its ways OPEN, as a view that saw them roll on says', () => {
+    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true }, balls: [rollingAt(onA.x, onA.y), rollingAt(onDeck.x, onDeck.y)] });
+    const rests = (view: ViewState): string[][] => {
+      applySimEvents(view, [ev('ballRest', { playerId: 0, pos: onA, onPermanentGround: true }, 30)], state);
+      const first = view.callouts.map((c) => c.text);
+      applySimEvents(view, [ev('ballRest', { playerId: 1, pos: onDeck, onPermanentGround: false }, 31)], state);
+      return [first, view.callouts.map((c) => c.text)];
+    };
+    // red settles on A: SWITCH A HELD, then the ways A keeps open (two at most alive: the newest win); blue then settles
+    // on the DECK, whose bridge A's hold has announced already: DECK HELD only
+    const mounted = rests(createViewState(mechanicsLevel, state));
+    expect(mounted).toEqual([
+      ['BRIDGE OPEN', 'DOOR OPEN'],
+      ['DOOR OPEN', 'DECK HELD'],
+    ]);
+    // the same view opened before the balls rolled on, fed their presses: the same words
+    const saw = createViewState(mechanicsLevel, stateFor(mechanicsLevel));
+    applySimEvents(
+      saw,
+      [
+        ev('switchOn', { switchId: 'a', byPlayer: 0, pos: { x: 415, y: GROUND_Y } }, 20),
+        ev('bridgeToggle', { rectId: 'bridge', kind: 'bridge', active: true, switchId: 'a' }, 20),
+        ev('bridgeToggle', { rectId: 'door', kind: 'blocker', active: false, switchId: 'a' }, 20),
+        ev('switchOn', { switchId: 'deck', byPlayer: 1, pos: { x: 800, y: 601 } }, 25),
+      ],
+      state,
+    );
+    expect(saw.callouts).toEqual([]);
+    expect(rests(saw)).toEqual(mounted);
+  });
+
+  it('mounted on a settled state with a ball resting on A says nothing, and a ball then settling on the DECK says only DECK HELD (a share link, a hand-off rejoin)', () => {
+    const state = stateFor(mechanicsLevel, { switches: { a: true, deck: true }, balls: [ball(onA.x, onA.y), rollingAt(onDeck.x, onDeck.y)] });
     const view = createViewState(mechanicsLevel, state);
-    applySimEvents(view, [ev('ballRest', { playerId: 0, pos: { x: 415, y: GROUND_Y - BALL_RADIUS }, onPermanentGround: true }, 30)], state);
-    expect(view.callouts.map((c) => c.text)).toEqual(['SWITCH A HELD']);
-    applySimEvents(view, [ev('ballRest', { playerId: 1, pos: { x: 800, y: 601 - BALL_RADIUS }, onPermanentGround: false }, 31)], state);
-    expect(view.callouts.map((c) => c.text)).toEqual(['SWITCH A HELD', 'DECK HELD']);
+    expect(view.callouts).toEqual([]);
+    applySimEvents(view, [ev('ballRest', { playerId: 1, pos: onDeck, onPermanentGround: false }, 31)], state);
+    expect(view.callouts.map((c) => c.text)).toEqual(['DECK HELD']);
   });
 
   it('turnStart walks the active golfer to 42 px behind its ball, facing the shot direction', () => {
