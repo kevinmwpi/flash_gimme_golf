@@ -73,7 +73,15 @@ first touch of FIRE; the L4 and L10 decks span their bridges lip to lip; Crossfi
    press (cap, lamp, door) but no words or slides until the ball rests.
 12. **Crossfire par.** D11 lowered its solver minimum 6 -> 5, so D10.13's rule set par 7; the design's intended line
    still takes 8, one over par. Revisit with playtest data, not reasoning.
-13. **Tooling.** The co-op search returns the first line it finds at the shallowest depth, not the fewest strokes, so
+13. **Plate words at the edges (all cosmetic, from three review rounds on D11's presentation).** A re-base from a
+   snapshot (a rejoin, Play again, a `?state=` link) cannot see three things, so it can misjudge a word: a holder's
+   hop that has landed back reads as still holding; a lone DECK ball rolling after its shot has no last rest on the
+   deck, so a rejoin then misses BRIDGE GONE when it rolls off (L4, L10); a plate's up-time, so a first press within
+   1 s can click at full volume. Over 556 rejoins at every snapshot tick of the golden lines, 9 have a wrong word.
+   A rejoin drops the clicks of the last 1-2 ticks before it (the sync already has their state). A SNAP! said for a
+   ball caught and sent BACK +1 in the same tick stands for about half a second (pre-existing, D10). Hidden tabs are
+   exact. The main JS chunk is now 500.7 kB, just over vite's 500 kB advisory (CI checks exit codes only).
+14. **Tooling.** The co-op search returns the first line it finds at the shallowest depth, not the fewest strokes, so
    Plate & Bridge reports 6 although a 5-stroke line replays. The hold height's thinnest margin is 0.6 px (a lob from
    the top of L6's backboard onto FREE hops 71.4 px); a new hole with a plate under much higher ground should re-run
    the hop scan (BUILD_DECISIONS D11).

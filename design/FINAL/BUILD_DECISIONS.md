@@ -248,11 +248,22 @@ a plate reacts late and a ball rolling over a button does nothing, which reads a
   newer callout about the same door or ball replaces the old one. A word must never contradict what it names: a
   SHUT / GONE said as a hold ends is taken back (and its closing slide faded) on the tick a press that does not last
   reopens the way (the holder's hop landing back on its plate, a deck lob touching B); on a grid of holder taps and
-  deck lobs 876 of 1,319 such words are taken back, a median 40 ticks after them. Accepted with it: a reversal within
-  a few ticks still flashes its word for those frames, and a hold that ends for good after a take-back closes with
-  no second word (the door's own animation shows it). Both trackers re-sync from the drawn state whenever it did
-  not arrive through a levelStart: on mount, on every online sync or dropped event batch
-  (`GameClient.eventStreamEpoch`), and on a hole change. The HOLDS chip and the CAUGHT/LOADED chip read
+  deck lobs 876 of 1,319 such words are taken back, a median 40 ticks after them. A SNAP! that a free which does not
+  last undoes (a release plate's holder hopping off, so the trap re-arms around its waiting partner, and landing
+  back) is taken back the same way and its snap fades (124 of 462 such taps left SNAP! over open jaws before). A
+  word can be taken back only while it stands (`WORD_STANDS_TICKS` 90, longer than a callout's 1.1 s). Accepted
+  with it: a reversal within a few ticks still flashes its word for those frames, and a hold that ends for good
+  after a take-back closes with no second word (the door's own animation shows it). A hold that ends in the tick it
+  starts is not lasting (on L12 a ball can rest on DOOR in the door seat and go BACK +1 in the same tick): view and
+  audio feed whole ticks alike (`PlateTracker.feedAll`, each event judged against the mask its tick ends with), so
+  they cannot disagree. Both trackers re-base on a state the events did not bring: the start or rejoin a page opens
+  on, every later sync (rejoin, playAgain), a `?state=` link and a hole reached without its levelStart; a re-base
+  counts a plate as held by the cup, a resting ball, or a moving ball whose last rest is on it. GameClient drops
+  the events the server re-sends up to a sync's tick, so the events after a re-base are exactly the later ones. A
+  hidden tab's batches dropped as stale are not a break: GameClient hands them over (`takeStreamBreak`) and both
+  trackers take them in, in order, without showing or playing anything; only words leave the screen (a word taken
+  back or replaced, a HELD whose plate came up, a SNAP! whose jaws opened, a SHUT/GONE whose way moved, every plate
+  word at a new hole). A stall tap seen across a hidden tab repeats nothing. The HOLDS chip and the CAUGHT/LOADED chip read
   only resting balls (what the WAITING rule decides). The holder tip may name deck plates, since a stall tap on a
   deck now keeps the bridge up. Copy: 'Any ball on it presses it. Stay on it to keep it down.'
 - Consequences accepted with it: a ball rolling across a plate opens its door or bridge while it passes, never long
