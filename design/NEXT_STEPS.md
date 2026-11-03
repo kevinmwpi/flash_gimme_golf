@@ -24,8 +24,7 @@ baseline), the levels, then view, UI, audio and solver groups in parallel, then 
 Verification found and closed three real defects in the approved geometry or engine: the Bait strip softlock, the
 Crossfire flat softlock and a door-ejection freeze (Colour Lift, and latently World 1's Two Doors).
 
-**Plates pressed on contact (BUILD_DECISIONS D11, 2026-11-02; on branch `claude/festive-clarke-3iqu1k`, not yet
-merged or deployed).** The owner asked why a plate only went down once the ball had stopped. Now any ball on a plate
+**Plates pressed on contact (BUILD_DECISIONS D11, 2026-11-02; merged in PR #30, the live build).** The owner asked why a plate only went down once the ball had stopped. Now any ball on a plate
 presses it, rolling, bouncing or resting; it stays down through bounce hops up to `PLATE_HOLD_HEIGHT_PX` (72) and comes
 up the tick no ball is on it. Words, chimes and door slides still wait for a lasting hold (`src/view/plates.ts`), so a
 ball rolling across a plate reads as a quiet press, not a callout. Consequences: a loaded cannon fires on a partner's
@@ -34,7 +33,8 @@ first touch of FIRE; the L4 and L10 decks span their bridges lip to lip; Crossfi
 
 | D11 check | Result |
 |---|---|
-| `npm run typecheck`, `npm run lint`, `npm test` | clean; 41 files, 716 tests |
+| `npm run typecheck`, `npm run lint`, `npm test` | clean; 43 files, 795 tests |
+| Review | three adversarial rounds (sim and levels, browser presentation, online play and determinism); every confirmed finding fixed with a failing-first test or recorded in D11 |
 | `npm run test:levels` | 161 passed, 70 gated skips, 0 failed; every golden re-records exactly as committed |
 | Solver, all 12 holes | 222 of 222 criteria (the lone-plate, stall, deck and launcher checks restated for D11) |
 | Self-bypass hunt | a lone ball shot across every plate at what it drives: 265,965 shots, 0 got through |
